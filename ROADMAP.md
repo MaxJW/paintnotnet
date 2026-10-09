@@ -4,8 +4,9 @@ Design and rationale: [PLAN.md](PLAN.md). Each phase ends with a usable app and 
 where you try it. A phase is only ticked off once its acceptance checks have been run and
 shown passing.
 
-**Current state (2026-10-09):** Phases 0–2 are complete, verified and committed.
-**Next: Phase 3.**
+**Current state (2026-10-09):** Phases 0–3 are complete, verified and committed.
+**Next: Phase 4 (selections).** Functionality first: the user wants every feature working
+before the visual refresh (Phase 12).
 
 Reference source: paint.net 3.36.7 (OpenPDN, MIT code) is cloned at `reference/OpenPDN`
 (git-ignored; re-clone with `git clone --depth 1 https://github.com/rivy/OpenPDN reference/OpenPDN`).
@@ -75,14 +76,21 @@ Guessed, to tune by feel (paint.net doesn't document them):
 
 Deferred to the phases that need them: mouse chords (Ctrl/Alt + left/right drag) and routing keys to an active tool session (Phases 3–4); paint.net's "translucent windows" option and Open Recent (Phase 11).
 
-## Phase 3: Layers and history
-- [ ] Layers menu: add, delete, duplicate, merge down, toggle visibility, import from file, flip H/V, rotate 180, Rotate/Zoom dialog, go to top/above/below/bottom, move to top/up/down/bottom
-- [ ] Layer Properties (F4 or double-click): name, visible, 14 blend modes, opacity 0–255, live preview
-- [ ] Layers window: thumbnails, visibility checkboxes, drag reorder, Ctrl+click on the arrows moves to top/bottom
-- [ ] History with tile copy-on-write, byte budget plus disk spill; History window with click-to-jump
-- [ ] Image menu: crop to selection, resize (8 resampling modes), canvas size (anchor and fill), flips, rotates, flatten
-- [ ] Pencil tool (simplest tool, so layers can be exercised)
-- **Accept:** golden tests for all 14 blend modes; undo/redo across 500 steps on a 4K image stays within memory budget.
+## Phase 3: Layers and history ✅
+- [x] History as copy-on-write `Document` snapshots (`pnn-core::history`): a step costs only the tiles it changed; byte budget (8 GB) drops the oldest steps. Revisions are globally unique so restored snapshots never confuse caches
+- [x] Undo (Ctrl+Z) / Redo (Ctrl+Y); History window lists every step with paint.net's names and icons, current highlighted, undone steps greyed, click to jump
+- [x] Layers menu: Add New Layer ("Layer N" above active), Delete (layer below becomes active), Duplicate, Merge Layer Down (top layer's blend + opacity, as `MergeLayerDownFunction`), Toggle Visibility, Import From File (grows canvas if larger), Flip H/V, Rotate 180°, Rotate / Zoom (angle, pan, zoom, tiling, preserve background; live preview), Go to Top/Above/Below/Bottom, Move to Top/Up/Down/Bottom
+- [x] Layer Properties (F4 / double-click): name, visible, 14 blend modes, opacity 0–255, live preview, Cancel restores
+- [x] Layers window: drag-and-drop reorder, visibility checkbox recorded in history, accessible row labels
+- [x] Image menu: Flip H/V (all), Rotate 90° CW/CCW and 180°, Resize (8 resampling modes, % or absolute, keep aspect, gamma correction), Canvas Size (3×3 anchor, fill choice; fill only on the bottom layer, as paint.net), Flatten
+- [x] Saving a layered image to a flat format asks to flatten first (paint.net's wording), undoable
+- [x] Pencil tool: 1 px aliased, left = primary, right = secondary, blend modes incl. Overwrite, one history step per stroke, every intermediate pointer event drawn, crosshair cursor
+- **Verified 2026-10-09:** `cargo xtask ci` passes (127 tests). UI tests drive layer commands, undo/redo, History clicks, Pencil strokes, Ctrl+H×2 and F4 through real events. Acceptance: 500 steps on a 3840×2160 image hold ≤ 1 tile per step (~131 MB worst case vs ~16.5 GB for full copies), undo/redo all 500 in 0.06 s. Render checked by eye.
+
+Guessed or approximated (paint.net doesn't document them):
+- Resize kernels: Bicubic = Catmull-Rom, Bicubic (Smooth) = cubic B-spline, Bilinear (Low Quality) = bilinear without prefilter, Adaptive (Sharp) = Lanczos3 shrinking / Catmull-Rom enlarging, Fant = area average. Gamma correction defaults off.
+- Duplicate keeps the layer name (3.36); visibility toggles are named "Layer Visibility".
+- History disk spill (paint.net keeps history on disk) isn't implemented; the budget drops oldest steps instead.
 
 ## Phase 4: Selections
 - [ ] Rectangle, Ellipse, Lasso, Magic Wand (tolerance, contiguous/global, layer/image sampling, premultiplied/straight alpha mode, draggable click point)
@@ -129,3 +137,7 @@ Deferred to the phases that need them: mouse chords (Ctrl/Alt + left/right drag)
 - [ ] Settings dialog, rebindable keymap UI, command palette (Ctrl+K)
 - [ ] Packaging: PKGBUILD for CachyOS/Arch, .desktop file, MIME associations, icon
 - [ ] Optional: pop-out panels, tablet pressure
+
+## Phase 12: Visual refresh (after functionality)
+- [ ] Modernise the UI styling and icons (the user finds the 3.36 icons dated); keep paint.net's layout and behaviour
+- [ ] Custom per-tool cursors (paint.net ships its own; egui can't show custom cursor images yet)

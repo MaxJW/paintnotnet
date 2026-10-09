@@ -21,6 +21,12 @@ pub enum FileEvent {
         result: Result<(), String>,
     },
     PickedOpen(Vec<PathBuf>),
+    /// Layers > Import From File finished loading.
+    Imported {
+        key: u64,
+        path: PathBuf,
+        result: Result<Document, String>,
+    },
     /// `None` = cancelled.
     PickedSave {
         key: u64,
@@ -105,6 +111,28 @@ impl FileOps {
         });
     }
 
+    /// Layers > Import From File: pick one or more images and load each as a layer.
+    pub fn pick_import(&mut self, key: u64, dir: Option<PathBuf>) {
+        self.dialog_open = true;
+        let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
+        self.spawn("import dialog", move || {
+            let mut dialog = rfd::FileDialog::new()
+                .set_title("Import From File")
+                .add_filter("All images", OPEN_EXTENSIONS);
+            if let Some(dir) = dir {
+                dialog = dialog.set_directory(dir);
+            }
+            let paths = dialog.pick_files().unwrap_or_default();
+            // Load on this thread; each file arrives as its own event.
+            for path in paths {
+                let result = pnn_io::load(&path).map_err(|e| e.to_string());
+                let _ = tx.send(FileEvent::Imported { key, path, result });
+                ctx.request_repaint();
+            }
+            FileEvent::PickedOpen(Vec::new())
+        });
+    }
+
     pub fn pick_save(&mut self, key: u64, current: Option<&Path>, title: &str) {
         self.dialog_open = true;
         let file_name = match current {
@@ -154,7 +182,11 @@ impl FileOps {
 
     pub fn poll(&mut self) -> Vec<FileEvent> {
         let events: Vec<FileEvent> = self.rx.try_iter().collect();
-        self.in_flight -= events.len();
+        // Imports arrive as extra events from one job; only the job's final event ends it.
+        self.in_flight -= events
+            .iter()
+            .filter(|e| !matches!(e, FileEvent::Imported { .. }))
+            .count();
         if events
             .iter()
             .any(|e| matches!(e, FileEvent::PickedOpen(_) | FileEvent::PickedSave { .. }))

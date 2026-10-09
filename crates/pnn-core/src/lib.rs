@@ -7,10 +7,13 @@ pub mod blend;
 pub mod color;
 pub mod compositor;
 pub mod document;
+pub mod history;
 pub mod tiles;
+pub mod transform;
 
 pub use blend::BlendMode;
 pub use color::ColorBgra;
 pub use compositor::{Compositor, flatten};
 pub use document::{DEFAULT_DPI, Document, Layer, LayerId, Rect};
+pub use history::{History, HistoryEntry};
 pub use tiles::{Mask, Surface, TILE_SIZE, Tile, TileCoord, TiledBuffer};

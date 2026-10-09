@@ -8,6 +8,11 @@ pub const MAX_DIMENSION: u32 = 65535;
 pub enum Modal {
     NewImage(NewImage),
     About,
+    /// Saving a layered image in a flat format (paint.net's WarnAboutFlattening).
+    FlattenForSave {
+        key: u64,
+        then: SaveTarget,
+    },
     UnsavedChanges {
         key: u64,
         title: String,
@@ -32,6 +37,8 @@ pub struct SaveTarget {
     pub path: std::path::PathBuf,
     pub format: pnn_io::FileFormat,
     pub close_after: bool,
+    /// The flatten prompt has been answered for this save.
+    pub flattened: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,6 +58,10 @@ pub enum ModalResult {
     JpegConfirmed {
         key: u64,
         quality: u8,
+        then: SaveTarget,
+    },
+    FlattenAndSave {
+        key: u64,
         then: SaveTarget,
     },
     Cancelled,
@@ -126,6 +137,15 @@ impl Modal {
                         then: then.clone(),
                     };
                     buttons(ui, &[("OK", ok), ("Cancel", ModalResult::Cancelled)])
+                }
+                Modal::FlattenForSave { key, then } => {
+                    ui.heading("Flatten Image");
+                    ui.label("Saving in this file format requires that the image is first \"flattened\", which reduces it to a single layer.");
+                    ui.add_space(4.0);
+                    ui.label("The image will be flattened, and then saved. You will be able to undo the flatten operation after saving.");
+                    ui.add_space(8.0);
+                    let ok = ModalResult::FlattenAndSave { key: *key, then: then.clone() };
+                    buttons(ui, &[("Flatten", ok), ("Cancel", ModalResult::Cancelled)])
                 }
                 Modal::About => {
                     ui.heading("paintnotnet");

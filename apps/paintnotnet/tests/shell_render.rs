@@ -216,3 +216,27 @@ fn dragging_a_window_near_an_edge_snaps_it() {
         canvas.max.x
     );
 }
+
+#[test]
+fn layers_history_and_layer_properties_render() {
+    let mut h = harness();
+    let ctx = h.ctx.clone();
+    for c in [
+        Command::AddNewLayer,
+        Command::AddNewLayer,
+        Command::FlipImageHorizontal,
+        Command::LayerProperties,
+    ] {
+        h.state_mut().execute(&ctx, Triggered::once(c));
+        h.step();
+    }
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(h.state_mut().doc_dialog_mut().is_some());
+    if let Ok(dir) = std::env::var("PNN_RENDER_DUMP")
+        && let Ok(image) = h.render()
+    {
+        image.save(format!("{dir}/shell-phase3.png")).unwrap();
+    }
+}

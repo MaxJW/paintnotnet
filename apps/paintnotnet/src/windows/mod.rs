@@ -58,6 +58,11 @@ pub fn tools(
 
 pub enum LayersAction {
     Select(usize),
+    /// Drag-and-drop reorder (layer indices, 0 = bottom).
+    Move {
+        from: usize,
+        to: usize,
+    },
     ToggleVisible(usize),
     Properties(usize),
     Command(Command),
@@ -163,8 +168,36 @@ pub fn layers(
                     let layer = doc.layer(index);
                     let selected = index == doc.active_index();
                     let row_width = ui.available_width();
-                    let (rect, response) =
-                        ui.allocate_exact_size(vec2(row_width, THUMB + 8.0), Sense::click());
+                    let (rect, response) = ui
+                        .allocate_exact_size(vec2(row_width, THUMB + 8.0), Sense::click_and_drag());
+                    let name = layer.name.clone();
+                    response.widget_info(|| {
+                        egui::WidgetInfo::selected(
+                            egui::WidgetType::SelectableLabel,
+                            true,
+                            selected,
+                            &name,
+                        )
+                    });
+                    // Drag a row onto another to move the layer there.
+                    if response.drag_started() {
+                        response.dnd_set_drag_payload(index);
+                    }
+                    if let Some(from) = response.dnd_release_payload::<usize>()
+                        && *from != index
+                    {
+                        actions.push(LayersAction::Move {
+                            from: *from,
+                            to: index,
+                        });
+                    }
+                    if response.dnd_hover_payload::<usize>().is_some() {
+                        ui.painter().hline(
+                            rect.x_range(),
+                            rect.min.y,
+                            egui::Stroke::new(2.0, palette.selection_stroke),
+                        );
+                    }
                     if selected {
                         ui.painter().rect(
                             rect.shrink(1.0),
@@ -277,15 +310,21 @@ pub fn layers(
     actions
 }
 
-/// History window. Phase 3 fills the list; until then it shows the document's first step.
+pub enum HistoryAction {
+    Jump(usize),
+    Command(Command),
+}
+
+/// History window: every step with its icon; the current step highlighted, undone steps
+/// greyed (they can be redone); click a step to jump to it. Undo/Redo at the bottom.
 pub fn history(
     ui: &mut egui::Ui,
     tab: Option<&DocumentTab>,
     icons: &Icons,
     palette: &Palette,
     enabled: &dyn Fn(Command) -> bool,
-) -> Option<Command> {
-    let mut picked = None;
+) -> Option<HistoryAction> {
+    let mut action = None;
     let bar_height = 24.0;
     let list_height = (ui.available_height() - bar_height).max(40.0);
     egui::Frame::new().fill(palette.list).show(ui, |ui| {
@@ -293,55 +332,76 @@ pub fn history(
         ui.set_max_height(list_height);
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
+            .stick_to_bottom(true)
             .show(ui, |ui| {
                 let Some(tab) = tab else { return };
-                let (label, icon) = if tab.path.is_some() {
-                    ("Open Image", Icon::Open)
-                } else {
-                    ("New Image", Icon::New)
-                };
-                let (rect, _) =
-                    ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
-                ui.painter().rect(
-                    rect,
-                    0.0,
-                    palette.selection,
-                    egui::Stroke::new(1.0, palette.selection_stroke),
-                    egui::StrokeKind::Inside,
-                );
-                ui.painter().image(
-                    icons.texture(icon).id(),
-                    Rect::from_min_size(rect.min + vec2(3.0, 2.0), vec2(16.0, 16.0)),
-                    Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                    Color32::WHITE,
-                );
-                ui.painter().text(
-                    pos2(rect.min.x + 24.0, rect.center().y),
-                    egui::Align2::LEFT_CENTER,
-                    label,
-                    egui::FontId::proportional(12.0),
-                    palette.text,
-                );
+                let current = tab.history.current();
+                for (i, entry) in tab.history.entries().iter().enumerate() {
+                    let size = vec2(ui.available_width(), 20.0);
+                    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+                    // Expose the step to accessibility (screen readers, UI tests).
+                    let selected = i == current;
+                    response.widget_info(|| {
+                        egui::WidgetInfo::selected(
+                            egui::WidgetType::SelectableLabel,
+                            true,
+                            selected,
+                            &entry.name,
+                        )
+                    });
+                    if i == current {
+                        let stroke = egui::Stroke::new(1.0, palette.selection_stroke);
+                        ui.painter().rect(
+                            rect,
+                            0.0,
+                            palette.selection,
+                            stroke,
+                            egui::StrokeKind::Inside,
+                        );
+                    } else if response.hovered() {
+                        ui.painter().rect_filled(rect, 0.0, palette.hover);
+                    }
+                    let undone = i > current;
+                    let tint = if undone {
+                        Color32::from_white_alpha(110)
+                    } else {
+                        Color32::WHITE
+                    };
+                    let icon_rect =
+                        Rect::from_min_size(rect.min + vec2(3.0, 2.0), vec2(16.0, 16.0));
+                    let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+                    ui.painter()
+                        .image(icons.texture(entry.tag).id(), icon_rect, uv, tint);
+                    let color = if undone {
+                        palette.weak_text
+                    } else {
+                        palette.text
+                    };
+                    let at = pos2(rect.min.x + 24.0, rect.center().y);
+                    let font = egui::FontId::proportional(12.0);
+                    ui.painter()
+                        .text(at, egui::Align2::LEFT_CENTER, &entry.name, font, color);
+                    if response.clicked() && i != current {
+                        action = Some(HistoryAction::Jump(i));
+                    }
+                }
             });
     });
     ui.horizontal(|ui| {
-        for (icon, command) in [(Icon::Undo, Command::Undo), (Icon::Redo, Command::Redo)] {
-            let tip = format!(
-                "{:?} ({})",
-                command,
-                command.shortcut_text().unwrap_or_default()
-            );
+        for (icon, command, name) in [
+            (Icon::Undo, Command::Undo, "Undo"),
+            (Icon::Redo, Command::Redo, "Redo"),
+        ] {
+            let tip = format!("{name} ({})", command.shortcut_text().unwrap_or_default());
+            let button = egui::Button::image(icons.image(icon)).frame(false);
             if ui
-                .add_enabled(
-                    enabled(command),
-                    egui::Button::image(icons.image(icon)).frame(false),
-                )
+                .add_enabled(enabled(command), button)
                 .on_hover_text(tip)
                 .clicked()
             {
-                picked = Some(command);
+                action = Some(HistoryAction::Command(command));
             }
         }
     });
-    picked
+    action
 }

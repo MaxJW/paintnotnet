@@ -4,11 +4,12 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use eframe::egui;
-use pnn_core::{Compositor, Document};
+use pnn_core::{Compositor, Document, History};
 use pnn_io::{FileFormat, SaveOptions};
 use pnn_render::View;
 
 use crate::canvas::GpuSync;
+use crate::icons::Icon;
 use crate::windows::LayerThumbs;
 
 pub struct DocumentTab {
@@ -28,6 +29,8 @@ pub struct DocumentTab {
     pub compositor: Compositor,
     pub gpu: GpuSync,
     pub layer_thumbs: LayerThumbs,
+    /// Undo history; the History window lists its steps.
+    pub history: History<Icon>,
     pub thumbnail: Option<egui::TextureHandle>,
     pub thumbnail_revision: u64,
     pub thumbnail_updated: Option<Instant>,
@@ -48,6 +51,38 @@ impl DocumentTab {
 
     pub fn mark_saved(&mut self, revision: u64) {
         self.saved_revision = revision;
+    }
+
+    /// Record the current document as a history step.
+    pub fn commit(&mut self, name: &str, icon: Icon) {
+        self.history.push(name, icon, &self.doc);
+    }
+
+    pub fn undo(&mut self) -> bool {
+        match self.history.undo() {
+            Some(doc) => {
+                self.doc = doc.clone();
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn redo(&mut self) -> bool {
+        match self.history.redo() {
+            Some(doc) => {
+                self.doc = doc.clone();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// History window click.
+    pub fn jump_to(&mut self, step: usize) {
+        if let Some(doc) = self.history.jump(step) {
+            self.doc = doc.clone();
+        }
     }
 
     pub fn image_size(&self) -> [f64; 2] {
@@ -95,8 +130,14 @@ impl Workspace {
     pub fn add(&mut self, doc: Document, path: Option<PathBuf>, format: Option<FileFormat>) -> u64 {
         self.next_key += 1;
         let key = self.next_key;
+        let history = if path.is_some() {
+            History::new("Open Image", Icon::Open, &doc)
+        } else {
+            History::new("New Image", Icon::New, &doc)
+        };
         self.tabs.push(DocumentTab {
             key,
+            history,
             saved_revision: doc.revision(),
             doc,
             path,

@@ -40,36 +40,40 @@ impl SmokeTest {
 }
 
 pub struct PaintNotNetApp {
-    workspace: Workspace,
-    canvas: CanvasState,
-    files: FileOps,
-    modal: Option<Modal>,
+    pub(crate) workspace: Workspace,
+    pub(crate) canvas: CanvasState,
+    pub(crate) files: FileOps,
+    pub(crate) modal: Option<Modal>,
     /// Errors waiting to be shown after the current modal.
-    errors: Vec<(String, String)>,
-    taps: MultiTap,
-    diagnostics: Diagnostics,
-    smoke: Option<SmokeTest>,
-    new_image_size: (u32, u32),
-    last_dir: Option<PathBuf>,
+    pub(crate) errors: Vec<(String, String)>,
+    pub(crate) taps: MultiTap,
+    pub(crate) diagnostics: Diagnostics,
+    pub(crate) smoke: Option<SmokeTest>,
+    pub(crate) new_image_size: (u32, u32),
+    pub(crate) last_dir: Option<PathBuf>,
     /// Tabs to close once their save succeeds.
-    close_after_save: HashSet<u64>,
+    pub(crate) close_after_save: HashSet<u64>,
     /// Untitled tabs waiting for a Save As dialog (Save All, Exit → Save All).
-    save_as_queue: Vec<u64>,
-    exit_after_save: bool,
-    allow_close: bool,
-    released: Vec<u64>,
-    title: String,
-    tool: ToolKind,
-    previous_tool: ToolKind,
-    settings: ToolSettings,
-    panels: Panels,
-    colors: ColorsState,
-    menu: MenuBarState,
+    pub(crate) save_as_queue: Vec<u64>,
+    pub(crate) exit_after_save: bool,
+    pub(crate) allow_close: bool,
+    pub(crate) released: Vec<u64>,
+    pub(crate) title: String,
+    pub(crate) tool: ToolKind,
+    pub(crate) previous_tool: ToolKind,
+    pub(crate) settings: ToolSettings,
+    pub(crate) panels: Panels,
+    pub(crate) colors: ColorsState,
+    pub(crate) menu: MenuBarState,
     row2: Row2State,
-    status: StatusState,
-    icons: Icons,
-    rulers: bool,
-    units: Units,
+    pub(crate) status: StatusState,
+    pub(crate) icons: Icons,
+    pub(crate) rulers: bool,
+    pub(crate) units: Units,
+    /// Open Layer Properties / Resize / Canvas Size / Rotate-Zoom dialog.
+    pub(crate) doc_dialog: Option<crate::doc_dialogs::DocDialog>,
+    /// Pencil stroke in progress.
+    pub(crate) stroke: Option<crate::actions::PencilStroke>,
 }
 
 impl PaintNotNetApp {
@@ -116,6 +120,8 @@ impl PaintNotNetApp {
             icons: Icons::load(&cc.egui_ctx),
             rulers: false,
             units: Units::Pixels,
+            doc_dialog: None,
+            stroke: None,
         }
     }
 
@@ -141,6 +147,11 @@ impl PaintNotNetApp {
 
     pub fn canvas(&self) -> &CanvasState {
         &self.canvas
+    }
+
+    /// The open Layer Properties / Resize / Canvas Size / Rotate-Zoom dialog.
+    pub fn doc_dialog_mut(&mut self) -> Option<&mut crate::doc_dialogs::DocDialog> {
+        self.doc_dialog.as_mut()
     }
 
     /// A menu is open (menus pause global shortcuts).
@@ -178,6 +189,10 @@ impl PaintNotNetApp {
     /// Snapshot of what decides command availability and check marks.
     pub fn command_state(&self) -> CommandState {
         CommandState {
+            document: DOCUMENT_COMMANDS
+                .iter()
+                .map(|&c| (c, self.document_command_available(c).unwrap_or(false)))
+                .collect(),
             has_doc: self.workspace.active().is_some(),
             any_dirty: self.workspace.tabs().iter().any(|t| t.is_dirty()),
             pixel_grid: self.canvas.pixel_grid,
@@ -199,6 +214,12 @@ impl PaintNotNetApp {
 
     /// Run a command as if chosen from a menu or shortcut.
     pub fn execute(&mut self, ctx: &egui::Context, t: Triggered) {
+        if self.doc_dialog.is_some() || self.stroke.is_some() {
+            return;
+        }
+        if self.document_command(t.command) {
+            return;
+        }
         let vp = self.canvas.viewport;
         match t.command {
             Command::NewImage => {
@@ -323,6 +344,7 @@ impl PaintNotNetApp {
                 SaveTarget {
                     path,
                     format,
+                    flattened: false,
                     close_after,
                 },
             ),
@@ -340,7 +362,9 @@ impl PaintNotNetApp {
         let Some(tab) = self.workspace.tab_mut(key) else {
             return;
         };
-        if target.format.has_options() {
+        if tab.doc.layers().len() > 1 && !target.flattened {
+            self.modal = Some(Modal::FlattenForSave { key, then: target });
+        } else if target.format.has_options() {
             self.modal = Some(Modal::JpegQuality {
                 key,
                 quality: tab.save_options.jpeg_quality,
@@ -387,6 +411,7 @@ impl PaintNotNetApp {
                 let target = SaveTarget {
                     path: tab.path.clone().expect("has path"),
                     format: tab.format.expect("has format"),
+                    flattened: false,
                     close_after: false,
                 };
                 self.write(key, target);
@@ -399,6 +424,17 @@ impl PaintNotNetApp {
     fn handle_file_events(&mut self) {
         for event in self.files.poll() {
             match event {
+                FileEvent::Imported { key, path, result } => match result {
+                    Ok(doc) => {
+                        let name = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        self.last_dir = path.parent().map(|p| p.to_owned());
+                        self.import_layer(key, name, doc);
+                    }
+                    Err(e) => self.errors.push(("Error Importing File".into(), e)),
+                },
                 FileEvent::Opened { path, result } => match result {
                     Ok(doc) => {
                         let format = pnn_io::FileFormat::from_path(&path);
@@ -416,6 +452,7 @@ impl PaintNotNetApp {
                             SaveTarget {
                                 path,
                                 format,
+                                flattened: false,
                                 close_after,
                             },
                         );
@@ -482,6 +519,16 @@ impl PaintNotNetApp {
                     tab.save_options.jpeg_quality = quality;
                 }
                 self.write(key, then);
+            }
+            ModalResult::FlattenAndSave { key, mut then } => {
+                if let Some(tab) = self.workspace.tab_mut(key) {
+                    let (w, h) = (tab.doc.width(), tab.doc.height());
+                    let flat = pnn_core::transform::flatten_layers(&tab.doc);
+                    tab.doc.replace(w, h, vec![flat]);
+                    tab.commit("Flatten", Icon::Flatten);
+                }
+                then.flattened = true;
+                self.begin_save(key, then);
             }
             ModalResult::Cancelled => {
                 self.exit_after_save = false;
@@ -721,7 +768,7 @@ impl PaintNotNetApp {
         }
         let mut picked_tool = None;
         let mut layer_actions = Vec::new();
-        let mut command = None;
+        let mut history_action = None;
         let availability: Vec<(Command, bool)> = [
             Command::AddNewLayer,
             Command::DeleteLayer,
@@ -746,7 +793,7 @@ impl PaintNotNetApp {
             .show(ctx, workspace, &palette, |panel, ui| match panel {
                 Panel::Tools => picked_tool = windows::tools(ui, tool, icons, &palette),
                 Panel::History => {
-                    command =
+                    history_action =
                         windows::history(ui, workspace_tabs.active(), icons, &palette, &enabled)
                 }
                 Panel::Layers => {
@@ -774,6 +821,18 @@ impl PaintNotNetApp {
                 LayersAction::ToggleVisible(i) => {
                     if let Some(tab) = self.workspace.active_mut() {
                         tab.doc.modify_layer(i, None, |l| l.visible = !l.visible);
+                        tab.commit("Layer Visibility", Icon::LayerProperties);
+                    }
+                }
+                LayersAction::Move { from, to } => {
+                    if let Some(tab) = self.workspace.active_mut() {
+                        tab.doc.move_layer(from, to);
+                        let (name, icon) = if to > from {
+                            ("Move Layer Up", Icon::MoveLayerUp)
+                        } else {
+                            ("Move Layer Down", Icon::MoveLayerDown)
+                        };
+                        tab.commit(name, icon);
                     }
                 }
                 LayersAction::Properties(_) => {
@@ -782,16 +841,24 @@ impl PaintNotNetApp {
                 LayersAction::Command(c) => self.execute(ctx, Triggered::once(c)),
             }
         }
-        if let Some(c) = command {
-            self.execute(ctx, Triggered::once(c));
+        match history_action {
+            Some(windows::HistoryAction::Jump(i)) => {
+                if let Some(tab) = self.workspace.active_mut() {
+                    tab.jump_to(i);
+                }
+            }
+            Some(windows::HistoryAction::Command(c)) => self.execute(ctx, Triggered::once(c)),
+            None => {}
         }
     }
 }
 
 /// What command availability and check marks depend on, copied out of the app so menu
 /// closures don't borrow it.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct CommandState {
+    /// Availability of document commands (Undo, layer and image commands).
+    pub document: Vec<(Command, bool)>,
     pub has_doc: bool,
     pub any_dirty: bool,
     pub pixel_grid: bool,
@@ -800,10 +867,46 @@ pub struct CommandState {
     pub panels: [bool; 4],
 }
 
+/// Commands whose availability depends on the document (see `actions.rs`).
+const DOCUMENT_COMMANDS: &[Command] = &[
+    Command::Undo,
+    Command::Redo,
+    Command::AddNewLayer,
+    Command::DeleteLayer,
+    Command::DuplicateLayer,
+    Command::MergeLayerDown,
+    Command::ToggleLayerVisibility,
+    Command::ImportFromFile,
+    Command::FlipLayerHorizontal,
+    Command::FlipLayerVertical,
+    Command::RotateLayer180,
+    Command::RotateZoom,
+    Command::GoToTopLayer,
+    Command::GoToLayerAbove,
+    Command::GoToLayerBelow,
+    Command::GoToBottomLayer,
+    Command::MoveLayerToTop,
+    Command::MoveLayerUp,
+    Command::MoveLayerDown,
+    Command::MoveLayerToBottom,
+    Command::LayerProperties,
+    Command::FlipImageHorizontal,
+    Command::FlipImageVertical,
+    Command::RotateImage90Clockwise,
+    Command::RotateImage90CounterClockwise,
+    Command::RotateImage180,
+    Command::Resize,
+    Command::CanvasSize,
+    Command::Flatten,
+];
+
 impl CommandState {
     pub fn enabled(&self, command: Command) -> bool {
         if !command.implemented() {
             return false;
+        }
+        if let Some(&(_, on)) = self.document.iter().find(|(c, _)| *c == command) {
+            return on;
         }
         match command {
             Command::Close
@@ -911,6 +1014,10 @@ impl eframe::App for PaintNotNetApp {
             None => {}
         }
 
+        self.canvas.tool_cursor = match self.tool {
+            ToolKind::Pencil => Some(egui::CursorIcon::Crosshair),
+            _ => None,
+        };
         let gpu = frame.wgpu_render_state();
         self.canvas.rulers = self.rulers.then(|| {
             (
@@ -936,6 +1043,11 @@ impl eframe::App for PaintNotNetApp {
             })
             .inner;
         self.floating_windows(&ctx, workspace_rect, now);
+        let tool_events = std::mem::take(&mut self.canvas.events);
+        if self.modal.is_none() && self.doc_dialog.is_none() {
+            self.tool_events(tool_events);
+        }
+        self.run_doc_dialog(&ctx);
 
         for tab in self.workspace.tabs_mut() {
             shell::update_thumbnail(&ctx, tab, now);

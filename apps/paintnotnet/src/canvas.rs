@@ -18,8 +18,36 @@ const SCROLLBAR: f32 = 14.0;
 /// Space+arrow pan step in screen px (×10 with Ctrl). Not documented by paint.net; tune by feel.
 pub const ARROW_PAN_STEP: f64 = 16.0;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolButton {
+    Primary,
+    Secondary,
+}
+
+/// Pointer input for the active tool, in image coordinates (fractional pixels).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ToolEvent {
+    Down {
+        pos: [f64; 2],
+        button: ToolButton,
+        modifiers: egui::Modifiers,
+    },
+    Move {
+        pos: [f64; 2],
+    },
+    Up {
+        pos: [f64; 2],
+    },
+}
+
 #[derive(Default)]
 pub struct CanvasState {
+    /// Tool input gathered this frame (taken by the app).
+    pub events: Vec<ToolEvent>,
+    /// Mouse button that started the current tool drag.
+    tool_button: Option<ToolButton>,
+    /// Cursor for the active tool over the canvas (set by the app).
+    pub tool_cursor: Option<egui::CursorIcon>,
     pub pixel_grid: bool,
     /// View > Rulers, drawn in these units.
     pub rulers: Option<(Units, f64)>,
@@ -101,6 +129,10 @@ pub fn show(
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
     } else if space_held && response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+    } else if let Some(cursor) = state.tool_cursor
+        && (response.hovered() || state.tool_button.is_some())
+    {
+        ui.ctx().set_cursor_icon(cursor);
     }
 
     // Wheel: scroll (Shift = horizontal, handled by egui); Ctrl = step through zoom presets
@@ -153,6 +185,56 @@ pub fn show(
                 img,
                 vp,
             );
+        }
+    }
+
+    // Tool input from raw pointer events (every intermediate point of a fast stroke).
+    if !panning && !space_held {
+        let to_img = |p: egui::Pos2| {
+            view.screen_to_image(
+                [
+                    ((p.x - canvas_rect.min.x) as f64) * ppp,
+                    ((p.y - canvas_rect.min.y) as f64) * ppp,
+                ],
+                vp,
+            )
+        };
+        let over_canvas = response.contains_pointer();
+        let events: Vec<egui::Event> = ui.input(|i| i.events.clone());
+        for e in events {
+            match e {
+                egui::Event::PointerButton {
+                    pos,
+                    button,
+                    pressed,
+                    modifiers,
+                } => {
+                    let b = match button {
+                        PointerButton::Primary => ToolButton::Primary,
+                        PointerButton::Secondary => ToolButton::Secondary,
+                        _ => continue,
+                    };
+                    if pressed
+                        && state.tool_button.is_none()
+                        && over_canvas
+                        && canvas_rect.contains(pos)
+                    {
+                        state.tool_button = Some(b);
+                        state.events.push(ToolEvent::Down {
+                            pos: to_img(pos),
+                            button: b,
+                            modifiers,
+                        });
+                    } else if !pressed && state.tool_button == Some(b) {
+                        state.tool_button = None;
+                        state.events.push(ToolEvent::Up { pos: to_img(pos) });
+                    }
+                }
+                egui::Event::PointerMoved(pos) if state.tool_button.is_some() => {
+                    state.events.push(ToolEvent::Move { pos: to_img(pos) });
+                }
+                _ => {}
+            }
         }
     }
 

@@ -162,6 +162,20 @@ impl<T: Copy + PartialEq> TiledBuffer<T> {
         }
     }
 
+    /// Free tiles whose every pixel equals the absent value (restores sparsity after
+    /// whole-surface rewrites).
+    pub fn compact(&mut self) {
+        let absent = self.absent;
+        for slot in &mut self.tiles {
+            if slot
+                .as_ref()
+                .is_some_and(|t| t.pixels().iter().all(|&p| p == absent))
+            {
+                *slot = None;
+            }
+        }
+    }
+
     /// Number of allocated tiles (memory diagnostics, tests).
     pub fn allocated_tiles(&self) -> usize {
         self.tiles.iter().filter(|t| t.is_some()).count()

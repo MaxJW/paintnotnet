@@ -5,6 +5,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::tiles::{Surface, TILE_SIZE, TileCoord, tiles_for};
 use crate::{BlendMode, ColorBgra};
 
+/// Process-wide revision counter. Revisions are never reused, so a document restored from
+/// history can't be mistaken for a newer state by caches comparing revisions.
+fn next_revision() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
 /// Stable identity for a layer, independent of its position in the stack.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LayerId(u64);
@@ -91,14 +98,15 @@ impl Document {
                 .all(|l| l.surface.width() == width && l.surface.height() == height)
         );
         let tiles = (tiles_for(width) * tiles_for(height)) as usize;
+        let revision = next_revision();
         Self {
             width,
             height,
             active: layers.len() - 1,
             layers,
             dpi: DEFAULT_DPI,
-            revision: 1,
-            tile_revisions: vec![1; tiles],
+            revision,
+            tile_revisions: vec![revision; tiles],
         }
     }
 
@@ -160,7 +168,7 @@ impl Document {
     }
 
     pub fn invalidate_all(&mut self) {
-        self.revision += 1;
+        self.revision = next_revision();
         let rev = self.revision;
         self.tile_revisions.iter_mut().for_each(|r| *r = rev);
     }
@@ -169,7 +177,7 @@ impl Document {
         if rect.width == 0 || rect.height == 0 || rect.x >= self.width || rect.y >= self.height {
             return;
         }
-        self.revision += 1;
+        self.revision = next_revision();
         let rev = self.revision;
         let x1 = (rect.x + rect.width).min(self.width) - 1;
         let y1 = (rect.y + rect.height).min(self.height) - 1;
@@ -179,6 +187,65 @@ impl Document {
                 self.tile_revisions[(ty * tiles_x + tx) as usize] = rev;
             }
         }
+    }
+}
+
+/// Structural edits. Each invalidates the composite so every consumer refreshes.
+impl Document {
+    /// Insert a layer at `index` (0 = bottom) and make it active.
+    pub fn insert_layer(&mut self, index: usize, layer: Layer) {
+        assert!(layer.surface.width() == self.width && layer.surface.height() == self.height);
+        self.layers.insert(index, layer);
+        self.active = index;
+        self.invalidate_all();
+    }
+
+    /// Remove a layer (never the last one). The layer below becomes active, or the new
+    /// bottom layer if the bottom one was removed.
+    pub fn remove_layer(&mut self, index: usize) -> Option<Layer> {
+        if self.layers.len() <= 1 || index >= self.layers.len() {
+            return None;
+        }
+        let layer = self.layers.remove(index);
+        self.active = index.saturating_sub(1).min(self.layers.len() - 1);
+        self.invalidate_all();
+        Some(layer)
+    }
+
+    /// Move a layer to a new position; it stays active.
+    pub fn move_layer(&mut self, from: usize, to: usize) {
+        if from == to || from >= self.layers.len() || to >= self.layers.len() {
+            return;
+        }
+        let layer = self.layers.remove(from);
+        self.layers.insert(to, layer);
+        self.active = to;
+        self.invalidate_all();
+    }
+
+    /// Replace every layer and the size (whole-image transforms: resize, rotate, canvas).
+    pub fn replace(&mut self, width: u32, height: u32, layers: Vec<Layer>) {
+        assert!(!layers.is_empty());
+        assert!(
+            layers
+                .iter()
+                .all(|l| l.surface.width() == width && l.surface.height() == height)
+        );
+        let active = self.active.min(layers.len() - 1);
+        let dpi = self.dpi;
+        *self = Self::from_layers(width, height, layers);
+        self.active = active;
+        self.dpi = dpi;
+    }
+
+    /// Bytes of tile memory referenced by this document (shared tiles counted once each).
+    pub fn tile_bytes(&self) -> usize {
+        self.layers
+            .iter()
+            .map(|l| l.surface.allocated_tiles())
+            .sum::<usize>()
+            * crate::tiles::TILE_PIXELS
+            * std::mem::size_of::<ColorBgra>()
     }
 }
 
@@ -211,6 +278,32 @@ mod tests {
         assert_eq!(d.tile_revision(TileCoord { tx: 1, ty: 0 }), rev);
         assert!(d.tile_revision(TileCoord { tx: 2, ty: 0 }) < rev);
         assert!(d.tile_revision(TileCoord { tx: 0, ty: 1 }) < rev);
+    }
+
+    #[test]
+    fn remove_keeps_one_layer_and_activates_below() {
+        let mut d = Document::new_blank(4, 4);
+        d.insert_layer(1, Layer::new("Layer 2", Surface::new_transparent(4, 4)));
+        d.insert_layer(2, Layer::new("Layer 3", Surface::new_transparent(4, 4)));
+        assert_eq!(d.active_index(), 2);
+        d.remove_layer(2);
+        assert_eq!(d.active_index(), 1);
+        d.remove_layer(0);
+        assert_eq!(d.active_index(), 0);
+        assert!(
+            d.remove_layer(0).is_none(),
+            "the last layer can't be deleted"
+        );
+    }
+
+    #[test]
+    fn revisions_are_never_reused() {
+        let a = Document::new_blank(4, 4);
+        let mut b = a.clone();
+        b.invalidate_all();
+        let c = Document::new_blank(4, 4);
+        assert!(b.revision() > a.revision());
+        assert!(c.revision() > b.revision());
     }
 
     #[test]

@@ -2802,6 +2802,7 @@ version = "0.1.0"
 dependencies = [
  "pnn-core",
  "pnn-sdf",
+ "rayon",
 ]
 
 [[package]]

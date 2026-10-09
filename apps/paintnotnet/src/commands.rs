@@ -235,6 +235,35 @@ impl Command {
                 | C::SwapColors
                 | C::SwitchActiveColor
                 | C::ToggleDiagnostics
+                | C::Undo
+                | C::Redo
+                | C::AddNewLayer
+                | C::DeleteLayer
+                | C::DuplicateLayer
+                | C::MergeLayerDown
+                | C::ToggleLayerVisibility
+                | C::ImportFromFile
+                | C::FlipLayerHorizontal
+                | C::FlipLayerVertical
+                | C::RotateLayer180
+                | C::RotateZoom
+                | C::GoToTopLayer
+                | C::GoToLayerAbove
+                | C::GoToLayerBelow
+                | C::GoToBottomLayer
+                | C::MoveLayerToTop
+                | C::MoveLayerUp
+                | C::MoveLayerDown
+                | C::MoveLayerToBottom
+                | C::LayerProperties
+                | C::FlipImageHorizontal
+                | C::FlipImageVertical
+                | C::RotateImage90Clockwise
+                | C::RotateImage90CounterClockwise
+                | C::RotateImage180
+                | C::Resize
+                | C::CanvasSize
+                | C::Flatten
         )
     }
 

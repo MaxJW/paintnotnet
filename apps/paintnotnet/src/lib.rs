@@ -1,10 +1,12 @@
 //! The egui shell. Split from `main.rs` so UI tests can drive the app headlessly.
 
+pub mod actions;
 pub mod app;
 pub mod canvas;
 pub mod commands;
 pub mod diagnostics;
 pub mod dialogs;
+pub mod doc_dialogs;
 pub mod file_ops;
 pub mod icons;
 pub mod menus;

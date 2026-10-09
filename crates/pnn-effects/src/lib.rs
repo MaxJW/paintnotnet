@@ -3,6 +3,8 @@
 //!
 //! Menu contents follow the paint.net 5 docs (`AdjustmentsMenu.html`, `Effects*Menu.html`).
 
+pub mod rotate_zoom;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Adjustment {
     AutoLevel,
