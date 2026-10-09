@@ -9,6 +9,14 @@ publish.workspace = true
 [dependencies]
 pnn-core.workspace = true
 wgpu.workspace = true
+egui-wgpu.workspace = true
+egui.workspace = true
+bytemuck.workspace = true
+rayon.workspace = true
+
+
+[dev-dependencies]
+naga = { version = "=30.0.1", features = ["wgsl-in"] }
 
 [lints]
 workspace = true

@@ -4,8 +4,8 @@ Design and rationale: [PLAN.md](PLAN.md). Each phase ends with a usable app and 
 where you try it. A phase is only ticked off once its acceptance checks have been run and
 shown passing.
 
-**Current state (2026-10-09):** Phase 0 is complete and verified. Nothing is committed yet.
-**Next: Phase 1.**
+**Current state (2026-10-09):** Phases 0 and 1 are complete, verified and committed.
+**Next: Phase 2.**
 
 Reference source: paint.net 3.36.7 (OpenPDN, MIT code) is cloned at `reference/OpenPDN`
 (git-ignored; re-clone with `git clone --depth 1 https://github.com/rivy/OpenPDN reference/OpenPDN`).
@@ -33,14 +33,28 @@ Lessons for Phase 2's keymap engine, learned here:
 - egui recomputes `Event::Key::repeat` from its own key-down state.
 - Kittest feeds one queued event per frame, so UI tests must step once per event.
 
-## Phase 1: Document core and canvas
-- [ ] Tiled surface (256², Arc copy-on-write, sparse), Layer, Document, `Mask` type
-- [ ] CPU compositor (Normal blend), dirty-tile tracking
-- [ ] wgpu canvas: tile textures, zoom (nearest ≥100%, mipmapped <100%), checkerboard, pixel grid ≥200%
-- [ ] Every canvas and view keybind: scroll, Shift-scroll, Home/End, Ctrl+wheel, Ctrl +/-/0, Ctrl+B (×2 toggles back), Ctrl+Shift+B, Space-drag, middle-drag, Space+arrows
-- [ ] New Image dialog, Open, Save, Save As for PNG/JPEG/WebP/BMP/TIFF/GIF/TGA
-- [ ] Multiple images: image list with live thumbnails, Ctrl+Tab / Ctrl+PgUp/PgDn / Ctrl+Shift+PgUp/PgDn / Ctrl+N to switch tabs
-- **Accept:** an 8000×8000 PNG opens; pan and zoom stay smooth (frame-time overlay); golden tests for compositing.
+## Phase 1: Document core and canvas ✅
+- [x] Tiled surface (256², Arc copy-on-write, sparse), Layer, Document, `Mask` type (`pnn-core::tiles`)
+- [x] All 14 blend ops ported from paint.net 3.36 `UserBlendOps` (bit-exact against 4,984 vectors from `scripts/blend_reference.py`, which transliterates the C# macros and reads the original `masTable`)
+- [x] CPU compositor following paint.net's `Document.Render` (bottom-layer fast path, opacity, visibility), per-tile revisions, rayon
+- [x] wgpu canvas: 4096² texture chunks, premultiplied mips, nearest ≥100% / trilinear <100%, paint.net checkerboard (8 px, 191/255), dotted black pixel grid ≥200% (ported from `SurfaceBoxGridRenderer`)
+- [x] View: paint.net zoom presets 1–3200% (`ScaleFactor`), fit-to-window (`DocumentView.ZoomToWindow`, refits on resize until you zoom), zoom about cursor, clamped scrolling, scrollbars
+- [x] Keys: wheel, Shift+wheel, Ctrl+wheel, Ctrl +/=/-/0, Ctrl+B (×2 restores), PgUp/PgDn, Shift+PgUp/PgDn, Home/End ×1/×2, Shift+Home/End, Ctrl+Home/End, Space+drag, middle-drag, Space(+Ctrl)+arrows
+- [x] New Image dialog (Ctrl+N; white "Background" layer, keep-aspect, size estimate); Open (KDE picker via portal, multi-select, background decode); CLI `paintnotnet FILE...`
+- [x] Save / Save As / Save All: PNG, JPEG (quality dialog, default 95, over white), BMP (24-bit over white), GIF, TIFF, TGA, WebP; atomic writes; unsaved-changes prompts on close and exit
+- [x] Image list: live thumbnails, `*` for unsaved, click, middle-click/× to close, drag to reorder; Ctrl+Tab / Ctrl+PgUp/PgDn / Ctrl+Shift+PgUp/PgDn / Ctrl+1–9 / Alt+1–9
+- [x] Title bar `*name - paintnotnet`; status bar with size, cursor position, zoom
+- **Verified 2026-10-09:**
+  - `cargo xtask ci` passes: 64 tests, including 7 headless UI tests driven by real key events, plus 3 offscreen GPU render tests checking canvas pixels (content, checkerboard values, grid dot pattern)
+  - Release build with an 8000×8000 PNG: opened in 243 ms; 164.7–165.0 fps on DP-1 while sweeping zoom 1%–800% and panning (p99 6.5–7.0 ms)
+
+Guessed, to tune by feel (paint.net doesn't document them):
+- Space+arrow pan step 16 px (×10 with Ctrl)
+- PgUp/PgDn scroll one full viewport
+- Ctrl+Home/End put the corner at the centre unclamped; the next scroll clamps it back
+- Max zoom is 3200% (from 3.36); paint.net 5 may go higher
+- JPEG dialog has no live preview or file-size estimate yet
+- Image list and status bar layout are functional, not yet paint.net-styled (Phase 2)
 
 ## Phase 2: The paint.net shell
 - [ ] Compare against the official MainWindow and Toolbar screenshots and settle default positions

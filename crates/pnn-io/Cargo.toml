@@ -8,6 +8,12 @@ publish.workspace = true
 
 [dependencies]
 pnn-core.workspace = true
+image.workspace = true
+thiserror.workspace = true
+bytemuck.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

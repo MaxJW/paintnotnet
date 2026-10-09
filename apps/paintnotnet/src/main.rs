@@ -1,5 +1,6 @@
 //! paintnotnet: a paint.net 5.x remake for Linux.
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
@@ -14,10 +15,10 @@ fn main() -> ExitCode {
     )
     .init();
 
-    let smoke = match parse_args(std::env::args().skip(1)) {
-        Ok(smoke) => smoke,
+    let (smoke, files) = match parse_args(std::env::args().skip(1)) {
+        Ok(parsed) => parsed,
         Err(message) => {
-            eprintln!("{message}\nusage: paintnotnet [--smoke-test SECONDS]");
+            eprintln!("{message}\nusage: paintnotnet [--smoke-test SECONDS] [FILE]...");
             return ExitCode::from(2);
         }
     };
@@ -41,7 +42,7 @@ fn main() -> ExitCode {
     let result = eframe::run_native(
         "paintnotnet",
         options,
-        Box::new(move |cc| Ok(Box::new(PaintNotNetApp::new(cc, smoke)))),
+        Box::new(move |cc| Ok(Box::new(PaintNotNetApp::new(cc, smoke, files)))),
     );
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -52,8 +53,11 @@ fn main() -> ExitCode {
     }
 }
 
-fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Option<SmokeTest>, String> {
+fn parse_args(
+    mut args: impl Iterator<Item = String>,
+) -> Result<(Option<SmokeTest>, Vec<PathBuf>), String> {
     let mut smoke = None;
+    let mut files = Vec::new();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--smoke-test" => {
@@ -67,8 +71,9 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Option<SmokeTest
                     .ok_or_else(|| format!("invalid --smoke-test duration: {value}"))?;
                 smoke = Some(SmokeTest::new(Duration::from_secs_f64(secs)));
             }
-            other => return Err(format!("unknown argument: {other}")),
+            flag if flag.starts_with("--") => return Err(format!("unknown argument: {flag}")),
+            file => files.push(PathBuf::from(file)),
         }
     }
-    Ok(smoke)
+    Ok((smoke, files))
 }

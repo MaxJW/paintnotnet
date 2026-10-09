@@ -39,7 +39,7 @@ fn hold(harness: &mut Harness<'_, PaintNotNetApp>, modifiers: Modifiers, presses
 }
 
 fn harness() -> Harness<'static, PaintNotNetApp> {
-    let mut h = Harness::builder().build_eframe(|cc| PaintNotNetApp::new(cc, None));
+    let mut h = Harness::builder().build_eframe(|cc| PaintNotNetApp::new(cc, None, Vec::new()));
     h.step();
     h
 }

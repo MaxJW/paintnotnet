@@ -1,10 +1,21 @@
+use std::collections::HashSet;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use eframe::egui;
+use pnn_core::Document;
+use pnn_render::{CanvasRenderer, View, view};
 
+use crate::canvas::{self, ARROW_PAN_STEP, CanvasState};
+use crate::commands::{Command, MultiTap, Triggered, take_commands};
 use crate::diagnostics::Diagnostics;
+use crate::dialogs::{Modal, ModalResult, NewImage, SaveTarget};
+use crate::file_ops::{FileEvent, FileOps, resolve_save_path};
+use crate::shell::{self, ImageListAction, StatusInfo};
+use crate::workspace::Workspace;
 
-/// `--smoke-test N`: show diagnostics, run for N seconds, print a summary line, then quit.
+/// `--smoke-test N`: show diagnostics, run for N seconds (sweeping zoom and pan if an image
+/// is open), print a summary line, then quit.
 pub struct SmokeTest {
     duration: Duration,
     started: Option<Instant>,
@@ -20,47 +31,475 @@ impl SmokeTest {
 }
 
 pub struct PaintNotNetApp {
+    workspace: Workspace,
+    canvas: CanvasState,
+    files: FileOps,
+    modal: Option<Modal>,
+    /// Errors waiting to be shown after the current modal.
+    errors: Vec<(String, String)>,
+    taps: MultiTap,
     diagnostics: Diagnostics,
     smoke: Option<SmokeTest>,
+    new_image_size: (u32, u32),
+    last_dir: Option<PathBuf>,
+    /// Tabs to close once their save succeeds.
+    close_after_save: HashSet<u64>,
+    /// Untitled tabs waiting for a Save As dialog (Save All, Exit → Save All).
+    save_as_queue: Vec<u64>,
+    exit_after_save: bool,
+    allow_close: bool,
+    released: Vec<u64>,
+    title: String,
 }
 
 impl PaintNotNetApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>, smoke: Option<SmokeTest>) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        smoke: Option<SmokeTest>,
+        open: Vec<PathBuf>,
+    ) -> Self {
+        // Ctrl +/-/0 belong to the canvas zoom, not egui's UI scale.
+        cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
+        if let Some(rs) = cc.wgpu_render_state.as_ref() {
+            CanvasRenderer::install(rs);
+        }
         let mut diagnostics = Diagnostics::default();
         diagnostics.set_visible(cfg!(debug_assertions) || smoke.is_some());
-        Self { diagnostics, smoke }
+        let mut files = FileOps::new(cc.egui_ctx.clone());
+        files.open_paths(open);
+        Self {
+            workspace: Workspace::default(),
+            canvas: CanvasState::default(),
+            files,
+            modal: None,
+            errors: Vec::new(),
+            taps: MultiTap::default(),
+            diagnostics,
+            smoke,
+            new_image_size: (800, 600),
+            last_dir: None,
+            close_after_save: HashSet::new(),
+            save_as_queue: Vec::new(),
+            exit_after_save: false,
+            allow_close: false,
+            released: Vec::new(),
+            title: String::new(),
+        }
     }
 
     pub fn diagnostics(&self) -> &Diagnostics {
         &self.diagnostics
     }
 
-    fn handle_shortcuts(&mut self, ctx: &egui::Context) {
-        if ctx.input(|i| diagnostics_chord_pressed(&i.events)) {
-            self.diagnostics.set_visible(!self.diagnostics.visible());
+    pub fn workspace(&self) -> &Workspace {
+        &self.workspace
+    }
+
+    pub fn workspace_mut(&mut self) -> &mut Workspace {
+        &mut self.workspace
+    }
+
+    pub fn modal(&self) -> Option<&Modal> {
+        self.modal.as_ref()
+    }
+
+    pub fn pixel_grid(&self) -> bool {
+        self.canvas.pixel_grid
+    }
+
+    pub fn canvas(&self) -> &CanvasState {
+        &self.canvas
+    }
+
+    /// Run a command as if chosen from a menu or shortcut.
+    pub fn execute(&mut self, ctx: &egui::Context, t: Triggered) {
+        let vp = self.canvas.viewport;
+        match t.command {
+            Command::NewImage => {
+                self.modal = Some(Modal::NewImage(NewImage::new(
+                    self.new_image_size.0,
+                    self.new_image_size.1,
+                )))
+            }
+            Command::Open => self.files.pick_open(self.last_dir.clone()),
+            Command::Close => {
+                if let Some(key) = self.workspace.active().map(|t| t.key) {
+                    self.close_tab(key);
+                }
+            }
+            Command::Save => {
+                if let Some(key) = self.workspace.active().map(|t| t.key) {
+                    self.save_tab(key, false);
+                }
+            }
+            Command::SaveAs => {
+                if let Some(tab) = self.workspace.active() {
+                    let (key, path, title) = (tab.key, tab.path.clone(), tab.title());
+                    self.files.pick_save(key, path.as_deref(), &title);
+                }
+            }
+            Command::SaveAll => self.save_all(),
+            Command::Exit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Command::NextImage => self.workspace.cycle(true),
+            Command::PreviousImage => self.workspace.cycle(false),
+            Command::MoveImageLeft => self.workspace.move_active(false),
+            Command::MoveImageRight => self.workspace.move_active(true),
+            Command::SwitchToImage(n) => self.workspace.activate(n as usize - 1),
+            Command::TogglePixelGrid => self.canvas.pixel_grid = !self.canvas.pixel_grid,
+            Command::ToggleDiagnostics => self.diagnostics.set_visible(!self.diagnostics.visible()),
+            Command::ZoomToSelection => {} // needs selections (Phase 4)
+            view_command => {
+                let Some(tab) = self.workspace.active_mut() else {
+                    return;
+                };
+                let img = tab.image_size();
+                let Some(view) = tab.view.as_mut() else {
+                    return;
+                };
+                match view_command {
+                    Command::ZoomIn => view.zoom_centered(view::next_zoom_in(view.zoom), img, vp),
+                    Command::ZoomOut => view.zoom_centered(view::next_zoom_out(view.zoom), img, vp),
+                    Command::ActualSize => view.zoom_centered(1.0, img, vp),
+                    Command::ZoomToWindow => {
+                        // Second Ctrl+B restores the zoom from before the first.
+                        if view.fit_to_window
+                            && let Some(previous) = tab.view_before_fit.take()
+                        {
+                            *view = previous;
+                            view.clamp(img, vp);
+                        } else {
+                            tab.view_before_fit = Some(*view);
+                            *view = View::fitted(img, vp);
+                        }
+                    }
+                    Command::ScrollPageUp => view.scroll_by([0.0, -vp[1]], img, vp),
+                    Command::ScrollPageDown => view.scroll_by([0.0, vp[1]], img, vp),
+                    Command::ScrollPageLeft => view.scroll_by([-vp[0], 0.0], img, vp),
+                    Command::ScrollPageRight => view.scroll_by([vp[0], 0.0], img, vp),
+                    Command::HomeKey if t.taps >= 2 => view.scroll_to_corner(false, img, vp),
+                    Command::HomeKey => view.scroll_by([-vp[0], 0.0], img, vp),
+                    Command::EndKey if t.taps >= 2 => view.scroll_to_corner(true, img, vp),
+                    Command::EndKey => view.scroll_by([vp[0], 0.0], img, vp),
+                    Command::ScrollToTopLeft => view.scroll_to_corner(false, img, vp),
+                    Command::ScrollToBottomRight => view.scroll_to_corner(true, img, vp),
+                    Command::CenterTopLeft => view.center_on([0.0, 0.0]),
+                    Command::CenterBottomRight => view.center_on(img),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    fn close_tab(&mut self, key: u64) {
+        let Some(tab) = self.workspace.tabs().iter().find(|t| t.key == key) else {
+            return;
+        };
+        if tab.is_dirty() {
+            self.modal = Some(Modal::UnsavedChanges {
+                key,
+                title: tab.title(),
+            });
+        } else {
+            self.discard_tab(key);
+        }
+    }
+
+    fn discard_tab(&mut self, key: u64) {
+        if self.workspace.remove(key).is_some() {
+            self.released.push(key);
+        }
+    }
+
+    /// Save to the tab's file, or ask where (Save As) if it has none.
+    fn save_tab(&mut self, key: u64, close_after: bool) {
+        let Some(tab) = self.workspace.tabs().iter().find(|t| t.key == key) else {
+            return;
+        };
+        match (tab.path.clone(), tab.format) {
+            (Some(path), Some(format)) => self.begin_save(
+                key,
+                SaveTarget {
+                    path,
+                    format,
+                    close_after,
+                },
+            ),
+            _ => {
+                if close_after {
+                    self.close_after_save.insert(key);
+                }
+                let (path, title) = (tab.path.clone(), tab.title());
+                self.files.pick_save(key, path.as_deref(), &title);
+            }
+        }
+    }
+
+    fn begin_save(&mut self, key: u64, target: SaveTarget) {
+        let Some(tab) = self.workspace.tab_mut(key) else {
+            return;
+        };
+        if target.format.has_options() {
+            self.modal = Some(Modal::JpegQuality {
+                key,
+                quality: tab.save_options.jpeg_quality,
+                then: target,
+            });
+        } else {
+            self.write(key, target);
+        }
+    }
+
+    fn write(&mut self, key: u64, target: SaveTarget) {
+        let Some(tab) = self.workspace.tab_mut(key) else {
+            return;
+        };
+        if target.close_after {
+            self.close_after_save.insert(key);
+        }
+        self.files.save(
+            key,
+            tab.doc.clone(),
+            target.path,
+            target.format,
+            tab.save_options,
+        );
+    }
+
+    fn save_all(&mut self) {
+        let dirty: Vec<(u64, bool)> = self
+            .workspace
+            .tabs()
+            .iter()
+            .filter(|t| t.is_dirty())
+            .map(|t| (t.key, t.path.is_some() && t.format.is_some()))
+            .collect();
+        for (key, has_file) in dirty {
+            if has_file {
+                // Save All reuses each image's last settings rather than prompting.
+                let tab = self
+                    .workspace
+                    .tabs()
+                    .iter()
+                    .find(|t| t.key == key)
+                    .expect("exists");
+                let target = SaveTarget {
+                    path: tab.path.clone().expect("has path"),
+                    format: tab.format.expect("has format"),
+                    close_after: false,
+                };
+                self.write(key, target);
+            } else {
+                self.save_as_queue.push(key);
+            }
+        }
+    }
+
+    fn handle_file_events(&mut self) {
+        for event in self.files.poll() {
+            match event {
+                FileEvent::Opened { path, result } => match result {
+                    Ok(doc) => {
+                        let format = pnn_io::FileFormat::from_path(&path);
+                        self.last_dir = path.parent().map(|p| p.to_owned());
+                        self.workspace.add(doc, Some(path), format);
+                    }
+                    Err(e) => self.errors.push(("Error Opening File".into(), e)),
+                },
+                FileEvent::PickedOpen(paths) => self.files.open_paths(paths),
+                FileEvent::PickedSave { key, path } => match path.map(resolve_save_path) {
+                    Some(Ok((path, format))) => {
+                        let close_after = self.close_after_save.remove(&key);
+                        self.begin_save(
+                            key,
+                            SaveTarget {
+                                path,
+                                format,
+                                close_after,
+                            },
+                        );
+                    }
+                    Some(Err(e)) => {
+                        self.close_after_save.remove(&key);
+                        self.errors.push(("Error Saving File".into(), e));
+                    }
+                    None => {
+                        // Cancelled: abandon any close/exit waiting on this save.
+                        self.close_after_save.remove(&key);
+                        self.save_as_queue.clear();
+                        self.exit_after_save = false;
+                    }
+                },
+                FileEvent::Saved {
+                    key,
+                    path,
+                    format,
+                    revision,
+                    result,
+                } => match result {
+                    Ok(()) => {
+                        if let Some(tab) = self.workspace.tab_mut(key) {
+                            tab.path = Some(path.clone());
+                            tab.format = Some(format);
+                            tab.mark_saved(revision);
+                        }
+                        self.last_dir = path.parent().map(|p| p.to_owned());
+                        if self.close_after_save.remove(&key) {
+                            self.discard_tab(key);
+                        }
+                    }
+                    Err(e) => {
+                        self.close_after_save.remove(&key);
+                        self.exit_after_save = false;
+                        self.errors.push(("Error Saving File".into(), e));
+                    }
+                },
+            }
+        }
+    }
+
+    fn handle_modal_result(&mut self, ctx: &egui::Context, result: ModalResult) {
+        self.modal = None;
+        match result {
+            ModalResult::CreateImage { width, height } => {
+                self.new_image_size = (width, height);
+                self.workspace
+                    .add(Document::new_blank(width, height), None, None);
+            }
+            ModalResult::Save { key } => self.save_tab(key, true),
+            ModalResult::DontSave { key } => self.discard_tab(key),
+            ModalResult::SaveAllAndExit => {
+                self.exit_after_save = true;
+                self.save_all();
+            }
+            ModalResult::ExitWithoutSaving => {
+                self.allow_close = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            ModalResult::JpegConfirmed { key, quality, then } => {
+                if let Some(tab) = self.workspace.tab_mut(key) {
+                    tab.save_options.jpeg_quality = quality;
+                }
+                self.write(key, then);
+            }
+            ModalResult::Cancelled => {
+                self.exit_after_save = false;
+                self.save_as_queue.clear();
+            }
+            ModalResult::Closed => {}
+        }
+    }
+
+    fn handle_close_request(&mut self, ctx: &egui::Context) {
+        if !ctx.input(|i| i.viewport().close_requested()) || self.allow_close {
+            return;
+        }
+        let dirty = self
+            .workspace
+            .tabs()
+            .iter()
+            .filter(|t| t.is_dirty())
+            .count();
+        if dirty > 0 {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            if self.modal.is_none() {
+                self.modal = Some(Modal::UnsavedOnExit { count: dirty });
+            }
+        }
+    }
+
+    /// Space + arrows pans (×10 with Ctrl).
+    fn keyboard_pan(&mut self, ctx: &egui::Context) {
+        let vp = self.canvas.viewport;
+        let Some(tab) = self.workspace.active_mut() else {
+            return;
+        };
+        let img = tab.image_size();
+        let Some(view) = tab.view.as_mut() else {
+            return;
+        };
+        let (space, ctrl, dirs) = ctx.input(|i| {
+            let dirs: Vec<[f64; 2]> = [
+                (egui::Key::ArrowLeft, [-1.0, 0.0]),
+                (egui::Key::ArrowRight, [1.0, 0.0]),
+                (egui::Key::ArrowUp, [0.0, -1.0]),
+                (egui::Key::ArrowDown, [0.0, 1.0]),
+            ]
+            .into_iter()
+            .filter(|(k, _)| i.key_pressed(*k))
+            .map(|(_, d)| d)
+            .collect();
+            (i.key_down(egui::Key::Space), i.modifiers.ctrl, dirs)
+        });
+        if !space {
+            return;
+        }
+        let step = if ctrl {
+            ARROW_PAN_STEP * 10.0
+        } else {
+            ARROW_PAN_STEP
+        };
+        for d in dirs {
+            view.scroll_by([d[0] * step, d[1] * step], img, vp);
+        }
+    }
+
+    fn update_title(&mut self, ctx: &egui::Context) {
+        let title = match self.workspace.active() {
+            Some(tab) => format!(
+                "{}{} - paintnotnet",
+                if tab.is_dirty() { "*" } else { "" },
+                tab.title()
+            ),
+            None => "paintnotnet".to_owned(),
+        };
+        if title != self.title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.title = title;
         }
     }
 
     fn run_smoke_test(&mut self, ctx: &egui::Context, now: Instant) {
         let Some(smoke) = &mut self.smoke else { return };
         let started = *smoke.started.get_or_insert(now);
-        if now - started < smoke.duration {
+        let elapsed = now - started;
+        // Sweep zoom (about 1%–800%) and pan so the canvas redraws every frame.
+        let vp = self.canvas.viewport;
+        if let Some(tab) = self.workspace.active_mut() {
+            let img = tab.image_size();
+            if let Some(view) = tab.view.as_mut() {
+                let t = elapsed.as_secs_f64();
+                let zoom = 2f64.powf((t * 0.7).sin() * 3.0) * view::fit_zoom(img, vp).max(0.01);
+                view.zoom_centered(zoom, img, vp);
+                view.center = [
+                    img[0] * (0.5 + 0.4 * (t * 0.9).cos()),
+                    img[1] * (0.5 + 0.4 * (t * 1.3).sin()),
+                ];
+                view.clamp(img, vp);
+            }
+        }
+        if elapsed < smoke.duration {
             return;
         }
         let env = self.diagnostics.environment();
         let stats = self.diagnostics.stats();
+        let image = self
+            .workspace
+            .active()
+            .map(|t| format!("{}x{}", t.doc.width(), t.doc.height()));
         println!(
-            "smoke-test: window_system={} monitor={:?} backend={} adapter={:?} frames={} fps={:.1} mean_ms={:.2} p99_ms={:.2} max_ms={:.2}",
+            "smoke-test: window_system={} monitor={:?} backend={} adapter={:?} image={} frames={} fps={:.1} mean_ms={:.2} p99_ms={:.2} max_ms={:.2}",
             env.map_or("unknown", |e| e.window_system),
             crate::diagnostics::monitor_label(ctx),
             env.map_or("unknown", |e| e.backend.as_str()),
             env.map_or("unknown", |e| e.adapter.as_str()),
+            image.as_deref().unwrap_or("none"),
             stats.map_or(0, |s| s.frames),
             stats.map_or(0.0, |s| s.fps()),
             stats.map_or(0.0, |s| s.mean.as_secs_f64() * 1000.0),
             stats.map_or(0.0, |s| s.p99.as_secs_f64() * 1000.0),
             stats.map_or(0.0, |s| s.max.as_secs_f64() * 1000.0),
         );
+        self.allow_close = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         self.smoke = None;
     }
@@ -70,30 +509,98 @@ impl eframe::App for PaintNotNetApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let now = Instant::now();
         let ctx = ui.ctx().clone();
-        self.handle_shortcuts(&ctx);
+        self.handle_file_events();
+
+        let modal_open = self.modal.is_some() || self.files.dialog_open();
+        if !modal_open && !ctx.egui_wants_keyboard_input() {
+            for t in take_commands(&ctx, &mut self.taps, now) {
+                self.execute(&ctx, t);
+            }
+            self.keyboard_pan(&ctx);
+        }
+        self.handle_close_request(&ctx);
         self.diagnostics.record_frame(frame, now);
 
-        egui::CentralPanel::default().show(ui, |ui| {
-            ui.centered_and_justified(|ui| {
-                ui.label("paintnotnet: Phase 0 groundwork\nCtrl+Alt+Shift+` toggles diagnostics");
-            });
-        });
+        if let Some(rs) = frame.wgpu_render_state() {
+            let mut renderer = rs.renderer.write();
+            if let Some(canvas) = renderer.callback_resources.get_mut::<CanvasRenderer>() {
+                for key in self.released.drain(..) {
+                    canvas.release(key);
+                }
+            }
+        }
 
+        egui::Panel::top("menu").show(ui, |ui| {
+            if let Some(command) = shell::menu_bar(ui, &self.workspace, self.canvas.pixel_grid) {
+                self.execute(&ctx, Triggered { command, taps: 1 });
+            }
+        });
+        if !self.workspace.tabs().is_empty() {
+            egui::Panel::top("image_list").show(ui, |ui| {
+                for action in shell::image_list(ui, &self.workspace) {
+                    match action {
+                        ImageListAction::Activate(i) => self.workspace.activate(i),
+                        ImageListAction::Close(key) => self.close_tab(key),
+                        ImageListAction::Move { from, to } => self.workspace.move_tab(from, to),
+                    }
+                }
+            });
+        }
+        let active = self.workspace.active();
+        let status = StatusInfo {
+            hint: "",
+            busy: self.files.busy(),
+            image_size: active.map(|t| (t.doc.width(), t.doc.height())),
+            cursor: self.canvas.cursor,
+            zoom: active.and_then(|t| t.view.map(|v| v.zoom)),
+        };
+        egui::Panel::bottom("status").show(ui, |ui| shell::status_bar(ui, status));
+
+        let gpu = frame.wgpu_render_state();
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE)
+            .show(ui, |ui| match self.workspace.active_mut() {
+                Some(tab) => canvas::show(ui, tab, &mut self.canvas, gpu),
+                None => {
+                    self.canvas.cursor = None;
+                    ui.painter()
+                        .rect_filled(ui.max_rect(), 0.0, canvas::surround_color(ui));
+                }
+            });
+
+        for tab in self.workspace.tabs_mut() {
+            shell::update_thumbnail(&ctx, tab, now);
+        }
+
+        // Queued Save As dialogs (Save All with untitled images), one at a time.
+        if self.modal.is_none() && !self.files.dialog_open() && !self.save_as_queue.is_empty() {
+            let key = self.save_as_queue.remove(0);
+            if let Some(tab) = self.workspace.tabs().iter().find(|t| t.key == key) {
+                let (path, title) = (tab.path.clone(), tab.title());
+                self.files.pick_save(key, path.as_deref(), &title);
+            }
+        }
+        if self.exit_after_save
+            && !self.files.busy()
+            && self.save_as_queue.is_empty()
+            && self.workspace.tabs().iter().all(|t| !t.is_dirty())
+        {
+            self.exit_after_save = false;
+            self.allow_close = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+
+        if self.modal.is_none()
+            && let Some((title, message)) = (!self.errors.is_empty()).then(|| self.errors.remove(0))
+        {
+            self.modal = Some(Modal::Error { title, message });
+        }
+        if let Some(result) = self.modal.as_mut().and_then(|m| m.show(&ctx)) {
+            self.handle_modal_result(&ctx, result);
+        }
+
+        self.update_title(&ctx);
         self.diagnostics.show(&ctx);
         self.run_smoke_test(&ctx, now);
     }
-}
-
-/// Ctrl+Alt+Shift+` / ~. Matched on the physical key too, because with Shift held a US
-/// layout reports the logical key as `~`, which egui has no `Key` for.
-fn diagnostics_chord_pressed(events: &[egui::Event]) -> bool {
-    let chord = egui::Modifiers::CTRL | egui::Modifiers::ALT | egui::Modifiers::SHIFT;
-    events.iter().any(|event| {
-        matches!(
-            event,
-            egui::Event::Key { key, physical_key, pressed: true, repeat: false, modifiers, .. }
-                if modifiers.matches_exact(chord)
-                    && (*key == egui::Key::Backtick || *physical_key == Some(egui::Key::Backtick))
-        )
-    })
 }
