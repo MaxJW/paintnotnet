@@ -7,6 +7,7 @@ pub const MAX_DIMENSION: u32 = 65535;
 
 pub enum Modal {
     NewImage(NewImage),
+    About,
     UnsavedChanges {
         key: u64,
         title: String,
@@ -125,6 +126,15 @@ impl Modal {
                         then: then.clone(),
                     };
                     buttons(ui, &[("OK", ok), ("Cancel", ModalResult::Cancelled)])
+                }
+                Modal::About => {
+                    ui.heading("paintnotnet");
+                    ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+                    ui.label("A paint.net 5 remake for Linux, written in Rust.");
+                    ui.add_space(4.0);
+                    ui.label("Includes code ported from Paint.NET 3.36 (MIT) and Paint.NET 3.36's icons (CC BY-NC-ND 2.5). See NOTICE.");
+                    ui.add_space(8.0);
+                    buttons(ui, &[("OK", ModalResult::Closed)])
                 }
                 Modal::Error { title, message } => {
                     ui.heading(title.as_str());

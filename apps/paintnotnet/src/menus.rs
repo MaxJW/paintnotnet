@@ -1,0 +1,678 @@
+//! paint.net's menu bar: the full menu tree (unimplemented items visible but disabled),
+//! icons, shortcut text, `&` mnemonics, Alt+letter to open, arrows to navigate.
+//!
+//! Labels and mnemonics follow paint.net 3.36 `Strings.resx`, extended with the 5.x items
+//! from the 5.x docs.
+
+use eframe::egui::{self, Color32, FontId, Key, Popup, text::LayoutJob};
+use pnn_effects::{Adjustment, Category, effects_in};
+
+use crate::commands::{Command, MenuId, Units};
+use crate::icons::{Icon, Icons};
+
+pub enum Entry {
+    Item {
+        label: &'static str,
+        command: Command,
+        icon: Option<Icon>,
+    },
+    /// A toggle item shown with a check mark.
+    Check {
+        label: &'static str,
+        command: Command,
+    },
+    Separator,
+    Sub {
+        label: String,
+        entries: Vec<Entry>,
+    },
+}
+
+fn item(label: &'static str, command: Command, icon: Icon) -> Entry {
+    Entry::Item {
+        label,
+        command,
+        icon: Some(icon),
+    }
+}
+
+fn plain(label: &'static str, command: Command) -> Entry {
+    Entry::Item {
+        label,
+        command,
+        icon: None,
+    }
+}
+
+const SEP: Entry = Entry::Separator;
+
+pub struct Menu {
+    pub id: MenuId,
+    pub title: &'static str,
+    pub entries: Vec<Entry>,
+}
+
+/// The menus in menu-bar order. Help lives behind the "?" icon (Alt+H), as in paint.net 5.
+pub fn menus() -> Vec<Menu> {
+    use Command as C;
+    vec![
+        Menu {
+            id: MenuId::File,
+            title: "&File",
+            entries: vec![
+                item("&New...", C::NewImage, Icon::New),
+                item("&Open...", C::Open, Icon::Open),
+                Entry::Sub {
+                    label: "Ac&quire".into(),
+                    entries: vec![item(
+                        "From &Scanner or Camera...",
+                        C::Acquire,
+                        Icon::Acquire,
+                    )],
+                },
+                SEP,
+                item("&Close", C::Close, Icon::Close),
+                SEP,
+                item("&Save", C::Save, Icon::Save),
+                item("Save &As...", C::SaveAs, Icon::SaveAs),
+                plain("Save A&ll", C::SaveAll),
+                SEP,
+                item("&Print...", C::Print, Icon::Print),
+                SEP,
+                plain("E&xit", C::Exit),
+            ],
+        },
+        Menu {
+            id: MenuId::Edit,
+            title: "&Edit",
+            entries: vec![
+                item("&Undo", C::Undo, Icon::Undo),
+                item("&Redo", C::Redo, Icon::Redo),
+                SEP,
+                item("Cu&t", C::Cut, Icon::Cut),
+                item("&Copy", C::Copy, Icon::Copy),
+                plain("Copy Mer&ged", C::CopyMerged),
+                item("&Paste", C::Paste, Icon::Paste),
+                item(
+                    "Paste into New &Layer",
+                    C::PasteIntoNewLayer,
+                    Icon::PasteNewLayer,
+                ),
+                item(
+                    "Paste into New I&mage",
+                    C::PasteIntoNewImage,
+                    Icon::PasteNewImage,
+                ),
+                SEP,
+                plain("Copy Selectio&n", C::CopySelection),
+                plain("Paste Selection (Replace)", C::PasteSelection),
+                SEP,
+                item("&Erase Selection", C::EraseSelection, Icon::EraseSelection),
+                item("&Fill Selection", C::FillSelection, Icon::FillSelection),
+                item(
+                    "&Invert Selection",
+                    C::InvertSelection,
+                    Icon::InvertSelection,
+                ),
+                item("Select &All", C::SelectAll, Icon::SelectAll),
+                item("&Deselect", C::Deselect, Icon::Deselect),
+                SEP,
+                plain("Feat&her Selection...", C::FeatherSelection),
+            ],
+        },
+        Menu {
+            id: MenuId::View,
+            title: "&View",
+            entries: vec![
+                item("Zoom &In", C::ZoomIn, Icon::ZoomIn),
+                item("Zoom &Out", C::ZoomOut, Icon::ZoomOut),
+                item("Zoom to &Window", C::ZoomToWindow, Icon::ZoomToWindow),
+                item(
+                    "Zoom to &Selection",
+                    C::ZoomToSelection,
+                    Icon::ZoomToSelection,
+                ),
+                item("&Actual Size", C::ActualSize, Icon::ActualSize),
+                SEP,
+                Entry::Check {
+                    label: "Pixel &Grid",
+                    command: C::TogglePixelGrid,
+                },
+                Entry::Check {
+                    label: "&Rulers",
+                    command: C::ToggleRulers,
+                },
+                SEP,
+                Entry::Sub {
+                    label: "&Units".into(),
+                    entries: vec![
+                        Entry::Check {
+                            label: "&Pixels",
+                            command: C::SetUnits(Units::Pixels),
+                        },
+                        Entry::Check {
+                            label: "&Inches",
+                            command: C::SetUnits(Units::Inches),
+                        },
+                        Entry::Check {
+                            label: "&Centimeters",
+                            command: C::SetUnits(Units::Centimeters),
+                        },
+                    ],
+                },
+            ],
+        },
+        Menu {
+            id: MenuId::Image,
+            title: "&Image",
+            entries: vec![
+                item("Cro&p to Selection", C::CropToSelection, Icon::Crop),
+                item("&Resize...", C::Resize, Icon::Resize),
+                item("Canvas &Size...", C::CanvasSize, Icon::CanvasSize),
+                SEP,
+                item(
+                    "Flip &Horizontal",
+                    C::FlipImageHorizontal,
+                    Icon::FlipImageHorizontal,
+                ),
+                item(
+                    "Flip &Vertical",
+                    C::FlipImageVertical,
+                    Icon::FlipImageVertical,
+                ),
+                SEP,
+                item(
+                    "Rotate &90° Clockwise",
+                    C::RotateImage90Clockwise,
+                    Icon::Rotate90Cw,
+                ),
+                item(
+                    "Rotate 90° &Counter-Clockwise",
+                    C::RotateImage90CounterClockwise,
+                    Icon::Rotate90Ccw,
+                ),
+                item("Rotate &180°", C::RotateImage180, Icon::Rotate180),
+                SEP,
+                plain("C&olor Profile...", C::ColorProfile),
+                SEP,
+                item("&Flatten", C::Flatten, Icon::Flatten),
+            ],
+        },
+        Menu {
+            id: MenuId::Layers,
+            title: "&Layers",
+            entries: vec![
+                item("&Add New Layer", C::AddNewLayer, Icon::AddLayer),
+                item("De&lete Layer", C::DeleteLayer, Icon::DeleteLayer),
+                item("&Duplicate Layer", C::DuplicateLayer, Icon::DuplicateLayer),
+                item("&Merge Layer Down", C::MergeLayerDown, Icon::MergeLayerDown),
+                plain("&Toggle Layer Visibility", C::ToggleLayerVisibility),
+                SEP,
+                item(
+                    "&Import From File...",
+                    C::ImportFromFile,
+                    Icon::ImportFromFile,
+                ),
+                SEP,
+                item(
+                    "Flip &Horizontal",
+                    C::FlipLayerHorizontal,
+                    Icon::FlipLayerHorizontal,
+                ),
+                item(
+                    "Flip &Vertical",
+                    C::FlipLayerVertical,
+                    Icon::FlipLayerVertical,
+                ),
+                plain("Rotate 1&80°", C::RotateLayer180),
+                item("&Rotate / Zoom...", C::RotateZoom, Icon::RotateZoom),
+                SEP,
+                plain("Go to Top Layer", C::GoToTopLayer),
+                plain("Go to Layer Above", C::GoToLayerAbove),
+                plain("Go to Layer Below", C::GoToLayerBelow),
+                plain("Go to Bottom Layer", C::GoToBottomLayer),
+                SEP,
+                plain("Move Layer to Top", C::MoveLayerToTop),
+                item("Move Layer &Up", C::MoveLayerUp, Icon::MoveLayerUp),
+                item("Move Layer Dow&n", C::MoveLayerDown, Icon::MoveLayerDown),
+                plain("Move Layer to Bottom", C::MoveLayerToBottom),
+                SEP,
+                item(
+                    "Layer &Properties...",
+                    C::LayerProperties,
+                    Icon::LayerProperties,
+                ),
+            ],
+        },
+        Menu {
+            id: MenuId::Adjustments,
+            title: "&Adjustments",
+            entries: adjustment_entries(),
+        },
+        Menu {
+            id: MenuId::Effects,
+            title: "Effe&cts",
+            entries: effect_entries(),
+        },
+        Menu {
+            id: MenuId::Help,
+            title: "&Help",
+            entries: vec![
+                item("&Help Topics", C::HelpTopics, Icon::Help),
+                SEP,
+                item("&About paintnotnet", C::About, Icon::About),
+            ],
+        },
+    ]
+}
+
+fn adjustment_entries() -> Vec<Entry> {
+    let mnemonics = [
+        'A', 'B', 'r', 'C', 'x', 'g', 'H', 'v', 'I', 'L', 'P', 'S', 'T',
+    ];
+    Adjustment::ALL
+        .iter()
+        .zip(mnemonics)
+        .map(|(&a, m)| {
+            let mut label = a.name().to_owned();
+            if let Some(i) = label.find(m) {
+                label.insert(i, '&');
+            }
+            if a.has_dialog() {
+                label.push_str("...");
+            }
+            let icon = match a {
+                Adjustment::AutoLevel => Some(Icon::AutoLevel),
+                Adjustment::BlackAndWhite => Some(Icon::BlackAndWhite),
+                Adjustment::BrightnessContrast => Some(Icon::BrightnessContrast),
+                Adjustment::Curves => Some(Icon::Curves),
+                Adjustment::HueSaturation => Some(Icon::HueSaturation),
+                Adjustment::InvertColors => Some(Icon::InvertColors),
+                Adjustment::Levels => Some(Icon::Levels),
+                Adjustment::Posterize => Some(Icon::Posterize),
+                Adjustment::Sepia => Some(Icon::Sepia),
+                _ => None,
+            };
+            Entry::Item {
+                label: Box::leak(label.into_boxed_str()),
+                command: Command::Adjustment(a),
+                icon,
+            }
+        })
+        .collect()
+}
+
+fn effect_entries() -> Vec<Entry> {
+    let mut entries = vec![plain("Repeat", Command::RepeatEffect), SEP];
+    for category in Category::ALL {
+        let items = effects_in(category)
+            .map(|(id, e)| Entry::Item {
+                label: Box::leak(format!("{}...", e.name).into_boxed_str()),
+                command: Command::Effect(id),
+                icon: None,
+            })
+            .collect();
+        entries.push(Entry::Sub {
+            label: category.name().to_owned(),
+            entries: items,
+        });
+    }
+    entries
+}
+
+/// Split "&File" into ("File", Some(index of 'F')).
+pub fn parse_mnemonic(label: &str) -> (String, Option<usize>) {
+    match label.find('&') {
+        Some(i) => {
+            let mut s = label.to_owned();
+            s.remove(i);
+            (s, Some(i))
+        }
+        None => (label.to_owned(), None),
+    }
+}
+
+pub fn mnemonic_char(label: &str) -> Option<char> {
+    let (text, i) = parse_mnemonic(label);
+    i.and_then(|i| text[i..].chars().next())
+        .map(|c| c.to_ascii_lowercase())
+}
+
+fn label_job(label: &str, underline: bool, color: Color32) -> LayoutJob {
+    let (text, i) = parse_mnemonic(label);
+    let font = FontId::proportional(12.0);
+    let mut job = LayoutJob::default();
+    let normal = egui::TextFormat {
+        font_id: font.clone(),
+        color,
+        ..Default::default()
+    };
+    match (i, underline) {
+        (Some(i), true) => {
+            let end = i + text[i..].chars().next().map_or(0, char::len_utf8);
+            job.append(&text[..i], 0.0, normal.clone());
+            job.append(
+                &text[i..end],
+                0.0,
+                egui::TextFormat {
+                    underline: egui::Stroke::new(1.0, color),
+                    ..normal.clone()
+                },
+            );
+            job.append(&text[end..], 0.0, normal);
+        }
+        _ => job.append(&text, 0.0, normal),
+    }
+    job
+}
+
+/// What the menus need to know about app state.
+pub struct MenuContext<'a> {
+    pub enabled: &'a dyn Fn(Command) -> bool,
+    pub checked: &'a dyn Fn(Command) -> bool,
+    /// Shown as "Repeat <name>" in the Effects menu.
+    pub last_effect: Option<&'a str>,
+}
+
+#[derive(Default)]
+pub struct MenuBarState {
+    /// Open this menu on the next frame (Alt+letter, arrow keys).
+    pub open_request: Option<MenuId>,
+    /// Opened from the keyboard: show mnemonics and focus the first item.
+    keyboard: bool,
+    focus_first: bool,
+    /// A menu popup was open during the last frame (global shortcuts pause meanwhile).
+    pub open: bool,
+    /// Frames to keep keyboard mode while a requested menu is still opening.
+    grace: u8,
+}
+
+pub fn request_open(state: &mut MenuBarState, id: MenuId) {
+    state.open_request = Some(id);
+    state.keyboard = true;
+    state.focus_first = true;
+    // The popup appears a frame after it is requested.
+    state.grace = 2;
+}
+
+/// Draw one top-level menu button (used for the menu bar and the Help "?" icon).
+/// Returns the chosen command.
+pub fn menu_button(
+    ui: &mut egui::Ui,
+    menu: &Menu,
+    button: egui::Button<'_>,
+    state: &mut MenuBarState,
+    cx: &MenuContext,
+    icons: &Icons,
+    all: &[MenuId],
+) -> Option<Command> {
+    let mut picked = None;
+    let (response, inner) = egui::containers::menu::MenuButton::from_button(button).ui(ui, |ui| {
+        ui.set_min_width(220.0);
+        state.open = true;
+        let underline = state.keyboard || ui.input(|i| i.modifiers.alt);
+        picked = entries_ui(
+            ui,
+            &menu.entries,
+            cx,
+            icons,
+            underline,
+            &mut state.focus_first,
+        );
+        // Keyboard: mnemonic letters, Left/Right to neighbouring menus.
+        let (left, right) = ui.input(|i| {
+            (
+                i.key_pressed(Key::ArrowLeft),
+                i.key_pressed(Key::ArrowRight),
+            )
+        });
+        let pos = all.iter().position(|&m| m == menu.id).unwrap_or(0);
+        if left || right {
+            let next = if right {
+                (pos + 1) % all.len()
+            } else {
+                (pos + all.len() - 1) % all.len()
+            };
+            ui.close();
+            request_open(state, all[next]);
+        }
+        if picked.is_some() {
+            ui.close();
+        }
+    });
+    if state.open_request == Some(menu.id) {
+        Popup::open_id(ui.ctx(), Popup::default_response_id(&response));
+        state.open_request = None;
+    }
+    if inner.is_none() && response.clicked() {
+        state.keyboard = false;
+    }
+    picked
+}
+
+fn entries_ui(
+    ui: &mut egui::Ui,
+    entries: &[Entry],
+    cx: &MenuContext,
+    icons: &Icons,
+    underline: bool,
+    focus_first: &mut bool,
+) -> Option<Command> {
+    let mut picked = None;
+    let text_color = ui.visuals().text_color();
+    let typed: Vec<char> = ui.input(|i| {
+        i.events
+            .iter()
+            .filter_map(|e| match e {
+                egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } if modifiers.is_none() || *modifiers == egui::Modifiers::ALT => key
+                    .name()
+                    .chars()
+                    .next()
+                    .filter(|_| key.name().len() == 1)
+                    .map(|c| c.to_ascii_lowercase()),
+                _ => None,
+            })
+            .collect()
+    });
+    if ui.input(|i| i.key_pressed(Key::ArrowDown)) {
+        ui.memory_mut(|m| m.move_focus(egui::FocusDirection::Down));
+    }
+    if ui.input(|i| i.key_pressed(Key::ArrowUp)) {
+        ui.memory_mut(|m| m.move_focus(egui::FocusDirection::Up));
+    }
+    for entry in entries {
+        match entry {
+            Entry::Separator => {
+                ui.separator();
+            }
+            Entry::Item {
+                label,
+                command,
+                icon,
+            } => {
+                let enabled = (cx.enabled)(*command);
+                let shown = if *command == Command::RepeatEffect {
+                    match cx.last_effect {
+                        Some(name) => format!("&Repeat {name}"),
+                        None => "&Repeat".to_owned(),
+                    }
+                } else {
+                    (*label).to_owned()
+                };
+                let job = label_job(&shown, underline, text_color);
+                let mut button = match icon {
+                    Some(icon) => egui::Button::image_and_text(icons.image(*icon), job),
+                    // Keep labels aligned with items that have icons.
+                    None => egui::Button::image_and_text(icons.blank(), job),
+                };
+                if let Some(text) = command.shortcut_text() {
+                    button = button.shortcut_text(text);
+                }
+                let response = ui.add_enabled(enabled, button);
+                if *focus_first && enabled {
+                    response.request_focus();
+                    *focus_first = false;
+                }
+                let mnemonic = mnemonic_char(&shown);
+                if response.clicked() || (enabled && mnemonic.is_some_and(|m| typed.contains(&m))) {
+                    picked = Some(*command);
+                }
+            }
+            Entry::Check { label, command } => {
+                let enabled = (cx.enabled)(*command);
+                let mut on = (cx.checked)(*command);
+                let job = label_job(label, underline, text_color);
+                let response = ui.add_enabled(enabled, egui::Checkbox::new(&mut on, job));
+                let mnemonic = mnemonic_char(label);
+                if response.clicked() || (enabled && mnemonic.is_some_and(|m| typed.contains(&m))) {
+                    picked = Some(*command);
+                }
+            }
+            Entry::Sub { label, entries } => {
+                let job = label_job(label, underline, text_color);
+                let (_, inner) = egui::containers::menu::SubMenuButton::new(job).ui(ui, |ui| {
+                    ui.set_min_width(200.0);
+                    let mut no_focus = false;
+                    entries_ui(ui, entries, cx, icons, underline, &mut no_focus)
+                });
+                if let Some(Some(c)) = inner.map(|r| r.inner) {
+                    picked = Some(c);
+                }
+            }
+        }
+    }
+    picked
+}
+
+/// The Help menu, behind paint.net 5's "?" icon.
+pub fn help_button(
+    ui: &mut egui::Ui,
+    state: &mut MenuBarState,
+    cx: &MenuContext,
+    icons: &Icons,
+) -> Option<Command> {
+    let all_menus = menus();
+    let order: Vec<MenuId> = all_menus.iter().map(|m| m.id).collect();
+    let help = all_menus
+        .iter()
+        .find(|m| m.id == MenuId::Help)
+        .expect("help menu");
+    let button = egui::Button::image(icons.image(Icon::Help)).frame_when_inactive(false);
+    menu_button(ui, help, button, state, cx, icons, &order)
+}
+
+/// Draw the menu bar (File … Effects). Returns the chosen command.
+pub fn menu_bar(
+    ui: &mut egui::Ui,
+    state: &mut MenuBarState,
+    cx: &MenuContext,
+    icons: &Icons,
+) -> Option<Command> {
+    state.open = false;
+    let all_menus = menus();
+    let order: Vec<MenuId> = all_menus.iter().map(|m| m.id).collect();
+    let alt = ui.input(|i| i.modifiers.alt);
+    let mut picked = None;
+    egui::MenuBar::new().ui(ui, |ui| {
+        for menu in all_menus.iter().filter(|m| m.id != MenuId::Help) {
+            let title = label_job(menu.title, alt || state.keyboard, ui.visuals().text_color());
+            let button = egui::Button::new(title).frame_when_inactive(false);
+            if let Some(c) = menu_button(ui, menu, button, state, cx, icons, &order) {
+                picked = Some(c);
+            }
+        }
+    });
+    if state.open {
+        state.grace = 0;
+    } else if state.open_request.is_none() {
+        if state.grace > 0 {
+            state.grace -= 1;
+        } else {
+            state.keyboard = false;
+        }
+    }
+    picked
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mnemonics_parse() {
+        assert_eq!(
+            parse_mnemonic("Save &As..."),
+            ("Save As...".to_owned(), Some(5))
+        );
+        assert_eq!(mnemonic_char("Effe&cts"), Some('c'));
+        assert_eq!(mnemonic_char("Exit"), None);
+    }
+
+    #[test]
+    fn mnemonics_unique_within_each_menu() {
+        fn check(title: &str, entries: &[Entry]) {
+            let mut seen = std::collections::HashMap::new();
+            for e in entries {
+                let label = match e {
+                    Entry::Item { label, .. } | Entry::Check { label, .. } => label.to_string(),
+                    Entry::Sub { label, entries } => {
+                        check(label, entries);
+                        label.clone()
+                    }
+                    Entry::Separator => continue,
+                };
+                if let Some(m) = mnemonic_char(&label)
+                    && let Some(prev) = seen.insert(m, label.clone())
+                {
+                    panic!("menu {title}: '{m}' used by both {prev:?} and {label:?}");
+                }
+            }
+        }
+        for m in menus() {
+            check(m.title, &m.entries);
+        }
+    }
+
+    #[test]
+    fn top_level_mnemonics_match_documented_alt_keys() {
+        let expected = [
+            (MenuId::File, 'f'),
+            (MenuId::Edit, 'e'),
+            (MenuId::View, 'v'),
+            (MenuId::Image, 'i'),
+            (MenuId::Layers, 'l'),
+            (MenuId::Adjustments, 'a'),
+            (MenuId::Effects, 'c'),
+            (MenuId::Help, 'h'),
+        ];
+        for m in menus() {
+            let want = expected.iter().find(|(id, _)| *id == m.id).unwrap().1;
+            assert_eq!(mnemonic_char(m.title), Some(want), "{}", m.title);
+        }
+    }
+
+    #[test]
+    fn file_menu_documented_sequences() {
+        // "Alt+F, R" Open Recent and "Alt+F, Q" Acquire (KeyboardMouseCommands.html).
+        let file = menus().into_iter().find(|m| m.id == MenuId::File).unwrap();
+        let labels: Vec<String> = file
+            .entries
+            .iter()
+            .filter_map(|e| match e {
+                Entry::Item { label, .. } => Some(label.to_string()),
+                Entry::Sub { label, .. } => Some(label.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            labels
+                .iter()
+                .any(|l| mnemonic_char(l) == Some('q') && parse_mnemonic(l).0.contains("Acquire"))
+        );
+    }
+}

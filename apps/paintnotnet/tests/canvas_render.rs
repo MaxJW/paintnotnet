@@ -7,7 +7,7 @@
 use eframe::egui::vec2;
 use egui_kittest::Harness;
 use paintnotnet::app::PaintNotNetApp;
-use paintnotnet::commands::{Command, Triggered};
+use paintnotnet::commands::{Command, Panel, Triggered};
 use pnn_core::{ColorBgra, Document, Layer, Surface};
 use pnn_render::View;
 
@@ -62,20 +62,17 @@ fn render(zoom: f64, grid: bool) -> Option<Rendered> {
     let ctx = h.ctx.clone();
     if h.state().diagnostics().visible() {
         // The debug overlay would cover canvas pixels.
-        h.state_mut().execute(
-            &ctx,
-            Triggered {
-                command: Command::ToggleDiagnostics,
-                taps: 1,
-            },
-        );
+        h.state_mut()
+            .execute(&ctx, Triggered::once(Command::ToggleDiagnostics));
+    }
+    // Floating windows would cover canvas pixels too.
+    for panel in Panel::ALL {
+        h.state_mut()
+            .execute(&ctx, Triggered::once(Command::ToggleWindow(panel)));
     }
     if grid {
-        let toggle = Triggered {
-            command: Command::TogglePixelGrid,
-            taps: 1,
-        };
-        h.state_mut().execute(&ctx, toggle);
+        h.state_mut()
+            .execute(&ctx, Triggered::once(Command::TogglePixelGrid));
     }
     h.step();
     h.step();

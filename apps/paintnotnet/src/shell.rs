@@ -1,88 +1,15 @@
-//! Menu bar, image list (thumbnail tabs) and status bar.
-//!
-//! Phase 1 versions; Phase 2 completes the menus and matches paint.net's look.
+//! The image list: one live thumbnail per open image, like paint.net's tabs.
 
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, ColorImage, Sense, TextureOptions, vec2};
 use pnn_core::{ColorBgra, TILE_SIZE, TileCoord};
 
-use crate::commands::Command;
 use crate::workspace::{DocumentTab, Workspace};
 
 /// Longest side of an image-list thumbnail, in points.
 const THUMB: f32 = 48.0;
 const THUMB_THROTTLE: Duration = Duration::from_millis(250);
-
-pub fn menu_bar(ui: &mut egui::Ui, ws: &Workspace, pixel_grid: bool) -> Option<Command> {
-    let has_doc = ws.active().is_some();
-    let mut picked = None;
-    egui::MenuBar::new().ui(ui, |ui| {
-        ui.menu_button("File", |ui| {
-            item(ui, "New...", Command::NewImage, true, &mut picked);
-            item(ui, "Open...", Command::Open, true, &mut picked);
-            ui.separator();
-            item(ui, "Close", Command::Close, has_doc, &mut picked);
-            ui.separator();
-            item(ui, "Save", Command::Save, has_doc, &mut picked);
-            item(ui, "Save As...", Command::SaveAs, has_doc, &mut picked);
-            item(ui, "Save All", Command::SaveAll, has_doc, &mut picked);
-            ui.separator();
-            if ui
-                .add(egui::Button::new("Exit").shortcut_text("Alt+F4"))
-                .clicked()
-            {
-                picked = Some(Command::Exit);
-            }
-        });
-        ui.menu_button("View", |ui| {
-            item(ui, "Zoom In", Command::ZoomIn, has_doc, &mut picked);
-            item(ui, "Zoom Out", Command::ZoomOut, has_doc, &mut picked);
-            item(
-                ui,
-                "Zoom to Window",
-                Command::ZoomToWindow,
-                has_doc,
-                &mut picked,
-            );
-            item(
-                ui,
-                "Zoom to Selection",
-                Command::ZoomToSelection,
-                false,
-                &mut picked,
-            );
-            item(ui, "Actual Size", Command::ActualSize, has_doc, &mut picked);
-            ui.separator();
-            let mut grid = pixel_grid;
-            if ui
-                .add_enabled(has_doc, egui::Checkbox::new(&mut grid, "Pixel Grid"))
-                .clicked()
-            {
-                picked = Some(Command::TogglePixelGrid);
-                ui.close();
-            }
-        });
-    });
-    picked
-}
-
-fn item(
-    ui: &mut egui::Ui,
-    label: &str,
-    command: Command,
-    enabled: bool,
-    picked: &mut Option<Command>,
-) {
-    let mut button = egui::Button::new(label);
-    if let Some(text) = command.shortcut_text() {
-        button = button.shortcut_text(text);
-    }
-    if ui.add_enabled(enabled, button).clicked() {
-        *picked = Some(command);
-        ui.close();
-    }
-}
 
 pub enum ImageListAction {
     Activate(usize),
@@ -221,59 +148,4 @@ pub fn update_thumbnail(ctx: &egui::Context, tab: &mut DocumentTab, now: Instant
     }
     tab.thumbnail_revision = tab.doc.revision();
     tab.thumbnail_updated = Some(now);
-}
-
-pub struct StatusInfo<'a> {
-    pub hint: &'a str,
-    pub busy: bool,
-    pub image_size: Option<(u32, u32)>,
-    pub cursor: Option<[f64; 2]>,
-    pub zoom: Option<f64>,
-}
-
-pub fn status_bar(ui: &mut egui::Ui, info: StatusInfo) {
-    ui.horizontal(|ui| {
-        if info.busy {
-            ui.spinner();
-            ui.label("Working…");
-        } else {
-            ui.label(info.hint);
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if let Some(zoom) = info.zoom {
-                ui.monospace(format!("{:>5}%", format_zoom(zoom)));
-                ui.separator();
-            }
-            if let Some([x, y]) = info.cursor {
-                ui.monospace(format!("{}, {}", x.floor() as i64, y.floor() as i64));
-                ui.separator();
-            }
-            if let Some((w, h)) = info.image_size {
-                ui.monospace(format!("{w} × {h}"));
-            }
-        });
-    });
-}
-
-/// Zoom as paint.net shows it: whole percent, or one decimal below 10%.
-pub fn format_zoom(zoom: f64) -> String {
-    let pct = zoom * 100.0;
-    if pct < 10.0 && (pct - pct.round()).abs() > 0.05 {
-        format!("{pct:.1}")
-    } else {
-        format!("{}", pct.round() as i64)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn zoom_text() {
-        assert_eq!(format_zoom(1.0), "100");
-        assert_eq!(format_zoom(0.66), "66");
-        assert_eq!(format_zoom(0.164), "16");
-        assert_eq!(format_zoom(0.083), "8.3");
-    }
 }

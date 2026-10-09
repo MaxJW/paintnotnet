@@ -4,8 +4,8 @@ Design and rationale: [PLAN.md](PLAN.md). Each phase ends with a usable app and 
 where you try it. A phase is only ticked off once its acceptance checks have been run and
 shown passing.
 
-**Current state (2026-10-09):** Phases 0 and 1 are complete, verified and committed.
-**Next: Phase 2.**
+**Current state (2026-10-09):** Phases 0–2 are complete, verified and committed.
+**Next: Phase 3.**
 
 Reference source: paint.net 3.36.7 (OpenPDN, MIT code) is cloned at `reference/OpenPDN`
 (git-ignored; re-clone with `git clone --depth 1 https://github.com/rivy/OpenPDN reference/OpenPDN`).
@@ -56,17 +56,24 @@ Guessed, to tune by feel (paint.net doesn't document them):
 - JPEG dialog has no live preview or file-size estimate yet
 - Image list and status bar layout are functional, not yet paint.net-styled (Phase 2)
 
-## Phase 2: The paint.net shell
-- [ ] Compare against the official MainWindow and Toolbar screenshots and settle default positions
-- [ ] Menu bar with every paint.net menu item; unimplemented items disabled but visible, with their shortcuts shown
-- [ ] Alt mnemonics (Alt+F, E, V, I, L, A, C, H, X; Alt+T tool dropdown)
-- [ ] Toolbar row 1 (common commands, grid/rulers) and row 2 (tool dropdown + per-tool options host)
-- [ ] Floating Tools/History/Layers/Colors windows: drag, snap, F5–F8 toggle, Ctrl+Shift+F5–F8 reset
-- [ ] Status bar: hint, progress, size, cursor position, units, zoom slider and box
-- [ ] Keymap engine: command registry, multi-tap cycling, held keys, mouse chords, context routing
-- [ ] Keymap conformance test against `docs/reference/keybindings.md`
-- [ ] Dark theme tuned to paint.net 5; check Plasma's Alt/Meta window-drag modifier
-- **Accept:** side-by-side screenshot compare looks right to you; conformance test lists exactly which commands are still unimplemented.
+## Phase 2: The paint.net shell ✅
+- [x] Compared against paint.net 5's official screenshots (fetched to `reference/pdn5-docs/`); layout, default window positions and sizes measured from them
+- [x] Top band as in paint.net 5: menus + toolbar row 1, image thumbnails beside them, Tools/History/Layers/Colors toggles + Settings + Help (?) at the right
+- [x] Full menu tree (File, Edit, View, Image, Layers, Adjustments, Effects, Help) with paint.net 3.36 icons, shortcut text, `&` mnemonics; unimplemented items visible but disabled
+- [x] Alt+F/E/V/I/L/A/C/H open menus; mnemonic letters pick items (Alt+F, N → New); arrows move between items and menus; underlines in keyboard mode
+- [x] Toolbar row 1 (common commands, Pixel Grid / Rulers toggles) and row 2: tool dropdown (Alt+T) and every tool's options (brush size with presets and wheel, hardness/spacing/tolerance % bars, selection modes, draw modes, flood mode, sampling, gradient types/modes/repeat, text, shapes, AA, blend modes incl. Overwrite, Finish)
+- [x] Floating windows ported from paint.net's `SnapManager`: 15 px snap (30 to unsnap), 3 px gap, edge anchoring through resizes, snap to each other; F5–F8 toggle, Ctrl+Shift+F5–F8 reset; red ✕ close
+- [x] Tools window (2-column grid, tooltips with letters), Layers window (thumbnails, visibility, selection, bottom bar), History window (stub until Phase 3)
+- [x] Colors window: swatches, swap/reset, HSV wheel with paint.net's Ctrl/Alt/Shift behaviours, More >> RGB/HSV/hex/alpha, paint.net's 96-colour default palette (moved here from Phase 6)
+- [x] Status bar: tool icon + "Name: help", selection size, cursor position, units (px/in/cm), editable zoom %, zoom to window, zoom out/in, log zoom slider
+- [x] Rulers (View > Rulers) with 1/2/5 tick steps in the current units and a cursor marker
+- [x] Keymap engine: command registry, multi-tap tool cycling (S/M/O with Shift backwards), repeatable keys, held Space
+- [x] Keymap conformance test: parses `docs/reference/keybindings.md`; every keyboard chord accounted for and resolving to the documented command; prints the unimplemented list
+- [x] paint.net Light/Dark palettes (follows system theme), system UI font (Noto Sans), compact 12 px UI
+- [x] Plasma check: KWin's window-drag modifier defaults to **Meta** (`/usr/share/config.kcfg/kwin.kcfg`) and isn't overridden here, so paint.net's Alt+drag reaches the app
+- **Verified 2026-10-09:** `cargo xtask ci` passes (95 tests). New UI tests: shell layout at 1202×867 (windows parked in paint.net's corners, inside the workspace, no overlaps), Alt+F→N opens New Image, S/S/Shift+S/O/O/B tool cycling, `]`/Ctrl+`]` widths, X swaps colours, dragging a window snaps it 3 px from the edge, F7/Ctrl+Shift+F7. Rendered frames compared by eye with paint.net's screenshot. Release build: 164.7 fps on DP-1 with the full shell over an 8K image.
+
+Deferred to the phases that need them: mouse chords (Ctrl/Alt + left/right drag) and routing keys to an active tool session (Phases 3–4); paint.net's "translucent windows" option and Open Recent (Phase 11).
 
 ## Phase 3: Layers and history
 - [ ] Layers menu: add, delete, duplicate, merge down, toggle visibility, import from file, flip H/V, rotate 180, Rotate/Zoom dialog, go to top/above/below/bottom, move to top/up/down/bottom
@@ -100,7 +107,6 @@ Guessed, to tune by feel (paint.net doesn't document them):
 - [ ] Paintbrush: size (fractional), hardness, spacing, smoothing, antialiasing, blend mode, fill style, [ ] and Ctrl+[ ]
 - [ ] Eraser, Paint Bucket (tolerance, flood mode, sampling, Shift toggle), Gradient (7 types, colour/transparency, 3 repeat modes, editable nubs, Shift 15°)
 - [ ] Color Picker (layer/image, sample size, after-click behaviour, Ctrl samples image), Recolor, Clone Stamp (Ctrl+click source)
-- [ ] Colors window: wheel with Ctrl/Alt/Shift behaviours, primary/secondary, X swap, C switch, palette, hex/RGB/HSV, alpha
 - [ ] Tool blend modes and the Overwrite mode
 
 ## Phase 7: Text, Line/Curve, Shapes

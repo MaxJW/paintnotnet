@@ -7,7 +7,11 @@ use pnn_core::TileCoord;
 use pnn_render::{CanvasCallback, CanvasRenderer, View, ViewUniforms, display_tile, view};
 use rayon::prelude::*;
 
+use crate::commands::Units;
 use crate::workspace::DocumentTab;
+
+/// Ruler thickness in points.
+const RULER: f32 = 18.0;
 
 /// Scrollbar thickness in points.
 const SCROLLBAR: f32 = 14.0;
@@ -17,6 +21,8 @@ pub const ARROW_PAN_STEP: f64 = 16.0;
 #[derive(Default)]
 pub struct CanvasState {
     pub pixel_grid: bool,
+    /// View > Rulers, drawn in these units.
+    pub rulers: Option<(Units, f64)>,
     /// Image coordinate under the pointer, for the status bar.
     pub cursor: Option<[f64; 2]>,
     /// Last laid-out viewport size in physical px (keyboard scroll/zoom commands use it).
@@ -47,8 +53,13 @@ pub fn show(
     gpu: Option<&egui_wgpu::RenderState>,
 ) {
     let ppp = ui.ctx().pixels_per_point() as f64;
-    let full = snap_to_pixels(ui.available_rect_before_wrap(), ppp as f32);
-    ui.allocate_rect(full, Sense::hover());
+    let outer = snap_to_pixels(ui.available_rect_before_wrap(), ppp as f32);
+    ui.allocate_rect(outer, Sense::hover());
+    let full = if state.rulers.is_some() {
+        Rect::from_min_max(outer.min + vec2(RULER, RULER), outer.max)
+    } else {
+        outer
+    };
     let img = tab.image_size();
     let px = |r: Rect| [r.width() as f64 * ppp, r.height() as f64 * ppp];
 
@@ -160,6 +171,19 @@ pub fn show(
 
     let view = *view;
     scrollbars(ui, full, canvas_rect, tab, ppp);
+    if let Some((units, dpi)) = state.rulers {
+        rulers(
+            ui,
+            outer,
+            canvas_rect,
+            &view,
+            vp,
+            ppp,
+            units,
+            dpi,
+            state.cursor,
+        );
+    }
 
     ui.painter()
         .rect_filled(canvas_rect, 0.0, surround_color(ui));
@@ -316,4 +340,135 @@ fn scrollbars(ui: &mut egui::Ui, full: Rect, canvas: Rect, tab: &mut DocumentTab
 fn snap_to_pixels(r: Rect, ppp: f32) -> Rect {
     let s = |v: f32| (v * ppp).round() / ppp;
     Rect::from_min_max(pos2(s(r.min.x), s(r.min.y)), pos2(s(r.max.x), s(r.max.y)))
+}
+
+/// Ruler tick step in image pixels: the smallest 1/2/5×10^k unit step at least
+/// `min_screen_px` apart on screen.
+fn ruler_step(zoom: f64, units_per_px: f64, min_screen_px: f64) -> f64 {
+    let min_units = min_screen_px / zoom * units_per_px;
+    let mut step = 10f64.powf(min_units.log10().floor());
+    for m in [1.0, 2.0, 5.0, 10.0] {
+        if step * m >= min_units {
+            step *= m;
+            break;
+        }
+    }
+    step / units_per_px
+}
+
+#[allow(clippy::too_many_arguments)]
+fn rulers(
+    ui: &mut egui::Ui,
+    outer: Rect,
+    canvas: Rect,
+    view: &View,
+    vp: [f64; 2],
+    ppp: f64,
+    units: Units,
+    dpi: f64,
+    cursor: Option<[f64; 2]>,
+) {
+    let visuals = ui.visuals().clone();
+    let painter = ui.painter();
+    let bg = visuals.extreme_bg_color;
+    let ink = visuals.text_color();
+    let top = Rect::from_min_max(
+        pos2(canvas.min.x, outer.min.y),
+        pos2(canvas.max.x, outer.min.y + RULER),
+    );
+    let left = Rect::from_min_max(
+        pos2(outer.min.x, canvas.min.y),
+        pos2(outer.min.x + RULER, canvas.max.y),
+    );
+    painter.rect_filled(
+        Rect::from_min_max(outer.min, pos2(outer.max.x, outer.min.y + RULER)),
+        0.0,
+        bg,
+    );
+    painter.rect_filled(
+        Rect::from_min_max(outer.min, pos2(outer.min.x + RULER, outer.max.y)),
+        0.0,
+        bg,
+    );
+    let units_per_px = match units {
+        Units::Pixels => 1.0,
+        Units::Inches => 1.0 / dpi,
+        Units::Centimeters => 2.54 / dpi,
+    };
+    let major = ruler_step(view.zoom, units_per_px, 60.0 * ppp);
+    let minor = major / 10.0;
+    let font = egui::FontId::proportional(9.0);
+    for axis in 0..2 {
+        let rect = if axis == 0 { top } else { left };
+        let painter = ui.painter_at(rect);
+        let start = view.screen_to_image([0.0, 0.0], vp)[axis];
+        let end = view.screen_to_image(vp, vp)[axis];
+        let first = (start / minor).floor() as i64;
+        let last = (end / minor).ceil() as i64;
+        if last - first > 4000 {
+            continue;
+        }
+        for i in first..=last {
+            let img = i as f64 * minor;
+            let s = view.image_to_screen([img, img], vp)[axis] / ppp;
+            let is_major = i.rem_euclid(10) == 0;
+            let len = if is_major {
+                RULER
+            } else if i.rem_euclid(5) == 0 {
+                RULER * 0.5
+            } else {
+                RULER * 0.25
+            };
+            let (a, b) = if axis == 0 {
+                let x = canvas.min.x + s as f32;
+                (pos2(x, rect.max.y - len), pos2(x, rect.max.y))
+            } else {
+                let y = canvas.min.y + s as f32;
+                (pos2(rect.max.x - len, y), pos2(rect.max.x, y))
+            };
+            painter.line_segment([a, b], egui::Stroke::new(1.0, ink.gamma_multiply(0.7)));
+            if is_major {
+                let value = img * units_per_px;
+                let text = if units == Units::Pixels {
+                    format!("{}", value.round() as i64)
+                } else {
+                    format!("{value:.2}")
+                };
+                let at = if axis == 0 {
+                    pos2(a.x + 2.0, rect.min.y + 1.0)
+                } else {
+                    pos2(rect.min.x + 1.0, a.y + 2.0)
+                };
+                painter.text(at, egui::Align2::LEFT_TOP, text, font.clone(), ink);
+            }
+        }
+        if let Some(c) = cursor {
+            let s = view.image_to_screen(c, vp)[axis] / ppp;
+            let (a, b) = if axis == 0 {
+                let x = canvas.min.x + s as f32;
+                (pos2(x, rect.min.y), pos2(x, rect.max.y))
+            } else {
+                let y = canvas.min.y + s as f32;
+                (pos2(rect.min.x, y), pos2(rect.max.x, y))
+            };
+            painter.line_segment(
+                [a, b],
+                egui::Stroke::new(1.0, visuals.selection.stroke.color),
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ruler_steps_are_1_2_5() {
+        assert_eq!(ruler_step(1.0, 1.0, 60.0), 100.0);
+        assert_eq!(ruler_step(2.0, 1.0, 60.0), 50.0);
+        assert_eq!(ruler_step(8.0, 1.0, 60.0), 10.0);
+        // inches at 96 dpi, 100% zoom: 60 px ≈ 0.625 in → 1 in = 96 px
+        assert_eq!(ruler_step(1.0, 1.0 / 96.0, 60.0), 96.0);
+    }
 }

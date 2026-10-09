@@ -9,6 +9,7 @@ use pnn_io::{FileFormat, SaveOptions};
 use pnn_render::View;
 
 use crate::canvas::GpuSync;
+use crate::windows::LayerThumbs;
 
 pub struct DocumentTab {
     /// Unique for the session; keys GPU resources.
@@ -26,6 +27,7 @@ pub struct DocumentTab {
     pub view_before_fit: Option<View>,
     pub compositor: Compositor,
     pub gpu: GpuSync,
+    pub layer_thumbs: LayerThumbs,
     pub thumbnail: Option<egui::TextureHandle>,
     pub thumbnail_revision: u64,
     pub thumbnail_updated: Option<Instant>,
@@ -104,6 +106,7 @@ impl Workspace {
             view_before_fit: None,
             compositor: Compositor::new(),
             gpu: GpuSync::default(),
+            layer_thumbs: LayerThumbs::default(),
             thumbnail: None,
             thumbnail_revision: 0,
             thumbnail_updated: None,
