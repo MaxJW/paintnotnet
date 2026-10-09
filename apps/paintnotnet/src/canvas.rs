@@ -48,6 +48,8 @@ pub struct CanvasState {
     tool_button: Option<ToolButton>,
     /// Cursor for the active tool over the canvas (set by the app).
     pub tool_cursor: Option<egui::CursorIcon>,
+    /// Move tool nubs to draw (image coordinates).
+    pub handles: Option<[[f64; 2]; 8]>,
     pub pixel_grid: bool,
     /// View > Rulers, drawn in these units.
     pub rulers: Option<(Units, f64)>,
@@ -293,6 +295,25 @@ pub fn show(
     }
     if !tab.doc.selection().is_empty() {
         marching_ants(ui, tab.doc.selection(), &view, canvas_rect, vp, ppp);
+    }
+    if let Some(handles) = state.handles {
+        let painter = ui.painter().with_clip_rect(canvas_rect);
+        for h in handles {
+            let sp = view.image_to_screen(h, vp);
+            let c = egui::pos2(
+                canvas_rect.min.x + (sp[0] / ppp) as f32,
+                canvas_rect.min.y + (sp[1] / ppp) as f32,
+            );
+            let r = Rect::from_center_size(c, vec2(7.0, 7.0));
+            let stroke = egui::Stroke::new(1.0, egui::Color32::BLACK);
+            painter.rect(
+                r,
+                0.0,
+                egui::Color32::WHITE,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+        }
     }
 }
 

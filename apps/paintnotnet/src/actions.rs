@@ -327,6 +327,9 @@ impl PaintNotNetApp {
                 | ToolKind::EllipseSelect
                 | ToolKind::LassoSelect
                 | ToolKind::MagicWand => self.selection_tool_event(event),
+                ToolKind::MoveSelectedPixels | ToolKind::MoveSelection => {
+                    self.move_tool_event(event)
+                }
                 _ => {}
             }
         }

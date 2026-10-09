@@ -10,6 +10,7 @@ pub mod doc_dialogs;
 pub mod file_ops;
 pub mod icons;
 pub mod menus;
+pub mod move_tools;
 pub mod palette;
 pub mod panels;
 pub mod selection_tools;

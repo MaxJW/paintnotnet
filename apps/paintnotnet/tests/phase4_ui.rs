@@ -229,3 +229,152 @@ fn pencil_is_clipped_to_the_selection() {
     assert_eq!(s.get(15, 40), ColorBgra::BLACK, "inside");
     assert_eq!(s.get(25, 40), ColorBgra::WHITE);
 }
+
+/// 100×80 white image with a 10×10 red block at (10,10).
+fn red_block() -> Document {
+    let mut s = Surface::new_transparent(100, 80);
+    s.fill(ColorBgra::WHITE);
+    for y in 10..20 {
+        for x in 10..20 {
+            s.set(x, y, ColorBgra::from_rgba(255, 0, 0, 255));
+        }
+    }
+    Document::from_layers(100, 80, vec![Layer::new("Background", s)])
+}
+
+const RED: ColorBgra = ColorBgra::from_rgba(255, 0, 0, 255);
+
+#[test]
+fn move_selected_pixels_drag_and_finish() {
+    let mut h = harness_with(red_block());
+    press(&mut h, Modifiers::NONE, Key::S);
+    drag(
+        &mut h,
+        PointerButton::Primary,
+        Modifiers::NONE,
+        &[(10.0, 10.0), (20.0, 20.0)],
+    );
+    press(&mut h, Modifiers::NONE, Key::M);
+    assert_eq!(h.state().tool(), ToolKind::MoveSelectedPixels);
+    drag(
+        &mut h,
+        PointerButton::Primary,
+        Modifiers::NONE,
+        &[(15.0, 15.0), (25.0, 15.0), (45.0, 15.0)],
+    );
+    let s = &doc(&h).layer(0).surface;
+    assert_eq!(s.get(45, 15), RED, "moved 30 px right");
+    assert_eq!(s.get(15, 15), ColorBgra::TRANSPARENT, "hole left behind");
+    let b = doc(&h).selection().pixel_bounds(100, 80).unwrap();
+    assert_eq!((b.x, b.y), (40, 10), "selection moved with the pixels");
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    let names = history_names(&h);
+    assert_eq!(&names[names.len() - 2..], ["Move Pixels", "Finish Pixels"]);
+}
+
+#[test]
+fn ctrl_drag_moves_a_copy_and_arrows_nudge() {
+    let mut h = harness_with(red_block());
+    press(&mut h, Modifiers::NONE, Key::S);
+    drag(
+        &mut h,
+        PointerButton::Primary,
+        Modifiers::NONE,
+        &[(10.0, 10.0), (20.0, 20.0)],
+    );
+    press(&mut h, Modifiers::NONE, Key::M);
+    drag(
+        &mut h,
+        PointerButton::Primary,
+        ctrl(),
+        &[(15.0, 15.0), (35.0, 15.0)],
+    );
+    let s = &doc(&h).layer(0).surface;
+    assert_eq!(s.get(15, 15), RED, "original stays");
+    assert_eq!(s.get(35, 15), RED, "copy moved");
+    press(&mut h, Modifiers::NONE, Key::ArrowDown);
+    press(&mut h, ctrl(), Key::ArrowRight);
+    let b = doc(&h).selection().pixel_bounds(100, 80).unwrap();
+    assert_eq!((b.x, b.y), (40, 11), "1 px down, 10 px right");
+    assert_eq!(doc(&h).layer(0).surface.get(49, 20), RED);
+}
+
+#[test]
+fn move_selection_moves_only_the_outline() {
+    let mut h = harness_with(red_block());
+    press(&mut h, Modifiers::NONE, Key::S);
+    drag(
+        &mut h,
+        PointerButton::Primary,
+        Modifiers::NONE,
+        &[(10.0, 10.0), (20.0, 20.0)],
+    );
+    press(&mut h, Modifiers::SHIFT, Key::M);
+    assert_eq!(h.state().tool(), ToolKind::MoveSelection);
+    drag(
+        &mut h,
+        PointerButton::Primary,
+        Modifiers::NONE,
+        &[(15.0, 15.0), (35.0, 35.0)],
+    );
+    assert_eq!(
+        doc(&h).layer(0).surface.get(15, 15),
+        RED,
+        "pixels untouched"
+    );
+    let b = doc(&h).selection().pixel_bounds(100, 80).unwrap();
+    assert_eq!((b.x, b.y), (30, 30));
+    assert_eq!(history_names(&h).last().unwrap(), "Move Selection");
+}
+
+#[test]
+fn nub_scales_and_right_drag_rotates() {
+    let mut h = harness_with(red_block());
+    press(&mut h, Modifiers::NONE, Key::S);
+    drag(
+        &mut h,
+        PointerButton::Primary,
+        Modifiers::NONE,
+        &[(10.0, 10.0), (20.0, 20.0)],
+    );
+    press(&mut h, Modifiers::SHIFT, Key::M);
+    // Bottom-right nub at (20,20) dragged to (30,30): selection doubles.
+    drag(
+        &mut h,
+        PointerButton::Primary,
+        Modifiers::NONE,
+        &[(20.0, 20.0), (25.0, 25.0), (30.0, 30.0)],
+    );
+    let b = doc(&h).selection().pixel_bounds(100, 80).unwrap();
+    assert_eq!((b.x, b.y, b.width, b.height), (10, 10, 20, 20));
+    assert_eq!(history_names(&h).last().unwrap(), "Scale Selection");
+    // Right-drag half a turn about the centre (20,20) with Shift snapping.
+    drag(
+        &mut h,
+        PointerButton::Secondary,
+        Modifiers::SHIFT,
+        &[(40.0, 20.0), (20.0, 41.0), (0.0, 21.0)],
+    );
+    let b = doc(&h).selection().pixel_bounds(100, 80).unwrap();
+    assert_eq!(
+        (b.x, b.y, b.width, b.height),
+        (10, 10, 20, 20),
+        "180° keeps the square in place"
+    );
+    assert_eq!(history_names(&h).last().unwrap(), "Rotate Selection");
+}
+
+#[test]
+fn move_with_nothing_selected_moves_the_layer() {
+    let mut h = harness_with(red_block());
+    press(&mut h, Modifiers::NONE, Key::M);
+    drag(
+        &mut h,
+        PointerButton::Primary,
+        Modifiers::NONE,
+        &[(50.0, 50.0), (55.0, 50.0)],
+    );
+    let s = &doc(&h).layer(0).surface;
+    assert_eq!(s.get(20, 15), RED, "block shifted 5 px");
+    assert_eq!(s.get(2, 2), ColorBgra::TRANSPARENT, "left edge uncovered");
+}

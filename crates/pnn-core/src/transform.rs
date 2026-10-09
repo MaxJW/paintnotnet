@@ -411,6 +411,231 @@ pub fn flatten_layers(doc: &crate::Document) -> Layer {
     Layer::new(doc.layer(0).name.clone(), surface)
 }
 
+/// Sampling for moved/rotated/scaled pixels (Move Selected Pixels' "Sampling" option).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Sampling {
+    #[default]
+    Bicubic,
+    Bilinear,
+    NearestNeighbor,
+}
+
+/// 2D affine map `p' = [m0·x + m1·y + m2, m3·x + m4·y + m5]`.
+pub type Affine = [f64; 6];
+
+pub const IDENTITY: Affine = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+
+pub fn apply(m: &Affine, p: [f64; 2]) -> [f64; 2] {
+    [
+        m[0] * p[0] + m[1] * p[1] + m[2],
+        m[3] * p[0] + m[4] * p[1] + m[5],
+    ]
+}
+
+/// `a ∘ b`: apply `b`, then `a`.
+pub fn compose(a: &Affine, b: &Affine) -> Affine {
+    [
+        a[0] * b[0] + a[1] * b[3],
+        a[0] * b[1] + a[1] * b[4],
+        a[0] * b[2] + a[1] * b[5] + a[2],
+        a[3] * b[0] + a[4] * b[3],
+        a[3] * b[1] + a[4] * b[4],
+        a[3] * b[2] + a[4] * b[5] + a[5],
+    ]
+}
+
+pub fn invert(m: &Affine) -> Option<Affine> {
+    let det = m[0] * m[4] - m[1] * m[3];
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    let (a, b, d, e) = (m[4] / det, -m[1] / det, -m[3] / det, m[0] / det);
+    Some([a, b, -(a * m[2] + b * m[5]), d, e, -(d * m[2] + e * m[5])])
+}
+
+pub fn translation(dx: f64, dy: f64) -> Affine {
+    [1.0, 0.0, dx, 0.0, 1.0, dy]
+}
+
+pub fn rotation_about(theta: f64, c: [f64; 2]) -> Affine {
+    let (s, co) = theta.sin_cos();
+    [
+        co,
+        -s,
+        c[0] - co * c[0] + s * c[1],
+        s,
+        co,
+        c[1] - s * c[0] - co * c[1],
+    ]
+}
+
+pub fn scale_about(sx: f64, sy: f64, c: [f64; 2]) -> Affine {
+    [sx, 0.0, c[0] - sx * c[0], 0.0, sy, c[1] - sy * c[1]]
+}
+
+/// Draw `src` (pixels in image coordinates, i.e. `src.get(x, y)` is image pixel (x, y))
+/// transformed by `m` onto `dst` with Normal blending, only where `src` has pixels inside
+/// `src_rect`. Integer translations copy exactly; anything else resamples.
+pub fn draw_transformed(
+    dst: &mut Surface,
+    src: &Surface,
+    src_rect: crate::Rect,
+    m: &Affine,
+    sampling: Sampling,
+) {
+    let corners = [
+        [src_rect.x as f64, src_rect.y as f64],
+        [(src_rect.x + src_rect.width) as f64, src_rect.y as f64],
+        [src_rect.x as f64, (src_rect.y + src_rect.height) as f64],
+        [
+            (src_rect.x + src_rect.width) as f64,
+            (src_rect.y + src_rect.height) as f64,
+        ],
+    ]
+    .map(|p| apply(m, p));
+    let (dw, dh) = (dst.width() as i64, dst.height() as i64);
+    let x0 = corners
+        .iter()
+        .map(|p| p[0])
+        .fold(f64::INFINITY, f64::min)
+        .floor()
+        .max(0.0) as i64;
+    let y0 = corners
+        .iter()
+        .map(|p| p[1])
+        .fold(f64::INFINITY, f64::min)
+        .floor()
+        .max(0.0) as i64;
+    let x1 = (corners
+        .iter()
+        .map(|p| p[0])
+        .fold(f64::NEG_INFINITY, f64::max)
+        .ceil() as i64)
+        .min(dw);
+    let y1 = (corners
+        .iter()
+        .map(|p| p[1])
+        .fold(f64::NEG_INFINITY, f64::max)
+        .ceil() as i64)
+        .min(dh);
+    if x1 <= x0 || y1 <= y0 {
+        return;
+    }
+    let Some(inv) = invert(m) else { return };
+    let integer = m[0] == 1.0
+        && m[1] == 0.0
+        && m[3] == 0.0
+        && m[4] == 1.0
+        && m[2].fract() == 0.0
+        && m[5].fract() == 0.0;
+    let (sx0, sy0) = (src_rect.x as i64, src_rect.y as i64);
+    let (sx1, sy1) = (sx0 + src_rect.width as i64, sy0 + src_rect.height as i64);
+    let fetch = |x: i64, y: i64| -> [f32; 4] {
+        if x < sx0 || y < sy0 || x >= sx1 || y >= sy1 {
+            return [0.0; 4];
+        }
+        let c = src.get(x as u32, y as u32);
+        let a = c.a as f32;
+        [
+            c.r as f32 * a / 255.0,
+            c.g as f32 * a / 255.0,
+            c.b as f32 * a / 255.0,
+            a,
+        ]
+    };
+    let rows: Vec<(i64, Vec<ColorBgra>)> = (y0..y1)
+        .into_par_iter()
+        .map(|y| {
+            let mut row = Vec::with_capacity((x1 - x0) as usize);
+            for x in x0..x1 {
+                if integer {
+                    let (sx, sy) = (x - m[2] as i64, y - m[5] as i64);
+                    let c = if sx < sx0 || sy < sy0 || sx >= sx1 || sy >= sy1 {
+                        ColorBgra::TRANSPARENT
+                    } else {
+                        src.get(sx as u32, sy as u32)
+                    };
+                    row.push(c);
+                    continue;
+                }
+                let q = apply(&inv, [x as f64 + 0.5, y as f64 + 0.5]);
+                let acc = match sampling {
+                    Sampling::NearestNeighbor => fetch(q[0].floor() as i64, q[1].floor() as i64),
+                    Sampling::Bilinear => {
+                        let (fx, fy) = (q[0] - 0.5, q[1] - 0.5);
+                        let (ix, iy) = (fx.floor() as i64, fy.floor() as i64);
+                        let (tx, ty) = ((fx - ix as f64) as f32, (fy - iy as f64) as f32);
+                        let (a, b, c, d) = (
+                            fetch(ix, iy),
+                            fetch(ix + 1, iy),
+                            fetch(ix, iy + 1),
+                            fetch(ix + 1, iy + 1),
+                        );
+                        std::array::from_fn(|k| {
+                            let top = a[k] + (b[k] - a[k]) * tx;
+                            let bot = c[k] + (d[k] - c[k]) * tx;
+                            top + (bot - top) * ty
+                        })
+                    }
+                    Sampling::Bicubic => {
+                        let (fx, fy) = (q[0] - 0.5, q[1] - 0.5);
+                        let (ix, iy) = (fx.floor() as i64, fy.floor() as i64);
+                        let (tx, ty) = (fx - ix as f64, fy - iy as f64);
+                        let cr = |t: f64| -> [f32; 4] {
+                            // Catmull-Rom weights for offsets -1, 0, 1, 2.
+                            let t2 = t * t;
+                            let t3 = t2 * t;
+                            [
+                                (-0.5 * t3 + t2 - 0.5 * t) as f32,
+                                (1.5 * t3 - 2.5 * t2 + 1.0) as f32,
+                                (-1.5 * t3 + 2.0 * t2 + 0.5 * t) as f32,
+                                (0.5 * t3 - 0.5 * t2) as f32,
+                            ]
+                        };
+                        let (wx, wy) = (cr(tx), cr(ty));
+                        let mut acc = [0f32; 4];
+                        for (j, wyj) in wy.iter().enumerate() {
+                            for (i, wxi) in wx.iter().enumerate() {
+                                let p = fetch(ix + i as i64 - 1, iy + j as i64 - 1);
+                                for k in 0..4 {
+                                    acc[k] += p[k] * wxi * wyj;
+                                }
+                            }
+                        }
+                        acc
+                    }
+                };
+                let a = acc[3].clamp(0.0, 255.0);
+                let un = |v: f32| {
+                    if a > 0.0 {
+                        (v * 255.0 / a).round().clamp(0.0, 255.0) as u8
+                    } else {
+                        0
+                    }
+                };
+                row.push(ColorBgra::from_rgba(
+                    un(acc[0]),
+                    un(acc[1]),
+                    un(acc[2]),
+                    a.round() as u8,
+                ));
+            }
+            (y, row)
+        })
+        .collect();
+    for (y, row) in rows {
+        for (i, c) in row.into_iter().enumerate() {
+            if c.a == 0 {
+                continue;
+            }
+            let x = (x0 + i as i64) as u32;
+            let y = y as u32;
+            let below = dst.get(x, y);
+            dst.set(x, y, crate::BlendMode::Normal.apply(below, c, 255));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -486,6 +711,58 @@ mod tests {
         let r = resample(&s, 2, 1, Resampling::Bilinear, false);
         let edge = r.get(0, 0);
         assert_eq!((edge.r, edge.g, edge.b), (255, 0, 0));
+    }
+
+    #[test]
+    fn affine_helpers() {
+        let r = rotation_about(std::f64::consts::FRAC_PI_2, [10.0, 10.0]);
+        let p = apply(&r, [20.0, 10.0]);
+        assert!(
+            (p[0] - 10.0).abs() < 1e-9 && (p[1] - 20.0).abs() < 1e-9,
+            "{p:?}"
+        );
+        let m = compose(&translation(5.0, 0.0), &scale_about(2.0, 2.0, [0.0, 0.0]));
+        assert_eq!(apply(&m, [1.0, 1.0]), [7.0, 2.0]);
+        let inv = invert(&m).unwrap();
+        let back = apply(&inv, [7.0, 2.0]);
+        assert!((back[0] - 1.0).abs() < 1e-9 && (back[1] - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn draw_transformed_translation_is_exact_and_rotation_samples() {
+        let src = numbered(20, 20);
+        let r = crate::Rect {
+            x: 2,
+            y: 2,
+            width: 4,
+            height: 3,
+        };
+        let mut dst = Surface::new_transparent(20, 20);
+        draw_transformed(
+            &mut dst,
+            &src,
+            r,
+            &translation(10.0, 5.0),
+            Sampling::Bicubic,
+        );
+        assert_eq!(dst.get(12, 7), src.get(2, 2));
+        assert_eq!(dst.get(15, 9), src.get(5, 4));
+        assert_eq!(
+            dst.get(16, 9),
+            ColorBgra::TRANSPARENT,
+            "outside the rect isn't copied"
+        );
+        // 180° about the rect centre maps (2,2) to (5,4).
+        let c = [4.0, 3.5];
+        let mut rot = Surface::new_transparent(20, 20);
+        draw_transformed(
+            &mut rot,
+            &src,
+            r,
+            &rotation_about(std::f64::consts::PI, c),
+            Sampling::NearestNeighbor,
+        );
+        assert_eq!(rot.get(5, 4), src.get(2, 2));
     }
 
     #[test]

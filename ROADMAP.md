@@ -5,7 +5,7 @@ where you try it. A phase is only ticked off once its acceptance checks have bee
 shown passing.
 
 **Current state (2026-10-09):** Phases 0–3 are complete, verified and committed.
-**Next: Phase 4b (clipboard), then 4c (move tools).** Phase 4a is committed. Functionality first: the user wants every feature working
+**Next: Phase 4b (clipboard).** Phases 4a and 4c are committed. Functionality first: the user wants every feature working
 before the visual refresh (Phase 12).
 
 Reference source: paint.net 3.36.7 (OpenPDN, MIT code) is cloned at `reference/OpenPDN`
@@ -105,8 +105,12 @@ Guessed or approximated (paint.net doesn't document them):
 ### 4b Clipboard
 - [ ] Cut / Copy / Copy Merged / Paste / Paste into New Layer / Paste into New Image via the Wayland clipboard; Copy Selection / Paste Selection (JSON text)
 
-### 4c Move tools
-- [ ] Move Selected Pixels / Move Selection: drag, nubs (Shift keep ratio, Alt about centre), right-drag rotate (Shift 15°), Ctrl copy, arrow nudges 1/10 px, resampling; paint.net's Move/Scale/Rotate/Finish history steps
+### 4c ✅ Move tools
+- [x] Move Selected Pixels / Move Selection: lift (coverage-scaled) pixels as a floating session over a pre-lift snapshot; drag inside to move, 8 nubs to scale in the selection's own frame (Shift keeps ratio, Alt about centre), right-drag or left-drag outside to rotate (Shift 15° steps), Ctrl moves a copy (and stamps the current float first), arrows 1 px / Ctrl+arrows 10 px, nothing selected = whole layer
+- [x] Toolbar sampling (Bicubic / Bilinear / Nearest) for transformed pixels; integer moves copy exactly
+- [x] History: Move/Scale/Rotate Pixels (Selection) per drag, Finish Pixels (Selection) on Enter, tool change or other commands; Undo/Redo drop the float and let history restore
+- **Verified 2026-10-09:** 11 Phase 4 UI tests incl. move + hole, Ctrl copy, nudges, Move Selection, nub scale ×2, Shift right-drag 180°, whole-layer move. CI passes.
+- Gap: paint.net draws floating pixels as an overlay; here each change redraws the layer, which is slower for very large selections (optimise if it bites).
 
 ## Phase 5: Feather ★
 - [ ] `pnn-sdf`: exact EDT, signed field, profiles (smooth/linear/gaussian), rayon

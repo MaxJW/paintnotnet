@@ -134,6 +134,24 @@ impl Selection {
         all.combine(self, CombineMode::Exclude)
     }
 
+    /// Whether point `p` is inside (even-odd), for hit-testing drags.
+    pub fn contains(&self, p: [f64; 2]) -> bool {
+        let mut inside = false;
+        for c in &self.contours {
+            let n = c.len();
+            for i in 0..n {
+                let (a, b) = (c[i], c[(i + 1) % n]);
+                if (a[1] > p[1]) != (b[1] > p[1]) {
+                    let x = a[0] + (p[1] - a[1]) / (b[1] - a[1]) * (b[0] - a[0]);
+                    if p[0] < x {
+                        inside = !inside;
+                    }
+                }
+            }
+        }
+        inside
+    }
+
     /// Bounding box (min x, min y, max x, max y).
     pub fn bounds(&self) -> Option<[f64; 4]> {
         let mut it = self.contours.iter().flatten();
@@ -151,10 +169,12 @@ impl Selection {
     /// Bounds rounded out to whole pixels and clipped to the canvas.
     pub fn pixel_bounds(&self, width: u32, height: u32) -> Option<Rect> {
         let [x0, y0, x1, y1] = self.bounds()?;
-        let x0 = x0.floor().max(0.0) as u32;
-        let y0 = y0.floor().max(0.0) as u32;
-        let x1 = (x1.ceil().max(0.0) as u32).min(width);
-        let y1 = (y1.ceil().max(0.0) as u32).min(height);
+        // Tolerate float residue from transforms (9.9999999 is 10, not 9).
+        const EPS: f64 = 1e-6;
+        let x0 = (x0 + EPS).floor().max(0.0) as u32;
+        let y0 = (y0 + EPS).floor().max(0.0) as u32;
+        let x1 = ((x1 - EPS).ceil().max(0.0) as u32).min(width);
+        let y1 = ((y1 - EPS).ceil().max(0.0) as u32).min(height);
         (x1 > x0 && y1 > y0).then_some(Rect {
             x: x0,
             y: y0,
@@ -518,6 +538,15 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    #[test]
+    fn contains_respects_holes() {
+        let ring = Selection::rect(0.0, 0.0, 10.0, 10.0)
+            .combine(&Selection::rect(3.0, 3.0, 7.0, 7.0), CombineMode::Exclude);
+        assert!(ring.contains([1.0, 1.0]));
+        assert!(!ring.contains([5.0, 5.0]));
+        assert!(!ring.contains([11.0, 5.0]));
     }
 
     #[test]

@@ -78,6 +78,8 @@ pub struct PaintNotNetApp {
     pub(crate) select_drag: Option<crate::selection_tools::SelectDrag>,
     /// Keyboard modifiers this frame (tools read Shift etc. mid-drag).
     pub(crate) modifiers: egui::Modifiers,
+    /// Floating pixels / selection being moved.
+    pub(crate) move_session: Option<crate::move_tools::MoveSession>,
 }
 
 impl PaintNotNetApp {
@@ -128,6 +130,7 @@ impl PaintNotNetApp {
             stroke: None,
             select_drag: None,
             modifiers: egui::Modifiers::NONE,
+            move_session: None,
         }
     }
 
@@ -187,6 +190,7 @@ impl PaintNotNetApp {
 
     pub fn set_tool(&mut self, tool: ToolKind) {
         if tool != self.tool {
+            self.finish_move();
             self.previous_tool = self.tool;
             self.tool = tool;
         }
@@ -228,11 +232,18 @@ impl PaintNotNetApp {
             return;
         }
         if t.command == Command::Finish {
-            // Enter / Esc with no pending tool drawing: Deselect (paint.net).
-            if t.command == Command::Finish && self.select_drag.is_none() {
+            // Enter / Esc commits floating pixels; with nothing pending it deselects.
+            if self.move_session.is_some() {
+                self.finish_move();
+            } else if self.select_drag.is_none() {
                 self.selection_command(Command::Deselect);
             }
             return;
+        }
+        if matches!(t.command, Command::Undo | Command::Redo) {
+            self.abandon_move();
+        } else if !keeps_move_session(t.command) {
+            self.finish_move();
         }
         if self.selection_command(t.command) || self.document_command(t.command) {
             return;
@@ -597,6 +608,16 @@ impl PaintNotNetApp {
             (i.key_down(egui::Key::Space), i.modifiers.ctrl, dirs)
         });
         if !space {
+            let step = if ctrl { 10.0 } else { 1.0 };
+            let moving = matches!(
+                self.tool,
+                ToolKind::MoveSelectedPixels | ToolKind::MoveSelection
+            );
+            if moving {
+                for d in dirs {
+                    self.nudge(d[0] * step, d[1] * step);
+                }
+            }
             return;
         }
         let step = if ctrl {
@@ -961,6 +982,42 @@ impl CommandState {
     }
 }
 
+/// Commands that don't drop floating pixels: viewing, scrolling, windows, colours, tool
+/// options.
+fn keeps_move_session(c: Command) -> bool {
+    matches!(
+        c,
+        Command::ZoomIn
+            | Command::ZoomOut
+            | Command::ZoomToWindow
+            | Command::ZoomToSelection
+            | Command::ActualSize
+            | Command::TogglePixelGrid
+            | Command::ToggleRulers
+            | Command::SetUnits(_)
+            | Command::ToggleWindow(_)
+            | Command::ResetWindow(_)
+            | Command::OpenMenu(_)
+            | Command::ScrollPageUp
+            | Command::ScrollPageDown
+            | Command::ScrollPageLeft
+            | Command::ScrollPageRight
+            | Command::HomeKey
+            | Command::EndKey
+            | Command::ScrollToTopLeft
+            | Command::ScrollToBottomRight
+            | Command::CenterTopLeft
+            | Command::CenterBottomRight
+            | Command::BrushWidth(_)
+            | Command::SwapColors
+            | Command::SwitchActiveColor
+            | Command::OpenToolDropdown
+            | Command::ToggleDiagnostics
+            | Command::HelpTopics
+            | Command::About
+    )
+}
+
 /// Open a URL in the desktop's browser.
 fn open_url(url: &str) {
     if let Err(e) = std::process::Command::new("xdg-open").arg(url).spawn() {
@@ -1051,8 +1108,10 @@ impl eframe::App for PaintNotNetApp {
             | ToolKind::EllipseSelect
             | ToolKind::LassoSelect
             | ToolKind::MagicWand => Some(egui::CursorIcon::Crosshair),
+            ToolKind::MoveSelectedPixels | ToolKind::MoveSelection => Some(egui::CursorIcon::Move),
             _ => None,
         };
+        self.canvas.handles = self.move_handles();
         let gpu = frame.wgpu_render_state();
         self.canvas.rulers = self.rulers.then(|| {
             (
