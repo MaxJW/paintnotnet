@@ -1,0 +1,20 @@
+[package]
+name = "paintnotnet"
+description = "A paint.net 5.x remake for Linux"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+eframe.workspace = true
+raw-window-handle.workspace = true
+log.workspace = true
+env_logger.workspace = true
+
+[dev-dependencies]
+egui_kittest = { workspace = true, features = ["eframe"] }
+
+[lints]
+workspace = true

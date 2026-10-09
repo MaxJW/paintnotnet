@@ -1,0 +1,6 @@
+/target/
+# Third-party reference source (OpenPDN etc.): read-only, never committed
+/reference/
+# Local scratch / verification output
+/scratch/
+*.screenshot.png
