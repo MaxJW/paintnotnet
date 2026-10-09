@@ -264,6 +264,15 @@ impl Command {
                 | C::Resize
                 | C::CanvasSize
                 | C::Flatten
+                | C::SelectAll
+                | C::Deselect
+                | C::InvertSelection
+                | C::EraseSelection
+                | C::FillSelection
+                | C::FillSelectionSecondary
+                | C::CropToSelection
+                | C::ZoomToSelection
+                | C::Finish
         )
     }
 

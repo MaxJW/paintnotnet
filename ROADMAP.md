@@ -5,7 +5,7 @@ where you try it. A phase is only ticked off once its acceptance checks have bee
 shown passing.
 
 **Current state (2026-10-09):** Phases 0–3 are complete, verified and committed.
-**Next: Phase 4 (selections).** Functionality first: the user wants every feature working
+**Next: Phase 4b (clipboard), then 4c (move tools).** Phase 4a is committed. Functionality first: the user wants every feature working
 before the visual refresh (Phase 12).
 
 Reference source: paint.net 3.36.7 (OpenPDN, MIT code) is cloned at `reference/OpenPDN`
@@ -93,14 +93,20 @@ Guessed or approximated (paint.net doesn't document them):
 - History disk spill (paint.net keeps history on disk) isn't implemented; the budget drops oldest steps instead.
 
 ## Phase 4: Selections
-- [ ] Rectangle, Ellipse, Lasso, Magic Wand (tolerance, contiguous/global, layer/image sampling, premultiplied/straight alpha mode, draggable click point)
-- [ ] Modes Replace/Add/Subtract/Intersect/Invert plus Ctrl/Alt and left/right mouse chords; left+right to move a selection while drawing it
-- [ ] Rectangle select Normal/Fixed Size/Fixed Ratio; Shift for square/circle
-- [ ] Antialiased vs pixelated selection clipping; marching ants
-- [ ] Edit menu: erase, fill, invert, select all, deselect, cut/copy/paste (+ merged, new layer, new image), copy/paste selection as JSON
-- [ ] Wayland clipboard images
-- [ ] Move Selected Pixels / Move Selection: nubs, Shift/Alt resize, rotate (right-drag, Shift for 15°), Ctrl to copy, arrow nudges, bilinear/nearest
-- **Accept:** UI tests for every selection chord in keybindings.md; Mask pipeline used by fill, erase, copy and move.
+### 4a ✅ Selection core, tools, Edit commands
+- [x] Selection = even-odd polygon set (`pnn-core::selection`), as paint.net; combine modes are polygon booleans (`i_overlay`); coverage mask rasterised antialiased or pixelated (`tiny-skia`), cached per tab; selection stored in the document so it undoes
+- [x] Rectangle / Ellipse / Lasso Select, Magic Wand (paint.net's `CheckColor` tolerance maths, premultiplied/straight alpha, contiguous scanline fill or global, Layer/Image sampling); pixel-exact stencil→polygon tracing (holes, diagonal touches)
+- [x] Chords: Ctrl add, Alt subtract, Ctrl+right xor, Alt+right intersect, Shift square/circle (Shift = global for the wand); Fixed Ratio / Fixed Size; click deselects
+- [x] Select All, Deselect (Ctrl+D, Enter), Invert, Erase (Delete), Fill (Backspace / Shift+Backspace secondary; overwrite like paint.net, coverage-blended at AA edges), Crop to Selection (outside cleared), Zoom to Selection; copy/paste selection JSON format implemented in core (`to_json`/`from_json`, matches the docs' example exactly)
+- [x] Marching ants along the exact polygon edges (animated); status bar shows selection size; Pencil clipped to the selection
+- **Verified 2026-10-09:** CI passes (145 tests). UI tests drive every chord, Magic Wand contiguous vs Shift-global, Delete/Backspace/Ctrl+I/Ctrl+A/Enter, crop + undo, Pencil clipping. Ants checked in a render.
+- Differences to confirm: paint.net 4+ lets you adjust a rectangle/ellipse selection with handles after drawing (not yet); 3.36 deselected after Erase Selection, 5.x appears not to (kept).
+
+### 4b Clipboard
+- [ ] Cut / Copy / Copy Merged / Paste / Paste into New Layer / Paste into New Image via the Wayland clipboard; Copy Selection / Paste Selection (JSON text)
+
+### 4c Move tools
+- [ ] Move Selected Pixels / Move Selection: drag, nubs (Shift keep ratio, Alt about centre), right-drag rotate (Shift 15°), Ctrl copy, arrow nudges 1/10 px, resampling; paint.net's Move/Scale/Rotate/Finish history steps
 
 ## Phase 5: Feather ★
 - [ ] `pnn-sdf`: exact EDT, signed field, profiles (smooth/linear/gaussian), rayon

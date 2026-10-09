@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::tiles::{Surface, TILE_SIZE, TileCoord, tiles_for};
-use crate::{BlendMode, ColorBgra};
+use crate::{BlendMode, ColorBgra, Selection};
 
 /// Process-wide revision counter. Revisions are never reused, so a document restored from
 /// history can't be mistaken for a newer state by caches comparing revisions.
@@ -77,6 +77,8 @@ pub struct Document {
     pub dpi: f64,
     revision: u64,
     tile_revisions: Vec<u64>,
+    selection: Selection,
+    selection_revision: u64,
 }
 
 impl Document {
@@ -107,6 +109,8 @@ impl Document {
             dpi: DEFAULT_DPI,
             revision,
             tile_revisions: vec![revision; tiles],
+            selection: Selection::none(),
+            selection_revision: revision,
         }
     }
 
@@ -141,6 +145,21 @@ impl Document {
     pub fn set_active_index(&mut self, index: usize) {
         assert!(index < self.layers.len());
         self.active = index;
+    }
+
+    /// The current selection (empty = nothing selected: tools act on the whole layer).
+    pub fn selection(&self) -> &Selection {
+        &self.selection
+    }
+
+    pub fn set_selection(&mut self, selection: Selection) {
+        self.selection = selection;
+        self.selection_revision = next_revision();
+    }
+
+    /// Changes whenever the selection changes (pixel revisions don't).
+    pub fn selection_revision(&self) -> u64 {
+        self.selection_revision
     }
 
     /// Increases whenever any pixel of the composite may have changed.

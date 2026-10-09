@@ -29,6 +29,8 @@ pub struct DocumentTab {
     pub compositor: Compositor,
     pub gpu: GpuSync,
     pub layer_thumbs: LayerThumbs,
+    /// Rasterised selection: (selection revision, antialiased, mask).
+    pub mask_cache: Option<(u64, bool, std::sync::Arc<pnn_core::Mask>)>,
     /// Undo history; the History window lists its steps.
     pub history: History<Icon>,
     pub thumbnail: Option<egui::TextureHandle>,
@@ -148,6 +150,7 @@ impl Workspace {
             compositor: Compositor::new(),
             gpu: GpuSync::default(),
             layer_thumbs: LayerThumbs::default(),
+            mask_cache: None,
             thumbnail: None,
             thumbnail_revision: 0,
             thumbnail_updated: None,

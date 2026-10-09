@@ -74,6 +74,10 @@ pub struct PaintNotNetApp {
     pub(crate) doc_dialog: Option<crate::doc_dialogs::DocDialog>,
     /// Pencil stroke in progress.
     pub(crate) stroke: Option<crate::actions::PencilStroke>,
+    /// Selection being drawn.
+    pub(crate) select_drag: Option<crate::selection_tools::SelectDrag>,
+    /// Keyboard modifiers this frame (tools read Shift etc. mid-drag).
+    pub(crate) modifiers: egui::Modifiers,
 }
 
 impl PaintNotNetApp {
@@ -122,6 +126,8 @@ impl PaintNotNetApp {
             units: Units::Pixels,
             doc_dialog: None,
             stroke: None,
+            select_drag: None,
+            modifiers: egui::Modifiers::NONE,
         }
     }
 
@@ -194,6 +200,10 @@ impl PaintNotNetApp {
                 .map(|&c| (c, self.document_command_available(c).unwrap_or(false)))
                 .collect(),
             has_doc: self.workspace.active().is_some(),
+            has_selection: self
+                .workspace
+                .active()
+                .is_some_and(|t| !t.doc.selection().is_empty()),
             any_dirty: self.workspace.tabs().iter().any(|t| t.is_dirty()),
             pixel_grid: self.canvas.pixel_grid,
             rulers: self.rulers,
@@ -217,7 +227,14 @@ impl PaintNotNetApp {
         if self.doc_dialog.is_some() || self.stroke.is_some() {
             return;
         }
-        if self.document_command(t.command) {
+        if t.command == Command::Finish {
+            // Enter / Esc with no pending tool drawing: Deselect (paint.net).
+            if t.command == Command::Finish && self.select_drag.is_none() {
+                self.selection_command(Command::Deselect);
+            }
+            return;
+        }
+        if self.selection_command(t.command) || self.document_command(t.command) {
             return;
         }
         let vp = self.canvas.viewport;
@@ -860,6 +877,7 @@ pub struct CommandState {
     /// Availability of document commands (Undo, layer and image commands).
     pub document: Vec<(Command, bool)>,
     pub has_doc: bool,
+    pub has_selection: bool,
     pub any_dirty: bool,
     pub pixel_grid: bool,
     pub rulers: bool,
@@ -919,6 +937,13 @@ impl CommandState {
             | Command::TogglePixelGrid
             | Command::ToggleRulers => self.has_doc,
             Command::SaveAll => self.any_dirty,
+            Command::SelectAll | Command::InvertSelection => self.has_doc,
+            Command::Deselect
+            | Command::EraseSelection
+            | Command::FillSelection
+            | Command::FillSelectionSecondary
+            | Command::CropToSelection
+            | Command::ZoomToSelection => self.has_selection,
             _ => true,
         }
     }
@@ -947,6 +972,7 @@ impl eframe::App for PaintNotNetApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let now = Instant::now();
         let ctx = ui.ctx().clone();
+        self.modifiers = ctx.input(|i| i.modifiers);
         self.handle_file_events();
 
         let modal_open = self.modal.is_some() || self.files.dialog_open() || self.menu.open;
@@ -989,7 +1015,12 @@ impl eframe::App for PaintNotNetApp {
         let info = StatusInfo {
             tool: self.tool,
             busy: self.files.busy(),
-            selection_size: active.map(|t| (t.doc.width(), t.doc.height())),
+            selection_size: active.map(|t| {
+                t.doc
+                    .selection()
+                    .pixel_bounds(t.doc.width(), t.doc.height())
+                    .map_or((t.doc.width(), t.doc.height()), |r| (r.width, r.height))
+            }),
             cursor: self.canvas.cursor,
             zoom: active.and_then(|t| t.view.map(|v| v.zoom)),
             units: self.units,
@@ -1015,7 +1046,11 @@ impl eframe::App for PaintNotNetApp {
         }
 
         self.canvas.tool_cursor = match self.tool {
-            ToolKind::Pencil => Some(egui::CursorIcon::Crosshair),
+            ToolKind::Pencil
+            | ToolKind::RectangleSelect
+            | ToolKind::EllipseSelect
+            | ToolKind::LassoSelect
+            | ToolKind::MagicWand => Some(egui::CursorIcon::Crosshair),
             _ => None,
         };
         let gpu = frame.wgpu_render_state();

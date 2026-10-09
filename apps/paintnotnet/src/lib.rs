@@ -12,6 +12,7 @@ pub mod icons;
 pub mod menus;
 pub mod palette;
 pub mod panels;
+pub mod selection_tools;
 pub mod shell;
 pub mod status;
 pub mod theme;

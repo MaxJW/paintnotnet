@@ -240,3 +240,24 @@ fn layers_history_and_layer_properties_render() {
         image.save(format!("{dir}/shell-phase3.png")).unwrap();
     }
 }
+
+#[test]
+fn marching_ants_render() {
+    let mut h = harness();
+    {
+        let tab = h.state_mut().workspace_mut().active_mut().unwrap();
+        let sel = pnn_core::Selection::ellipse(100.0, 100.0, 500.0, 400.0).combine(
+            &pnn_core::Selection::rect(400.0, 300.0, 700.0, 550.0),
+            pnn_core::CombineMode::Union,
+        );
+        tab.doc.set_selection(sel);
+    }
+    for _ in 0..3 {
+        h.step();
+    }
+    if let Ok(dir) = std::env::var("PNN_RENDER_DUMP")
+        && let Ok(image) = h.render()
+    {
+        image.save(format!("{dir}/shell-ants.png")).unwrap();
+    }
+}

@@ -319,9 +319,15 @@ impl PaintNotNetApp {
 
     /// Route canvas pointer events to the active tool.
     pub(crate) fn tool_events(&mut self, events: Vec<ToolEvent>) {
+        use pnn_tools::ToolKind;
         for event in events {
-            if self.tool == pnn_tools::ToolKind::Pencil {
-                self.pencil(event);
+            match self.tool {
+                ToolKind::Pencil => self.pencil(event),
+                ToolKind::RectangleSelect
+                | ToolKind::EllipseSelect
+                | ToolKind::LassoSelect
+                | ToolKind::MagicWand => self.selection_tool_event(event),
+                _ => {}
             }
         }
     }
@@ -396,13 +402,32 @@ impl PaintNotNetApp {
             height: (y1 - y0 + 1) as u32,
         };
         let (color, blend) = (stroke.color, stroke.blend);
+        let antialias = self.settings.selection_quality == pnn_tools::SelectionQuality::Antialiased;
+        let Some(tab) = self
+            .workspace
+            .tab_mut(self.stroke.as_ref().map_or(0, |s| s.key))
+        else {
+            return;
+        };
+        // Painting is clipped to the selection; antialiased edges scale the paint's alpha.
+        let mask = tab.selection_mask(antialias);
         let a = tab.doc.active_index();
         tab.doc.modify_layer(a, Some(dirty), |l| {
             for (x, y) in points {
                 let (x, y) = (x as u32, y as u32);
+                let coverage = mask.as_ref().map_or(255, |m| m.get(x, y));
+                if coverage == 0 {
+                    continue;
+                }
+                let old = l.surface.get(x, y);
                 let new = match blend {
                     ToolBlend::Overwrite => color,
-                    ToolBlend::Blend(mode) => mode.apply(l.surface.get(x, y), color, 255),
+                    ToolBlend::Blend(mode) => mode.apply(old, color, 255),
+                };
+                let new = if coverage == 255 {
+                    new
+                } else {
+                    crate::selection_tools::lerp_premultiplied(old, new, coverage)
                 };
                 l.surface.set(x, y, new);
             }

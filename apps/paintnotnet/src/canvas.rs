@@ -291,6 +291,9 @@ pub fn show(
                 },
             ));
     }
+    if !tab.doc.selection().is_empty() {
+        marching_ants(ui, tab.doc.selection(), &view, canvas_rect, vp, ppp);
+    }
 }
 
 /// Upload composite tiles whose revision differs from what the GPU holds.
@@ -539,6 +542,58 @@ fn rulers(
             );
         }
     }
+}
+
+/// paint.net's marching ants: a white line with animated black dashes along the selection's
+/// polygon edges. Only segments near the visible area are drawn.
+fn marching_ants(
+    ui: &mut egui::Ui,
+    selection: &pnn_core::Selection,
+    view: &View,
+    canvas: Rect,
+    vp: [f64; 2],
+    ppp: f64,
+) {
+    let painter = ui.painter().with_clip_rect(canvas);
+    let time = ui.input(|i| i.time);
+    let offset = ((time * 12.0) % 8.0) as f32;
+    let visible = canvas.expand(4.0);
+    let to_screen = |p: [f64; 2]| {
+        let s = view.image_to_screen(p, vp);
+        egui::pos2(
+            canvas.min.x + (s[0] / ppp) as f32,
+            canvas.min.y + (s[1] / ppp) as f32,
+        )
+    };
+    let mut segments = 0usize;
+    for contour in selection.contours() {
+        let mut path: Vec<egui::Pos2> = contour.iter().map(|&p| to_screen(p)).collect();
+        if path.len() < 2 {
+            continue;
+        }
+        path.push(path[0]);
+        // Skip contours entirely off-screen.
+        let bb = Rect::from_points(&path);
+        if !bb.intersects(visible) {
+            continue;
+        }
+        segments += path.len();
+        painter.add(egui::Shape::line(
+            path.clone(),
+            egui::Stroke::new(1.0, egui::Color32::WHITE),
+        ));
+        if segments < 200_000 {
+            painter.extend(egui::Shape::dashed_line_with_offset(
+                &path,
+                egui::Stroke::new(1.0, egui::Color32::BLACK),
+                &[4.0],
+                &[4.0],
+                offset,
+            ));
+        }
+    }
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_millis(80));
 }
 
 #[cfg(test)]
