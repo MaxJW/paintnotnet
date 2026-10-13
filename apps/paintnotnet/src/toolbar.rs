@@ -416,6 +416,32 @@ fn options(
             blend(ui, s, icons);
         }
         LineCurve | Shapes => {
+            if tool == Shapes {
+                ui.label("Shape:");
+                egui::ComboBox::from_id_salt("shape_type")
+                    .width(130.0)
+                    .selected_text(s.shape.name())
+                    .height(600.0)
+                    .show_ui(ui, |ui| {
+                        for shape in ShapeType::ALL {
+                            ui.selectable_value(&mut s.shape, shape, shape.name());
+                        }
+                    })
+                    .response
+                    .on_hover_text("Shape (A / Shift+A)");
+                if matches!(
+                    s.shape,
+                    ShapeType::RoundedRectangle | ShapeType::RoundedRectangleCallout
+                ) {
+                    ui.label("Corner Size:");
+                    ui.add(
+                        egui::DragValue::new(&mut s.corner_radius)
+                            .range(0.0..=1000.0)
+                            .speed(0.5),
+                    );
+                }
+                sep(ui);
+            }
             brush_size(ui, s, icons);
             sep(ui);
             if tool == LineCurve {

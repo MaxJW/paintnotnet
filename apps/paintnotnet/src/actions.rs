@@ -355,7 +355,7 @@ impl PaintNotNetApp {
                 | ToolKind::Recolor
                 | ToolKind::CloneStamp => self.brush_tool_event(event),
                 ToolKind::ColorPicker => self.color_picker_event(event),
-                ToolKind::LineCurve => self.line_event(event),
+                ToolKind::LineCurve | ToolKind::Shapes => self.vector_event(event),
                 ToolKind::PaintBucket => self.paint_bucket_event(event),
                 ToolKind::Gradient => self.gradient_event(event),
                 ToolKind::RectangleSelect

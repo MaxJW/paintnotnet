@@ -476,3 +476,60 @@ fn line_curve_render() {
         image.save(format!("{dir}/shell-line-curve.png")).unwrap();
     }
 }
+
+/// All 29 shapes, filled with outline, in a grid; the last one still live with its handles.
+#[test]
+fn shapes_render() {
+    use eframe::egui::{Event, Modifiers, PointerButton, Pos2};
+    let mut h = harness();
+    let to_screen = |h: &Harness<'_, PaintNotNetApp>, x: f64, y: f64| {
+        let rect = h.state().canvas().rect.unwrap();
+        let view = h.state().workspace().active().unwrap().view.unwrap();
+        let s = view.image_to_screen([x, y], [rect.width() as f64, rect.height() as f64]);
+        Pos2::new(rect.min.x + s[0] as f32, rect.min.y + s[1] as f32)
+    };
+    let drag = |h: &mut Harness<'_, PaintNotNetApp>, pts: &[(f64, f64)]| {
+        let press = |pressed, pos| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        h.event(Event::PointerMoved(to_screen(h, pts[0].0, pts[0].1)));
+        h.step();
+        h.event(press(true, to_screen(h, pts[0].0, pts[0].1)));
+        h.step();
+        for &(x, y) in &pts[1..] {
+            h.event(Event::PointerMoved(to_screen(h, x, y)));
+            h.step();
+        }
+        let last = *pts.last().unwrap();
+        h.event(press(false, to_screen(h, last.0, last.1)));
+        h.step();
+    };
+    h.state_mut().set_tool(pnn_tools::ToolKind::Shapes);
+    {
+        let s = h.state_mut().settings_mut();
+        s.shape_draw = pnn_tools::ShapeDrawType::Both;
+        s.brush_width = 3.0;
+        s.primary = pnn_core::ColorBgra::from_rgba(20, 40, 110, 255);
+        s.secondary = pnn_core::ColorBgra::from_rgba(250, 190, 60, 255);
+    }
+    for (i, shape) in pnn_tools::ShapeType::ALL.iter().enumerate() {
+        h.state_mut().settings_mut().shape = *shape;
+        let (col, row) = ((i % 6) as f64, (i / 6) as f64);
+        let (x, y) = (20.0 + col * 130.0, 15.0 + row * 117.0);
+        drag(
+            &mut h,
+            &[(x, y), (x + 50.0, y + 40.0), (x + 100.0, y + 90.0)],
+        );
+    }
+    for _ in 0..3 {
+        h.step();
+    }
+    if let Ok(dir) = std::env::var("PNN_RENDER_DUMP")
+        && let Ok(image) = h.render()
+    {
+        image.save(format!("{dir}/shell-shapes.png")).unwrap();
+    }
+}

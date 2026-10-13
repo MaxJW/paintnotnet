@@ -5,8 +5,9 @@ where you try it. A phase is only ticked off once its acceptance checks have bee
 shown passing.
 
 **Current state (2026-10-13):** Phases 0–6 are complete, verified and committed (Phase 5
-still awaits your sign-off on the feel). Phase 7a (Line/Curve) is done. **Next: Phase 7b
-(Shapes)**, then 7c (Text).
+still awaits your sign-off on the feel). Phases 7a (Line/Curve) and 7b (Shapes) are done. **Next: Phase 7c
+(Text).** After all phases, compare against the paint.net 5.1.12 release files the user provided
+(`~/Downloads/paint.net.5.1.12.portable.x64`; the user states the owners gave permission).
 Functionality first: the user wants every feature working
 before the visual refresh (Phase 12).
 
@@ -156,8 +157,11 @@ Guessed or approximated (paint.net doesn't document them):
 - [x] Line/Curve tool: drag (left primary, right secondary; Shift 15°, Alt from centre); live afterwards: drag nubs (either button), move icon, right-drag rotate (Shift 15°), arrows 1 px / Ctrl 10 px; `,` `.` `/` cycle start cap / dash / end cap and restyle the live line; toolbar curve type, style and fill; commits on Enter/Esc/Finish/new line/tool change/other commands; Undo takes back a live line
 - **Verified 2026-10-13:** 5 engine tests (curve types through ends, spline through nubs vs Bézier, width/flat ends, round and arrow caps, dashes, Overwrite vs blend) and 5 UI tests (live until Enter, nub bend + move icon + arrow nudges, Shift snap + new line commits, right-drag rotation, `.` restyle + Undo). Render checked. CI passes (222 tests).
 - Guessed: default curve type (Spline), move-icon placement (16 screen px past the end nub), the tangent used for arrow heads. Antialiasing is analytic, not paint.net 5's 2×/4× supersampling.
-### 7b Shapes
-- [ ] Shapes: the 29 presets, A / Shift+A to cycle, draw modes (outline / filled / both), rounded-rect corner size, nubs with Shift/Alt, move, rotate about a movable rotation point
+### 7b ✅ Shapes
+- [x] The 29 presets in the 5.x docs' order (`pnn-tools::shapes`), shape selector, A / Shift+A pick the next/previous shape; draw modes outline / filled / filled with outline (fill in the other colour); Corner Size for the rounded shapes; dash style and fill style; Shift square / Alt from centre while drawing
+- [x] Live editing: corner nubs (opposite corner anchors, Shift keeps aspect, Alt about centre, drag past the opposite corner flips), drag inside or the move icon to move, rotation point (drag it; starts at the centre), right-drag rotates about it, left-drag just outside rotates too, Shift 15°, arrows 1 / 10 px; commits like Line/Curve
+- **Verified 2026-10-13:** 2 geometry tests (every shape builds and fills its box; cycling wraps) and 6 UI tests (draw modes re-render live + Enter; Shift square + corner resize; move inside + Ctrl+arrow; right-drag rotate with 15° snap; A picks the next shape + Undo; pressing away commits). All 29 rendered and checked by eye. CI passes (231 tests).
+- Guessed: every shape's exact outline (5.x geometry unpublished; check against the release files later), the cloud is drawn smaller than its box, four corner nubs (docs say "corners"), the history name "Shapes", default Corner Size 20. Not done: Ctrl+click corner −/+ radius (unclear UI).
 ### 7c Text
 - [ ] Text tool: font, size, style, alignment, antialiasing, blend; editable until Finish/Esc; move nub
 

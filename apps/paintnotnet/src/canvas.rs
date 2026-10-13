@@ -52,8 +52,8 @@ pub struct CanvasState {
     pub overlay: Option<(u64, std::sync::Arc<pnn_core::Mask>)>,
     /// Clone Stamp source marker (image coordinates).
     pub clone_source: Option<[f64; 2]>,
-    /// Line/Curve nubs and move icon (image coordinates).
-    pub vector_handles: Option<([[f64; 2]; 4], [f64; 2])>,
+    /// Line/Curve and Shapes handles (image coordinates).
+    pub vector_handles: Option<crate::vector_tools::VectorHandles>,
     /// Gradient start/end nubs (image coordinates).
     pub gradient_nubs: Option<[[f64; 2]; 2]>,
     /// Brush outline diameter (image px) to draw around the pointer.
@@ -380,7 +380,7 @@ pub fn show(
         );
         ui.ctx().request_repaint();
     }
-    if let Some((nubs, icon)) = state.vector_handles {
+    if let Some(handles) = &state.vector_handles {
         // Pulsing nubs (paint.net 5 pulses them so they stand out) and the move icon.
         let painter = ui.painter().with_clip_rect(canvas_rect);
         let to_screen = |p: [f64; 2]| {
@@ -392,7 +392,22 @@ pub fn show(
         };
         let t = ui.input(|i| i.time);
         let a = (((t * std::f64::consts::TAU / 2.0).sin() + 1.0) / 2.0 * 160.0 + 95.0) as u8;
-        for p in nubs {
+        if let Some(frame) = handles.frame {
+            let pts: Vec<egui::Pos2> = frame.iter().map(|p| to_screen(*p)).collect();
+            painter.add(egui::Shape::closed_line(
+                pts,
+                egui::Stroke::new(1.0, egui::Color32::from_black_alpha(110)),
+            ));
+        }
+        if let Some(p) = handles.pivot {
+            // Rotation point: a circle with a cross.
+            let c = to_screen(p);
+            let s = egui::Stroke::new(1.0, egui::Color32::BLACK);
+            painter.circle(c, 5.5, egui::Color32::from_white_alpha(a), s);
+            painter.line_segment([c - vec2(5.5, 0.0), c + vec2(5.5, 0.0)], s);
+            painter.line_segment([c - vec2(0.0, 5.5), c + vec2(0.0, 5.5)], s);
+        }
+        for &p in &handles.nubs {
             painter.circle(
                 to_screen(p),
                 4.5,
@@ -400,7 +415,7 @@ pub fn show(
                 egui::Stroke::new(1.0, egui::Color32::from_black_alpha(a)),
             );
         }
-        let c = to_screen(icon);
+        let c = to_screen(handles.move_icon);
         let r = Rect::from_center_size(c, vec2(13.0, 13.0));
         painter.rect(
             r,

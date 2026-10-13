@@ -8,6 +8,7 @@
 pub mod brush;
 pub mod gradient;
 pub mod settings;
+pub mod shapes;
 pub mod vector;
 
 pub use settings::*;

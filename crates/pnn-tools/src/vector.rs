@@ -195,7 +195,8 @@ fn part_coverage(part: &Part, r: Rect, antialias: bool) -> Vec<u8> {
     paint.anti_alias = antialias;
     let t = Transform::from_translate(-(r.x as f32), -(r.y as f32));
     match part {
-        Part::Fill(path, _) => pm.fill_path(path, &paint, FillRule::Winding, t, None),
+        // Even-odd, so inner contours (the Gear's hole) are holes.
+        Part::Fill(path, _) => pm.fill_path(path, &paint, FillRule::EvenOdd, t, None),
         Part::Outline {
             path, pen, ends, ..
         } => {
