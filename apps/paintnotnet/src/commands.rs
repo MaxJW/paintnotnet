@@ -200,6 +200,9 @@ impl Command {
         if let C::Effect(id) = self {
             return IMPLEMENTED_EFFECTS.contains(&pnn_effects::effect(id).name);
         }
+        if let C::Adjustment(a) = self {
+            return pnn_effects::adjustments::def(a).is_some();
+        }
         matches!(
             self,
             C::FeatherSelection

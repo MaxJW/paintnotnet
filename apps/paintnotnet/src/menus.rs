@@ -281,18 +281,7 @@ fn adjustment_entries() -> Vec<Entry> {
             if a.has_dialog() {
                 label.push_str("...");
             }
-            let icon = match a {
-                Adjustment::AutoLevel => Some(Icon::AutoLevel),
-                Adjustment::BlackAndWhite => Some(Icon::BlackAndWhite),
-                Adjustment::BrightnessContrast => Some(Icon::BrightnessContrast),
-                Adjustment::Curves => Some(Icon::Curves),
-                Adjustment::HueSaturation => Some(Icon::HueSaturation),
-                Adjustment::InvertColors => Some(Icon::InvertColors),
-                Adjustment::Levels => Some(Icon::Levels),
-                Adjustment::Posterize => Some(Icon::Posterize),
-                Adjustment::Sepia => Some(Icon::Sepia),
-                _ => None,
-            };
+            let icon = adjustment_icon(a);
             Entry::Item {
                 label: Box::leak(label.into_boxed_str()),
                 command: Command::Adjustment(a),
@@ -597,6 +586,22 @@ pub fn menu_bar(
         }
     }
     picked
+}
+
+/// The 3.36 menu icon of an adjustment (5.x-only ones have none).
+pub fn adjustment_icon(a: Adjustment) -> Option<Icon> {
+    match a {
+        Adjustment::AutoLevel => Some(Icon::AutoLevel),
+        Adjustment::BlackAndWhite => Some(Icon::BlackAndWhite),
+        Adjustment::BrightnessContrast => Some(Icon::BrightnessContrast),
+        Adjustment::Curves => Some(Icon::Curves),
+        Adjustment::HueSaturation => Some(Icon::HueSaturation),
+        Adjustment::InvertColors => Some(Icon::InvertColors),
+        Adjustment::Levels => Some(Icon::Levels),
+        Adjustment::Posterize => Some(Icon::Posterize),
+        Adjustment::Sepia => Some(Icon::Sepia),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

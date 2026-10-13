@@ -96,6 +96,13 @@ pub struct PaintNotNetApp {
     pub(crate) pending_paste: Option<crate::clipboard::ClipImage>,
     /// Last effect run (Effects > Repeat, Ctrl+F).
     pub(crate) last_effect: Option<pnn_effects::EffectId>,
+    /// The adjustment/effect dialog in progress.
+    pub(crate) effect: Option<crate::effect_runner::EffectSession>,
+    /// Last applied effect and its settings, for Repeat (Ctrl+F).
+    pub(crate) last_applied: Option<(
+        crate::effect_runner::EffectRef,
+        Vec<pnn_effects::framework::Value>,
+    )>,
     /// Selection revision the toolbar's feather fields were last synced from.
     pub(crate) synced_selection: u64,
 }
@@ -160,6 +167,8 @@ impl PaintNotNetApp {
             clipboard: Box::new(crate::clipboard::SystemClipboard::new()),
             pending_paste: None,
             last_effect: None,
+            effect: None,
+            last_applied: None,
             synced_selection: 0,
         }
     }
@@ -191,6 +200,11 @@ impl PaintNotNetApp {
     /// The open Layer Properties / Resize / Canvas Size / Rotate-Zoom dialog.
     pub fn doc_dialog_mut(&mut self) -> Option<&mut crate::doc_dialogs::DocDialog> {
         self.doc_dialog.as_mut()
+    }
+
+    /// The open adjustment/effect dialog (tests).
+    pub fn effect_mut(&mut self) -> Option<&mut crate::effect_runner::EffectSession> {
+        self.effect.as_mut()
     }
 
     /// The toolbar's feather Preview toggle.
@@ -257,7 +271,8 @@ impl PaintNotNetApp {
                 .workspace
                 .active()
                 .is_some_and(|t| !t.doc.selection().is_empty()),
-            repeat_effect: self.last_effect.is_some() && self.workspace.active().is_some(),
+            repeat_effect: (self.last_effect.is_some() || self.last_applied.is_some())
+                && self.workspace.active().is_some(),
             any_dirty: self.workspace.tabs().iter().any(|t| t.is_dirty()),
             pixel_grid: self.canvas.pixel_grid,
             rulers: self.rulers,
@@ -278,7 +293,11 @@ impl PaintNotNetApp {
 
     /// Run a command as if chosen from a menu or shortcut.
     pub fn execute(&mut self, ctx: &egui::Context, t: Triggered) {
-        if self.doc_dialog.is_some() || self.stroke.is_some() || self.brush.is_some() {
+        if self.doc_dialog.is_some()
+            || self.effect.is_some()
+            || self.stroke.is_some()
+            || self.brush.is_some()
+        {
             return;
         }
         if t.command == Command::Finish {
@@ -319,6 +338,17 @@ impl PaintNotNetApp {
         }
         let vp = self.canvas.viewport;
         match t.command {
+            Command::Adjustment(a) => {
+                self.open_effect(ctx, crate::effect_runner::EffectRef::Adjustment(a))
+            }
+            Command::RepeatEffect => {
+                if !self.repeat_effect()
+                    && let Some(id) = self.last_effect
+                {
+                    // Dialog-based effects reopen their dialog.
+                    self.document_command(Command::Effect(id));
+                }
+            }
             Command::NewImage => {
                 self.modal = Some(Modal::NewImage(NewImage::new(
                     self.new_image_size.0,
@@ -757,6 +787,19 @@ impl PaintNotNetApp {
                 };
                 tab.doc.set_selection(base.with_feather(feather));
             }
+        } else if std::env::var_os("PNN_SMOKE_EFFECT").is_some() {
+            // PNN_SMOKE_EFFECT=1: Posterize open, its levels changing every frame (the live
+            // preview of a whole-image adjustment).
+            if self.effect.is_none() {
+                self.open_effect(
+                    ctx,
+                    crate::effect_runner::EffectRef::Adjustment(pnn_effects::Adjustment::Posterize),
+                );
+            }
+            let levels = 2 + (elapsed.as_secs_f64() * 20.0) as i32 % 30;
+            if let Some(e) = self.effect.as_mut() {
+                e.set_all_ints(ctx, levels);
+            }
         } else if let Ok(kind) = std::env::var("PNN_SMOKE_GRADIENT") {
             // PNN_SMOKE_GRADIENT=<type index>: drag a live gradient's end nub every frame.
             let Some(tab) = self.workspace.active() else {
@@ -864,7 +907,7 @@ impl PaintNotNetApp {
             let cx = MenuContext {
                 enabled: &availability,
                 checked: &checked,
-                last_effect: None,
+                last_effect: self.last_effect_name(),
             };
             // Left: menus + toolbar row 1 (natural width), then the image list.
             // Right: utility window toggles, settings, help — always visible.
@@ -1116,6 +1159,7 @@ impl CommandState {
             Command::SaveAll => self.any_dirty,
             Command::SelectAll | Command::InvertSelection => self.has_doc,
             Command::RepeatEffect => self.repeat_effect,
+            Command::Adjustment(_) => self.has_doc,
             Command::Deselect
             | Command::EraseSelection
             | Command::FillSelection
@@ -1231,7 +1275,10 @@ impl eframe::App for PaintNotNetApp {
         self.modifiers = ctx.input(|i| i.modifiers);
         self.handle_file_events();
 
-        let modal_open = self.modal.is_some() || self.files.dialog_open() || self.menu.open;
+        let modal_open = self.modal.is_some()
+            || self.effect.is_some()
+            || self.files.dialog_open()
+            || self.menu.open;
         if !modal_open && !ctx.egui_wants_keyboard_input() {
             self.text_keyboard(&ctx);
             for t in take_commands(&ctx, &mut self.taps, now) {
@@ -1395,6 +1442,7 @@ impl eframe::App for PaintNotNetApp {
             self.tool_events(tool_events);
         }
         self.run_doc_dialog(&ctx);
+        self.run_effect(&ctx);
 
         for tab in self.workspace.tabs_mut() {
             shell::update_thumbnail(&ctx, tab, now);

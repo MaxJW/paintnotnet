@@ -8,6 +8,7 @@ pub mod commands;
 pub mod diagnostics;
 pub mod dialogs;
 pub mod doc_dialogs;
+pub mod effect_runner;
 pub mod file_ops;
 pub mod fill_tools;
 pub mod icons;
