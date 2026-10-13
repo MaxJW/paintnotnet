@@ -77,6 +77,9 @@ pub struct PaintNotNetApp {
     pub(crate) brush: Option<crate::paint_tools::BrushStroke>,
     pub(crate) gradient: Option<crate::fill_tools::GradientSession>,
     pub(crate) vector: Option<crate::vector_tools::VectorSession>,
+    pub(crate) text: Option<crate::text_tool::TextSession>,
+    /// System fonts, loaded when the Text tool is first used.
+    pub(crate) fonts: Option<crate::text_tool::Fonts>,
     pub(crate) clone_source: Option<crate::paint_tools::CloneSource>,
     /// Recolor Ctrl/Shift picking in progress: (button, adjust).
     pub(crate) recolor_picking: Option<(crate::canvas::ToolButton, bool)>,
@@ -146,6 +149,8 @@ impl PaintNotNetApp {
             brush: None,
             gradient: None,
             vector: None,
+            text: None,
+            fonts: None,
             clone_source: None,
             recolor_picking: None,
             picker: None,
@@ -228,6 +233,7 @@ impl PaintNotNetApp {
             self.finish_brush_stroke();
             self.commit_gradient();
             self.commit_vector();
+            self.commit_text();
             self.previous_tool = self.tool;
             self.tool = tool;
         }
@@ -278,9 +284,10 @@ impl PaintNotNetApp {
         if t.command == Command::Finish {
             // Enter / Esc commits floating pixels or a live gradient (paint.net 5 commits on
             // Esc too; 3.36 cancelled the gradient); with nothing pending it deselects.
-            if self.gradient.is_some() || self.vector.is_some() {
+            if self.gradient.is_some() || self.vector.is_some() || self.text.is_some() {
                 self.commit_gradient();
                 self.commit_vector();
+                self.commit_text();
             } else if self.move_session.is_some() {
                 self.finish_move();
             } else if self.select_drag.is_none() {
@@ -288,7 +295,9 @@ impl PaintNotNetApp {
             }
             return;
         }
-        if t.command == Command::Undo && (self.cancel_gradient() | self.cancel_vector()) {
+        if t.command == Command::Undo
+            && (self.cancel_gradient() | self.cancel_vector() | self.cancel_text())
+        {
             // Undo takes back the live gradient first, as if it had been committed.
             return;
         }
@@ -300,6 +309,7 @@ impl PaintNotNetApp {
         if !keeps_move_session(t.command) {
             self.commit_gradient();
             self.commit_vector();
+            self.commit_text();
         }
         if self.clipboard_command(t.command)
             || self.selection_command(t.command)
@@ -1223,6 +1233,7 @@ impl eframe::App for PaintNotNetApp {
 
         let modal_open = self.modal.is_some() || self.files.dialog_open() || self.menu.open;
         if !modal_open && !ctx.egui_wants_keyboard_input() {
+            self.text_keyboard(&ctx);
             for t in take_commands(&ctx, &mut self.taps, now) {
                 self.execute(&ctx, t);
             }
@@ -1243,8 +1254,10 @@ impl eframe::App for PaintNotNetApp {
         self.top_band(ui, &ctx);
         egui::Panel::top("tool_options").show(ui, |ui| {
             // The toolbar's Finish commits pending tool work, as Enter does.
-            let finish_enabled =
-                self.gradient.is_some() || self.vector.is_some() || self.move_session.is_some();
+            let finish_enabled = self.gradient.is_some()
+                || self.vector.is_some()
+                || self.text.is_some()
+                || self.move_session.is_some();
             let palette = theme::palette(&ctx);
             match toolbar::row2(
                 ui,
@@ -1259,6 +1272,7 @@ impl eframe::App for PaintNotNetApp {
                 Some(Row2Action::Finish) => {
                     self.commit_gradient();
                     self.commit_vector();
+                    self.commit_text();
                     self.finish_move();
                 }
                 None => {}
@@ -1309,6 +1323,7 @@ impl eframe::App for PaintNotNetApp {
             | ToolKind::ColorPicker
             | ToolKind::Recolor
             | ToolKind::CloneStamp => Some(egui::CursorIcon::Crosshair),
+            ToolKind::Text => Some(egui::CursorIcon::Text),
             ToolKind::Pencil
             | ToolKind::RectangleSelect
             | ToolKind::EllipseSelect
@@ -1319,6 +1334,12 @@ impl eframe::App for PaintNotNetApp {
         };
         self.refresh_gradient();
         self.refresh_vector();
+        self.refresh_text();
+        self.canvas.text_handles = self.text_handles();
+        if self.tool == ToolKind::Text && self.row2.font_families.is_empty() {
+            let fonts = self.fonts.get_or_insert_with(crate::text_tool::Fonts::load);
+            self.row2.font_families = fonts.families.clone();
+        }
         self.canvas.vector_handles = self.vector_handles();
         self.canvas.handles = self.move_handles();
         self.canvas.gradient_nubs = self.gradient_nubs();

@@ -380,6 +380,16 @@ impl ShapeType {
     }
 }
 
+/// Text size unit (5.x docs, `TextTool.html`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextMetric {
+    /// Points at the image's DPI (the default since paint.net 4.1).
+    #[default]
+    Points,
+    /// "Fixed (96 DPI)".
+    Fixed96,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TextAlignment {
     #[default]
@@ -462,6 +472,7 @@ pub struct ToolSettings {
     pub underline: bool,
     pub strikeout: bool,
     pub text_align: TextAlignment,
+    pub text_metric: TextMetric,
 }
 
 /// paint.net's brush width limits.
@@ -509,6 +520,7 @@ impl Default for ToolSettings {
             underline: false,
             strikeout: false,
             text_align: TextAlignment::Left,
+            text_metric: TextMetric::Points,
         }
     }
 }

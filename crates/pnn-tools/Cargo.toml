@@ -10,6 +10,7 @@ publish.workspace = true
 pnn-core.workspace = true
 rayon.workspace = true
 tiny-skia.workspace = true
+cosmic-text.workspace = true
 
 [lints]
 workspace = true

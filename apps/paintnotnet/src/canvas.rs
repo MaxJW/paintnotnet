@@ -52,6 +52,8 @@ pub struct CanvasState {
     pub overlay: Option<(u64, std::sync::Arc<pnn_core::Mask>)>,
     /// Clone Stamp source marker (image coordinates).
     pub clone_source: Option<[f64; 2]>,
+    /// Text caret (top, bottom) and move nub (image coordinates).
+    pub text_handles: Option<crate::text_tool::TextHandles>,
     /// Line/Curve and Shapes handles (image coordinates).
     pub vector_handles: Option<crate::vector_tools::VectorHandles>,
     /// Gradient start/end nubs (image coordinates).
@@ -416,6 +418,36 @@ pub fn show(
             );
         }
         let c = to_screen(handles.move_icon);
+        let r = Rect::from_center_size(c, vec2(13.0, 13.0));
+        painter.rect(
+            r,
+            1.0,
+            egui::Color32::from_white_alpha(a),
+            egui::Stroke::new(1.0, egui::Color32::from_black_alpha(a)),
+            egui::StrokeKind::Inside,
+        );
+        let s = egui::Stroke::new(1.0, egui::Color32::BLACK);
+        painter.line_segment([c - vec2(4.0, 0.0), c + vec2(4.0, 0.0)], s);
+        painter.line_segment([c - vec2(0.0, 4.0), c + vec2(0.0, 4.0)], s);
+        ui.ctx().request_repaint();
+    }
+    if let Some((top, bottom, nub)) = state.text_handles {
+        let painter = ui.painter().with_clip_rect(canvas_rect);
+        let to_screen = |p: [f64; 2]| {
+            let sp = view.image_to_screen(p, vp);
+            egui::pos2(
+                canvas_rect.min.x + (sp[0] / ppp) as f32,
+                canvas_rect.min.y + (sp[1] / ppp) as f32,
+            )
+        };
+        let t = ui.input(|i| i.time);
+        // Blinking caret.
+        if (t * 2.0) as i64 % 2 == 0 {
+            let s = egui::Stroke::new(1.0, egui::Color32::BLACK);
+            painter.line_segment([to_screen(top), to_screen(bottom)], s);
+        }
+        let a = (((t * std::f64::consts::TAU / 2.0).sin() + 1.0) / 2.0 * 160.0 + 95.0) as u8;
+        let c = to_screen(nub);
         let r = Rect::from_center_size(c, vec2(13.0, 13.0));
         painter.rect(
             r,

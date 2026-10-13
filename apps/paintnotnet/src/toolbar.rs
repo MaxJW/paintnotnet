@@ -103,6 +103,8 @@ pub struct Row2State {
     pub feather_preview: bool,
     /// Alt+T: open the tool dropdown on the next frame.
     pub open_tool_dropdown: bool,
+    /// Installed font families for the Text tool (filled when fonts load).
+    pub font_families: Vec<String>,
 }
 
 pub enum Row2Action {
@@ -386,12 +388,38 @@ fn options(
         }
         Text => {
             ui.label("Font:");
-            ui.add(egui::TextEdit::singleline(&mut s.font_family).desired_width(110.0));
+            if state.font_families.is_empty() {
+                ui.add(egui::TextEdit::singleline(&mut s.font_family).desired_width(110.0));
+            } else {
+                egui::ComboBox::from_id_salt("font_family")
+                    .width(140.0)
+                    .height(500.0)
+                    .selected_text(s.font_family.clone())
+                    .show_ui(ui, |ui| {
+                        for f in &state.font_families {
+                            ui.selectable_value(&mut s.font_family, f.clone(), f);
+                        }
+                    });
+            }
             ui.add(
                 egui::DragValue::new(&mut s.font_size)
                     .range(1.0..=2000.0)
                     .speed(0.5),
             );
+            egui::ComboBox::from_id_salt("text_metric")
+                .width(60.0)
+                .selected_text(match s.text_metric {
+                    TextMetric::Points => "pt",
+                    TextMetric::Fixed96 => "96 DPI",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut s.text_metric,
+                        TextMetric::Points,
+                        "Points (image DPI)",
+                    );
+                    ui.selectable_value(&mut s.text_metric, TextMetric::Fixed96, "Fixed (96 DPI)");
+                });
             for (flag, icon, name) in [
                 (&mut s.bold, Icon::Bold, "Bold"),
                 (&mut s.italic, Icon::Italic, "Italic"),

@@ -533,3 +533,59 @@ fn shapes_render() {
         image.save(format!("{dir}/shell-shapes.png")).unwrap();
     }
 }
+
+/// Live text: two lines, bold italic underlined, centred, with the caret and move nub.
+#[test]
+fn text_render() {
+    use eframe::egui::{Event, Modifiers, PointerButton, Pos2};
+    let mut h = harness();
+    let to_screen = |h: &Harness<'_, PaintNotNetApp>, x: f64, y: f64| {
+        let rect = h.state().canvas().rect.unwrap();
+        let view = h.state().workspace().active().unwrap().view.unwrap();
+        let s = view.image_to_screen([x, y], [rect.width() as f64, rect.height() as f64]);
+        Pos2::new(rect.min.x + s[0] as f32, rect.min.y + s[1] as f32)
+    };
+    h.state_mut().set_tool(pnn_tools::ToolKind::Text);
+    {
+        let s = h.state_mut().settings_mut();
+        s.font_family = "DejaVu Serif".into();
+        s.font_size = 36.0;
+        s.bold = true;
+        s.italic = true;
+        s.underline = true;
+        s.text_align = pnn_tools::TextAlignment::Center;
+        s.primary = pnn_core::ColorBgra::from_rgba(150, 30, 60, 255);
+    }
+    h.step();
+    let p = to_screen(&h, 400.0, 200.0);
+    h.event(Event::PointerMoved(p));
+    h.step();
+    for pressed in [true, false] {
+        h.event(Event::PointerButton {
+            pos: p,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        });
+        h.step();
+    }
+    h.event(Event::Text("paint.net on Linux".into()));
+    h.step();
+    h.event(Event::Key {
+        key: eframe::egui::Key::Enter,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    });
+    h.step();
+    h.event(Event::Text("Grüße, ünïcode ✓".into()));
+    for _ in 0..4 {
+        h.step();
+    }
+    if let Ok(dir) = std::env::var("PNN_RENDER_DUMP")
+        && let Ok(image) = h.render()
+    {
+        image.save(format!("{dir}/shell-text.png")).unwrap();
+    }
+}

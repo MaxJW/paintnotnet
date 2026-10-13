@@ -4,9 +4,9 @@ Design and rationale: [PLAN.md](PLAN.md). Each phase ends with a usable app and 
 where you try it. A phase is only ticked off once its acceptance checks have been run and
 shown passing.
 
-**Current state (2026-10-13):** Phases 0–6 are complete, verified and committed (Phase 5
-still awaits your sign-off on the feel). Phases 7a (Line/Curve) and 7b (Shapes) are done. **Next: Phase 7c
-(Text).** After all phases, compare against the paint.net 5.1.12 release files the user provided
+**Current state (2026-10-13):** Phases 0–7 are complete, verified and committed (Phase 5
+still awaits your sign-off on the feel). Phase 7 (Line/Curve, Shapes, Text) is done. **Next: Phase 8
+(adjustments and the effect framework).** After all phases, compare against the paint.net 5.1.12 release files the user provided
 (`~/Downloads/paint.net.5.1.12.portable.x64`; the user states the owners gave permission).
 Functionality first: the user wants every feature working
 before the visual refresh (Phase 12).
@@ -151,7 +151,7 @@ Guessed or approximated (paint.net doesn't document them):
 - **Verified 2026-10-13:** 5 UI tests (picker primary/secondary, 3×3 average, layer vs Ctrl image sampling + switch to previous tool, Recolor stroke + tolerance + Ctrl pick, Clone Stamp no-source/clone/aligned second stroke) and a Recolor engine test. CI passes (211 tests). The clone-source marker drawing was not checked in a render.
 - Differences: 3.36's Clone Stamp scaled opacity by the primary colour's alpha⁴ (not done; 5.x unknown); Recolor and Clone Stamp use the brush engine (soft dabs, no build-up) instead of 3.36's per-dab blending.
 
-## Phase 7: Text, Line/Curve, Shapes
+## Phase 7: Text, Line/Curve, Shapes ✅
 ### 7a ✅ Line/Curve and the editable-drawing engine
 - [x] `pnn-tools::vector`: Straight / Cubic Spline (GDI+ `DrawCurve` cardinal spline, tension 0.5) / Bézier through four nubs; caps Flat, Arrow, Arrow (Filled), Rounded (3.36 `LineCap2`; arrows are GDI+ `AdjustableArrowCap(5, 5)` in pen widths); GDI+ dash styles; fill styles; tiny-skia antialiasing; parts composed into a shape layer and blended once (blend modes, Overwrite), clipped to the soft selection
 - [x] Line/Curve tool: drag (left primary, right secondary; Shift 15°, Alt from centre); live afterwards: drag nubs (either button), move icon, right-drag rotate (Shift 15°), arrows 1 px / Ctrl 10 px; `,` `.` `/` cycle start cap / dash / end cap and restyle the live line; toolbar curve type, style and fill; commits on Enter/Esc/Finish/new line/tool change/other commands; Undo takes back a live line
@@ -162,8 +162,11 @@ Guessed or approximated (paint.net doesn't document them):
 - [x] Live editing: corner nubs (opposite corner anchors, Shift keeps aspect, Alt about centre, drag past the opposite corner flips), drag inside or the move icon to move, rotation point (drag it; starts at the centre), right-drag rotates about it, left-drag just outside rotates too, Shift 15°, arrows 1 / 10 px; commits like Line/Curve
 - **Verified 2026-10-13:** 2 geometry tests (every shape builds and fills its box; cycling wraps) and 6 UI tests (draw modes re-render live + Enter; Shift square + corner resize; move inside + Ctrl+arrow; right-drag rotate with 15° snap; A picks the next shape + Undo; pressing away commits). All 29 rendered and checked by eye. CI passes (231 tests).
 - Guessed: every shape's exact outline (5.x geometry unpublished; check against the release files later), the cloud is drawn smaller than its box, four corner nubs (docs say "corners"), the history name "Shapes", default Corner Size 20. Not done: Ctrl+click corner −/+ radius (unclear UI).
-### 7c Text
-- [ ] Text tool: font, size, style, alignment, antialiasing, blend; editable until Finish/Esc; move nub
+### 7c ✅ Text
+- [x] `pnn-tools::text` on cosmic-text (system fonts via fontdb, shaping, swash rasterisation, font fallback): font family list, size in points at the image DPI or Fixed (96 DPI), bold, italic, underline, strikeout, left/centre/right from the click point, antialiasing (off = aliased), primary colour, blend mode/Overwrite, clipped to the selection
+- [x] Text tool: click places the caret; typing, Enter (new line), Backspace, Delete, arrows, Home/End; plain keys go to the text, so letters don't switch tools (Ctrl/Alt chords still reach the keymap); blinking caret, pulsing move nub drags the text; toolbar changes restyle the live text; Esc/Finish/click elsewhere/tool change/other commands commit; Ctrl+Z takes back live text
+- **Verified 2026-10-13:** 3 engine tests (anchor and alignment, bold/underline/aliased, caret across lines + size maths) and 4 UI tests (typing with 'e' not switching tools + Esc commit, Enter/Backspace/bold restyle, Ctrl+Z + click-elsewhere commit, move nub). Render checked (bold italic underlined centred two lines with Unicode). CI passes (239 tests).
+- Guessed/different: line height 1.2 × size, underline/strikeout position and thickness; the 5.x docs' size formula ("points × DPI / 96") reads oddly, so standard pt × DPI / 72 is used (check later); 5.x's Smooth/Sharp rendering modes (DirectWrite) aren't offered; no mouse text selection or Ctrl+C/V within text; the caret is black rather than inverted.
 
 ## Phase 8: Adjustments and the effect framework
 - [ ] Property schema → auto dialogs with live and split preview; Ctrl+F repeats the last effect

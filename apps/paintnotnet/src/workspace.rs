@@ -128,6 +128,10 @@ impl Workspace {
         self.tabs.iter().position(|t| t.key == key)
     }
 
+    pub fn tab(&self, key: u64) -> Option<&DocumentTab> {
+        self.tabs.iter().find(|t| t.key == key)
+    }
+
     pub fn tab_mut(&mut self, key: u64) -> Option<&mut DocumentTab> {
         self.tabs.iter_mut().find(|t| t.key == key)
     }
