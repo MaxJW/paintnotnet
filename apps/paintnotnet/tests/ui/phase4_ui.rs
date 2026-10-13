@@ -1,8 +1,6 @@
 //! Phase 4a: selection tools and Edit menu selection commands, driven through real events.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use eframe::egui::{Key, Modifiers, PointerButton};
 use pnn_core::{ColorBgra, Document, Layer, Surface};
 use pnn_tools::ToolKind;

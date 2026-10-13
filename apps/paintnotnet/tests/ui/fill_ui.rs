@@ -1,8 +1,6 @@
 //! Phase 6b: Paint Bucket and Gradient, end to end through real events.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use eframe::egui::{Key, Modifiers, PointerButton};
 use egui_kittest::kittest::Queryable;
 use paintnotnet::commands::{Command, Triggered};

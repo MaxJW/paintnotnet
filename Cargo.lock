@@ -3012,6 +3012,7 @@ dependencies = [
  "pnn-core",
  "pnn-sdf",
  "rayon",
+ "tiny-skia",
 ]
 
 [[package]]

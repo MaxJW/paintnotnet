@@ -353,6 +353,7 @@ pub fn def(name: &str) -> Option<EffectDef> {
     let d = |name: &'static str, props: Vec<PropDef>, build| EffectDef {
         name,
         props,
+        unclipped: false,
         link: None,
         build,
     };
@@ -562,8 +563,11 @@ mod tests {
             secondary: ColorBgra::WHITE,
             bounds: all,
             selection: None,
+            layers: Vec::new(),
+            active_layer: 0,
+            selection_contours: Default::default(),
         };
-        render_rect((d.build)(&values, src, &env).as_ref(), src, all)
+        render_rect(d.renderer(&values, src, &env).as_ref(), src, all)
     }
 
     #[test]

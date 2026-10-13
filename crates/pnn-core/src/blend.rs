@@ -50,6 +50,24 @@ impl BlendMode {
         Self::Xor,
     ];
 
+    /// `name()` of each of [`Self::ALL`], for dropdowns.
+    pub const NAMES: [&'static str; 14] = [
+        "Normal",
+        "Multiply",
+        "Additive",
+        "Color Burn",
+        "Color Dodge",
+        "Reflect",
+        "Glow",
+        "Overlay",
+        "Difference",
+        "Negation",
+        "Lighten",
+        "Darken",
+        "Screen",
+        "Xor",
+    ];
+
     pub fn name(self) -> &'static str {
         match self {
             Self::Normal => "Normal",

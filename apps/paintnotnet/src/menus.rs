@@ -270,36 +270,48 @@ fn adjustment_entries() -> Vec<Entry> {
     let mnemonics = [
         'A', 'B', 'r', 'C', 'x', 'g', 'H', 'v', 'I', 'L', 'P', 'S', 'T',
     ];
-    Adjustment::ALL
+    let label = |name: &str, m: Option<char>, dialog: bool| {
+        let mut label = name.to_owned();
+        if let Some(i) = m.and_then(|m| label.find(m)) {
+            label.insert(i, '&');
+        }
+        if dialog {
+            label.push_str("...");
+        }
+        &*Box::leak(label.into_boxed_str())
+    };
+    let mut items: Vec<(&str, Entry)> = Adjustment::ALL
         .iter()
         .zip(mnemonics)
         .map(|(&a, m)| {
-            let mut label = a.name().to_owned();
-            if let Some(i) = label.find(m) {
-                label.insert(i, '&');
-            }
-            if a.has_dialog() {
-                label.push_str("...");
-            }
-            let icon = adjustment_icon(a);
-            Entry::Item {
-                label: Box::leak(label.into_boxed_str()),
-                command: Command::Adjustment(a),
-                icon,
-            }
-        })
-        .chain(
-            // Plugin-style adjustments (BoltBait's), after a separator as paint.net lists
-            // plugin adjustments.
-            std::iter::once(SEP).chain(effects_in(Category::Adjustment).map(|(id, e)| {
+            (
+                a.name(),
                 Entry::Item {
-                    label: Box::leak(format!("{}...", e.name).into_boxed_str()),
-                    command: Command::Effect(id),
-                    icon: None,
-                }
-            })),
-        )
-        .collect()
+                    label: label(a.name(), Some(m), a.has_dialog()),
+                    command: Command::Adjustment(a),
+                    icon: adjustment_icon(a),
+                },
+            )
+        })
+        .collect();
+    // The extra adjustments sit among the stock ones, in alphabetical order like them.
+    for (id, e) in effects_in(Category::Adjustment) {
+        let m = match e.name {
+            "Color Balance" => Some('n'),
+            "Transparency" => Some('y'),
+            _ => None,
+        };
+        items.push((
+            e.name,
+            Entry::Item {
+                label: label(e.name, m, true),
+                command: Command::Effect(id),
+                icon: None,
+            },
+        ));
+    }
+    items.sort_by_key(|(name, _)| name.to_lowercase());
+    items.into_iter().map(|(_, e)| e).collect()
 }
 
 fn effect_entries() -> Vec<Entry> {

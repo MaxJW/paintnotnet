@@ -1,8 +1,6 @@
 //! Phase 7c: the Text tool, end to end through real events.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use eframe::egui::{Event, Key, Modifiers, PointerButton};
 use pnn_core::ColorBgra;
 use pnn_tools::ToolKind;

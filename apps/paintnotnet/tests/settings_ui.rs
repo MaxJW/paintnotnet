@@ -1,5 +1,6 @@
 //! Settings (Alt+X) with shortcut rebinding, and the command palette (Ctrl+K).
 
+#[path = "ui/common/mod.rs"]
 mod common;
 
 use common::*;

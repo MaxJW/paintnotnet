@@ -88,7 +88,8 @@ pub enum Category {
     Render,
     Selection,
     Stylize,
-    /// BoltBait-style adjustments: listed at the end of the Adjustments menu.
+    /// Extra adjustments (from BoltBait's pack), listed among the stock ones in the
+    /// Adjustments menu.
     Adjustment,
 }
 
@@ -154,8 +155,10 @@ const fn extra(name: &'static str, category: Category) -> EffectInfo {
 
 use Category::*;
 
-/// Every effect in the Effects menu. Stock entries are paint.net 5's; extras are the
-/// BoltBait-pack effects paintnotnet builds in (Phases 5 and 10).
+/// Every effect in the Effects menu. Stock entries are paint.net 5's; extras cover BoltBait's
+/// plugin pack, built in as ordinary effects (Phases 5 and 10). Pack effects that extend a
+/// stock one (Gaussian Blur+, Hue / Saturation+, Drop Shadow Plus) are options of the stock
+/// effect instead of separate entries.
 pub static EFFECTS: &[EffectInfo] = &[
     stock("Ink Sketch", Artistic),
     stock("Oil Painting", Artistic),
@@ -187,9 +190,9 @@ pub static EFFECTS: &[EffectInfo] = &[
     extra("Outline Object", Object),
     extra("Inner Shadow", Object),
     extra("Bevel Object", Object),
-    extra("Drop Shadow Plus", Object),
     extra("Switch Alpha to Gray", Object),
     extra("Switch Gray to Alpha", Object),
+    extra("Apply Alpha Mask", Object),
     stock("Glow", Photo),
     stock("Red Eye Removal", Photo),
     stock("Sharpen", Photo),

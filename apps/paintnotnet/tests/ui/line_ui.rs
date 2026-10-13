@@ -1,8 +1,6 @@
 //! Phase 7a: Line/Curve, end to end through real events.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use eframe::egui::{Key, Modifiers, PointerButton};
 use paintnotnet::commands::{Command, Triggered};
 use pnn_core::ColorBgra;

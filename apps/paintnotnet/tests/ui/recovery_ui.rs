@@ -1,8 +1,6 @@
 //! Autosave and crash recovery.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use eframe::egui::{Key, Modifiers};
 use egui_kittest::kittest::Queryable;
 use pnn_core::{ColorBgra, Document, Layer, Surface};

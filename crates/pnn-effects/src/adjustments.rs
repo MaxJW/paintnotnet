@@ -66,10 +66,63 @@ fn posterize_levels(count: i32) -> [u8; 256] {
 }
 
 /// Every adjustment that has been implemented; the rest return `None`.
+const RANGE: &str = "Pixel range";
+
+/// Which pixels Hue / Saturation changes: hue in degrees (wrapping when `from > to`; a full
+/// 0–360 range includes grays), HSL saturation and lightness in percent.
+#[derive(Clone, Copy)]
+struct PixelRange {
+    hue: [i32; 2],
+    grays: bool,
+    sat: [i32; 2],
+    light: [i32; 2],
+}
+
+impl PixelRange {
+    fn contains(&self, c: ColorBgra) -> bool {
+        let (r, g, b) = (c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0);
+        let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+        let l = (max + min) / 2.0;
+        let d = max - min;
+        let s = if d == 0.0 {
+            0.0
+        } else {
+            d / (1.0 - (2.0 * l - 1.0).abs())
+        };
+        let pct = |x: f32| (x * 100.0).round() as i32;
+        let within = |v: i32, [lo, hi]: [i32; 2]| lo.min(hi) <= v && v <= hi.max(lo);
+        if !within(pct(s), self.sat) || !within(pct(l), self.light) {
+            return false;
+        }
+        let full = self.hue[0] <= 0 && self.hue[1] >= 360;
+        if full {
+            return true;
+        }
+        if d == 0.0 {
+            return self.grays;
+        }
+        let h = if max == r {
+            60.0 * ((g - b) / d).rem_euclid(6.0)
+        } else if max == g {
+            60.0 * ((b - r) / d + 2.0)
+        } else {
+            60.0 * ((r - g) / d + 4.0)
+        };
+        let h = h.round() as i32 % 360;
+        let [from, to] = self.hue;
+        if from <= to {
+            from <= h && h <= to
+        } else {
+            h >= from || h <= to
+        }
+    }
+}
+
 pub fn def(a: Adjustment) -> Option<EffectDef> {
     let no_props = |build| EffectDef {
         name: a.name(),
         props: Vec::new(),
+        unclipped: false,
         link: None,
         build,
     };
@@ -96,6 +149,7 @@ pub fn def(a: Adjustment) -> Option<EffectDef> {
                 PropDef::int("Blue", 16, 2, 64),
                 PropDef::bool("Linked", true),
             ],
+            unclipped: false,
             link: Some(Link {
                 toggle: 3,
                 values: &[0, 1, 2],
@@ -115,6 +169,7 @@ pub fn def(a: Adjustment) -> Option<EffectDef> {
                 PropDef::int("Brightness", 0, -100, 100),
                 PropDef::int("Contrast", 0, -100, 100),
             ],
+            unclipped: false,
             link: None,
             build: |v: &[Value], _, _| Box::new(BrightnessContrast::new(v[0].int(), v[1].int())),
         },
@@ -124,7 +179,17 @@ pub fn def(a: Adjustment) -> Option<EffectDef> {
                 PropDef::int("Hue", 0, -180, 180),
                 PropDef::int("Saturation", 100, 0, 200),
                 PropDef::int("Lightness", 0, -100, 100),
+                // Limit the change to a range of colours (as BoltBait's Hue / Saturation+);
+                // the defaults cover every pixel.
+                PropDef::int("From hue", 0, 0, 360).in_section(RANGE),
+                PropDef::int("To hue", 360, 0, 360).in_section(RANGE),
+                PropDef::bool("Include gray pixels", false).in_section(RANGE),
+                PropDef::int("From saturation", 0, 0, 100).in_section(RANGE),
+                PropDef::int("To saturation", 100, 0, 100).in_section(RANGE),
+                PropDef::int("From lightness", 0, 0, 100).in_section(RANGE),
+                PropDef::int("To lightness", 100, 0, 100).in_section(RANGE),
             ],
+            unclipped: false,
             link: None,
             build: |v: &[Value], _, _| {
                 let (hue, mut sat, light) = (v[0].int(), v[1].int(), v[2].int());
@@ -132,14 +197,25 @@ pub fn def(a: Adjustment) -> Option<EffectDef> {
                 if sat > 100 {
                     sat = (sat - 100) * 3 + 100;
                 }
+                let range = PixelRange {
+                    hue: [v[3].int(), v[4].int()],
+                    grays: v[5].bool(),
+                    sat: [v[6].int(), v[7].int()],
+                    light: [v[8].int(), v[9].int()],
+                };
                 Box::new(PixelOp(move |c: ColorBgra| {
-                    hue_saturation(c, hue, sat, light)
+                    if range.contains(c) {
+                        hue_saturation(c, hue, sat, light)
+                    } else {
+                        c
+                    }
                 }))
             },
         },
         Adjustment::Sepia => EffectDef {
             name: a.name(),
             props: vec![PropDef::int("Intensity", 100, 0, 100)],
+            unclipped: false,
             link: None,
             build: |v: &[Value], _, _| {
                 let k = v[0].int().clamp(0, 100) as u32;
@@ -160,6 +236,7 @@ pub fn def(a: Adjustment) -> Option<EffectDef> {
         Adjustment::Exposure => EffectDef {
             name: a.name(),
             props: vec![PropDef::float("Exposure", 0.0, -5.0, 5.0, 2)],
+            unclipped: false,
             link: None,
             build: |v: &[Value], _, _| {
                 // Linear-light gain of 2^EV.
@@ -174,6 +251,7 @@ pub fn def(a: Adjustment) -> Option<EffectDef> {
                 PropDef::int("Shadows", 0, -100, 100),
                 PropDef::int("Highlights", 0, -100, 100),
             ],
+            unclipped: false,
             link: None,
             build: |v: &[Value], _, _| {
                 let (sh, hi) = (v[0].int() as f64 / 100.0, v[1].int() as f64 / 100.0);
@@ -198,6 +276,7 @@ pub fn def(a: Adjustment) -> Option<EffectDef> {
                 PropDef::int("Temperature", 0, -100, 100),
                 PropDef::int("Tint", 0, -100, 100),
             ],
+            unclipped: false,
             link: None,
             build: |v: &[Value], _, _| {
                 let (t, n) = (v[0].int() as f64 / 100.0, v[1].int() as f64 / 100.0);
@@ -318,18 +397,23 @@ impl BrightnessContrast {
     }
 }
 
+impl BrightnessContrast {
+    pub(crate) fn apply(&self, c: ColorBgra) -> ColorBgra {
+        let i = intensity(c) as usize;
+        if self.threshold {
+            let v = self.table[i];
+            ColorBgra::from_bgra(v, v, v, c.a)
+        } else {
+            let t = &self.table[i * 256..i * 256 + 256];
+            ColorBgra::from_bgra(t[c.b as usize], t[c.g as usize], t[c.r as usize], c.a)
+        }
+    }
+}
+
 impl crate::framework::Renderer for BrightnessContrast {
     fn render_row(&self, src: &pnn_core::Surface, x0: u32, y: u32, out: &mut [ColorBgra]) {
         for (k, o) in out.iter_mut().enumerate() {
-            let c = src.get(x0 + k as u32, y);
-            let i = intensity(c) as usize;
-            *o = if self.threshold {
-                let v = self.table[i];
-                ColorBgra::from_bgra(v, v, v, c.a)
-            } else {
-                let t = &self.table[i * 256..i * 256 + 256];
-                ColorBgra::from_bgra(t[c.b as usize], t[c.g as usize], t[c.r as usize], c.a)
-            };
+            *o = self.apply(src.get(x0 + k as u32, y));
         }
     }
 }
@@ -426,9 +510,12 @@ mod tests {
             secondary: ColorBgra::WHITE,
             bounds: all,
             selection: None,
+            layers: Vec::new(),
+            active_layer: 0,
+            selection_contours: Default::default(),
         };
         let v = values.unwrap_or_else(|| d.defaults());
-        let r = (d.build)(&v, &src, &env);
+        let r = d.renderer(&v, &src, &env);
         render_rect(r.as_ref(), &src, all)[0]
     }
 
@@ -539,9 +626,12 @@ mod tests {
             secondary: ColorBgra::WHITE,
             bounds: all,
             selection: None,
+            layers: Vec::new(),
+            active_layer: 0,
+            selection_contours: Default::default(),
         };
         let d = def(Adjustment::AutoLevel).unwrap();
-        let r = (d.build)(&[], &s, &env);
+        let r = d.renderer(&[], &s, &env);
         let out = render_rect(r.as_ref(), &s, all);
         assert!(
             out[0].r < 10 && out[99].r > 245,
@@ -578,5 +668,42 @@ mod tests {
         let half = run(Adjustment::Sepia, Some(vec![Value::Int(50)]), c);
         let full = run(Adjustment::Sepia, None, c);
         assert!(half != full && half != c);
+    }
+
+    #[test]
+    fn hue_saturation_pixel_range() {
+        let red = ColorBgra::from_rgba(200, 30, 30, 255);
+        let blue = ColorBgra::from_rgba(30, 30, 200, 255);
+        let gray = ColorBgra::from_rgba(120, 120, 120, 255);
+        // Desaturate only reds (hue 330..30, wrapping through 0).
+        let v = |grays| {
+            vec![
+                Value::Int(0),
+                Value::Int(0),
+                Value::Int(0),
+                Value::Int(330),
+                Value::Int(30),
+                Value::Bool(grays),
+                Value::Int(0),
+                Value::Int(100),
+                Value::Int(0),
+                Value::Int(100),
+            ]
+        };
+        let out = run(Adjustment::HueSaturation, Some(v(false)), red);
+        assert_eq!(out.r, out.g, "red desaturated");
+        assert_eq!(run(Adjustment::HueSaturation, Some(v(false)), blue), blue);
+        // Grays have no hue: only changed when asked (here a lightness change shows it).
+        let mut lv = v(true);
+        lv[2] = Value::Int(50);
+        assert_ne!(run(Adjustment::HueSaturation, Some(lv.clone()), gray), gray);
+        lv[5] = Value::Bool(false);
+        assert_eq!(run(Adjustment::HueSaturation, Some(lv), gray), gray);
+        // Defaults (full range) match the plain adjustment.
+        let plain = vec![Value::Int(40), Value::Int(150), Value::Int(10)];
+        assert_eq!(
+            run(Adjustment::HueSaturation, Some(plain.clone()), gray),
+            super::hue_saturation(gray, 40, 250, 10)
+        );
     }
 }

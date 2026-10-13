@@ -15,7 +15,7 @@ use eframe::egui;
 use pnn_core::{ColorBgra, Mask, Rect, Surface, TILE_SIZE, Tile, TileCoord};
 use pnn_effects::Adjustment;
 use pnn_effects::curves::{self, Curves, Histogram, Levels, Points};
-use pnn_effects::framework::{EffectDef, Env, PropKind, Renderer, Value};
+use pnn_effects::framework::{EffectDef, Env, PropDef, PropKind, Renderer, Value};
 
 use crate::app::PaintNotNetApp;
 use crate::icons::Icon;
@@ -34,6 +34,7 @@ impl EffectRef {
             Self::Adjustment(a @ (Adjustment::Curves | Adjustment::Levels)) => Some(EffectDef {
                 name: a.name(),
                 props: Vec::new(),
+                unclipped: false,
                 link: None,
                 build: |_, _, _| Box::new(pnn_effects::framework::PixelOp(|c| c)),
             }),
@@ -185,7 +186,7 @@ impl EffectSession {
         match &self.custom {
             Some(Custom::Curves(c)) => c.renderer(),
             Some(Custom::Levels { levels, .. }) => levels.renderer(),
-            None => (self.def.build)(&self.values, &self.before, &self.env),
+            None => self.def.renderer(&self.values, &self.before, &self.env),
         }
     }
 
@@ -234,7 +235,10 @@ impl EffectSession {
     }
 
     /// Set the settings and restart the preview (tests, scripted use).
-    pub fn set_values(&mut self, ctx: &egui::Context, values: Vec<Value>) {
+    pub fn set_values(&mut self, ctx: &egui::Context, mut values: Vec<Value>) {
+        // Values for options added since (or left out) take their defaults.
+        let defaults = self.def.defaults_in(&self.env);
+        values.extend(defaults.into_iter().skip(values.len()));
         self.values = values;
         self.spawn(ctx);
     }
@@ -288,10 +292,10 @@ impl PaintNotNetApp {
         let Some(def) = target.def() else {
             return;
         };
-        let values = def.defaults();
-        let Some(mut session) = self.effect_session(target, def, values, None) else {
+        let Some(mut session) = self.effect_session(target, def, Vec::new(), None) else {
             return;
         };
+        session.values = session.def.defaults_in(&session.env);
         session.custom = target.custom(&session.before, session.env.bounds);
         let interactive = !session.def.props.is_empty() || session.custom.is_some();
         self.effect = Some(session);
@@ -321,9 +325,20 @@ impl PaintNotNetApp {
             width: w,
             height: h,
         };
-        let bounds = tab.doc.selection().pixel_bounds(w, h).unwrap_or(full);
+        let unclipped = def.unclipped;
+        let bounds = if unclipped {
+            full
+        } else {
+            tab.doc.selection().pixel_bounds(w, h).unwrap_or(full)
+        };
         let layer = tab.doc.active_index();
         let selection = tab.selection_mask(antialias);
+        let layers = tab
+            .doc
+            .layers()
+            .iter()
+            .map(|l| (l.name.clone(), l.surface.clone()))
+            .collect();
         Some(EffectSession {
             key: tab.key,
             layer,
@@ -333,12 +348,16 @@ impl PaintNotNetApp {
             custom,
             grab: Vec::new(),
             before: tab.doc.layer(layer).surface.clone(),
-            selection: selection.clone(),
+            // Unclipped effects replace the whole layer; they read the selection themselves.
+            selection: if unclipped { None } else { selection.clone() },
             env: Env {
                 primary,
                 secondary,
                 bounds,
                 selection,
+                layers,
+                active_layer: layer,
+                selection_contours: Arc::new(tab.doc.selection().contours().to_vec()),
             },
             job: None,
         })
@@ -378,7 +397,7 @@ impl PaintNotNetApp {
         let values = &mut s.values;
         let custom = &mut s.custom;
         let grab = &mut s.grab;
-        let (before, bounds) = (&s.before, s.env.bounds);
+        let (before, bounds, env) = (&s.before, s.env.bounds, &s.env);
         // Movable, so the live preview behind it can be watched; opens centred, then stays
         // where it was dragged (egui remembers the position per effect).
         egui::Window::new(def.name)
@@ -396,20 +415,44 @@ impl PaintNotNetApp {
                     }
                     None => {}
                 }
-                for (i, p) in def.props.iter().enumerate() {
-                    let before = values[i];
-                    property_ui(ui, p.name, &p.kind, &mut values[i], p.default);
-                    if values[i] != before {
-                        changed = true;
-                        // Linked values follow the one edited.
-                        if let Some(link) = def.link
-                            && values[link.toggle].bool()
-                            && link.values.contains(&i)
-                        {
-                            let v = values[i];
-                            for &j in link.values {
-                                values[j] = v;
+                let layer_names: Vec<&str> = env.layers.iter().map(|(n, _)| n.as_str()).collect();
+                // Controls outside any section first, then each section (collapsed until
+                // opened), in the order the properties list them.
+                let mut sections: Vec<Option<&'static str>> = vec![None];
+                for p in &def.props {
+                    if !sections.contains(&p.section) {
+                        sections.push(p.section);
+                    }
+                }
+                let mut edit = |ui: &mut egui::Ui, section: Option<&'static str>| {
+                    for (i, p) in def.props.iter().enumerate() {
+                        if p.section != section {
+                            continue;
+                        }
+                        let before = values[i];
+                        property_ui(ui, p, &mut values[i], &layer_names);
+                        if values[i] != before {
+                            changed = true;
+                            // Linked values follow the one edited.
+                            if let Some(link) = def.link
+                                && values[link.toggle].bool()
+                                && link.values.contains(&i)
+                            {
+                                let v = values[i];
+                                for &j in link.values {
+                                    values[j] = v;
+                                }
                             }
+                        }
+                    }
+                };
+                for section in sections {
+                    match section {
+                        None => edit(ui, None),
+                        Some(title) => {
+                            egui::CollapsingHeader::new(title)
+                                .id_salt(("effect_section", def.name, title))
+                                .show(ui, |ui| edit(ui, Some(title)));
                         }
                     }
                 }
@@ -476,8 +519,9 @@ impl PaintNotNetApp {
 }
 
 /// One generated control.
-fn property_ui(ui: &mut egui::Ui, name: &str, kind: &PropKind, v: &mut Value, default: Value) {
-    match kind {
+fn property_ui(ui: &mut egui::Ui, p: &PropDef, v: &mut Value, layers: &[&str]) {
+    let (name, default) = (p.name, p.default);
+    match &p.kind {
         PropKind::Int { min, max } => {
             ui.label(name);
             let mut x = v.int();
@@ -524,7 +568,88 @@ fn property_ui(ui: &mut egui::Ui, name: &str, kind: &PropKind, v: &mut Value, de
                 });
             *v = Value::Choice(c);
         }
+        PropKind::Color { alpha, .. } => {
+            let c = v.color();
+            let mut rgba = egui::Color32::from_rgba_unmultiplied(
+                c.r,
+                c.g,
+                c.b,
+                if *alpha { c.a } else { 255 },
+            );
+            ui.horizontal(|ui| {
+                ui.label(name);
+                let mode = if *alpha {
+                    egui::color_picker::Alpha::OnlyBlend
+                } else {
+                    egui::color_picker::Alpha::Opaque
+                };
+                egui::color_picker::color_edit_button_srgba(ui, &mut rgba, mode);
+            });
+            let [r, g, b, a] = rgba.to_srgba_unmultiplied();
+            *v = Value::Color(ColorBgra::from_rgba(r, g, b, a));
+        }
+        PropKind::Angle { min, max } => {
+            ui.label(name);
+            let mut x = v.float();
+            ui.horizontal(|ui| {
+                angle_dial(ui, &mut x, *min, *max);
+                ui.add(
+                    egui::DragValue::new(&mut x)
+                        .range(*min..=*max)
+                        .max_decimals(1)
+                        .suffix("°"),
+                );
+                if ui.small_button("↺").on_hover_text("Reset").clicked() {
+                    x = default.float();
+                }
+            });
+            *v = Value::Float(x);
+        }
+        PropKind::Layer => {
+            ui.label(name);
+            let mut c = v.choice().min(layers.len().saturating_sub(1));
+            egui::ComboBox::from_id_salt(name)
+                .selected_text(layers.get(c).copied().unwrap_or(""))
+                .show_ui(ui, |ui| {
+                    // Top layer first, as in the Layers window.
+                    for (i, n) in layers.iter().enumerate().rev() {
+                        ui.selectable_value(&mut c, i, *n);
+                    }
+                });
+            *v = Value::Choice(c);
+        }
     }
+}
+
+/// A round dial: click or drag to point it (0° = right, counter-clockwise).
+fn angle_dial(ui: &mut egui::Ui, deg: &mut f64, min: f64, max: f64) {
+    let size = egui::vec2(36.0, 36.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
+    let c = rect.center();
+    if let Some(p) = response.interact_pointer_pos()
+        && (response.dragged() || response.clicked())
+    {
+        let d = p - c;
+        if d.length() > 2.0 {
+            let mut a = (-d.y).atan2(d.x).to_degrees() as f64;
+            // Map into the property's range (e.g. 0..360 or -180..180).
+            while a < min {
+                a += 360.0;
+            }
+            while a > max {
+                a -= 360.0;
+            }
+            *deg = a.clamp(min, max);
+        }
+    }
+    let visuals = ui.style().interact(&response);
+    let r = size.x / 2.0 - 1.0;
+    ui.painter()
+        .circle(c, r, visuals.bg_fill, visuals.fg_stroke);
+    let a = (*deg as f32).to_radians();
+    let tip = c + egui::vec2(a.cos(), -a.sin()) * (r - 3.0);
+    ui.painter().line_segment([c, tip], visuals.fg_stroke);
+    ui.painter().circle_filled(c, 2.0, visuals.fg_stroke.color);
 }
 
 /// The Curves dialog body (3.36 `CurvesEffectConfigDialog` / `CurveControl`): Luminosity or

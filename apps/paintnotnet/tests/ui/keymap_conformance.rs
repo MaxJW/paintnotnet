@@ -219,7 +219,7 @@ const MOUSE_WORDS: &[&str] = &[
 
 /// Keyboard chords from the doc's tables, normalised (tap counts and notes removed).
 fn doc_chords() -> BTreeSet<String> {
-    let md = include_str!("../../../docs/reference/keybindings.md");
+    let md = include_str!("../../../../docs/reference/keybindings.md");
     let mut out = BTreeSet::new();
     for line in md.lines() {
         let Some(row) = line.strip_prefix('|') else {

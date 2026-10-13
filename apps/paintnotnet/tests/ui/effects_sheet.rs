@@ -32,12 +32,15 @@ fn effect_sheet() {
         secondary: ColorBgra::WHITE,
         bounds: cell,
         selection: None,
+        layers: Vec::new(),
+        active_layer: 0,
+        selection_contours: Default::default(),
     };
     let mut names = vec!["(original)"];
     let mut cells = vec![src.to_pixels()];
     for (i, e) in pnn_effects::EFFECTS.iter().enumerate() {
         if let Some(d) = pnn_effects::effect_def(pnn_effects::EffectId(i as u16)) {
-            let r = (d.build)(&d.defaults(), &src, &env);
+            let r = d.renderer(&d.defaults(), &src, &env);
             cells.push(pnn_effects::framework::render_rect(r.as_ref(), &src, cell));
             names.push(e.name);
         }
@@ -120,8 +123,11 @@ fn object_effect_sheet() {
             secondary: ColorBgra::WHITE,
             bounds: cell,
             selection: (e.category == C::Selection).then(|| std::sync::Arc::new(sel.clone())),
+            layers: Vec::new(),
+            active_layer: 0,
+            selection_contours: Default::default(),
         };
-        let r = (d.build)(&d.defaults(), &src, &env);
+        let r = d.renderer(&d.defaults(), &src, &env);
         cells.push(pnn_effects::framework::render_rect(r.as_ref(), &src, cell));
         names.push(format!("{:?}: {}", e.category, e.name));
     }

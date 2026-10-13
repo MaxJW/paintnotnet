@@ -1,8 +1,6 @@
 //! OpenRaster: layered save without flattening, and opening it back.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use eframe::egui::Key;
 use pnn_core::{BlendMode, ColorBgra, Document, Layer, Surface};
 use pnn_io::FileFormat;

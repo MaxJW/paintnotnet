@@ -10,10 +10,38 @@ use pnn_core::{ColorBgra, Rect, Surface};
 /// A property's type and range.
 #[derive(Clone, Debug, PartialEq)]
 pub enum PropKind {
-    Int { min: i32, max: i32 },
-    Float { min: f64, max: f64, decimals: usize },
+    Int {
+        min: i32,
+        max: i32,
+    },
+    Float {
+        min: f64,
+        max: f64,
+        decimals: usize,
+    },
     Bool,
     Choice(&'static [&'static str]),
+    /// A colour well (`alpha` adds an opacity control), starting from `default`.
+    Color {
+        alpha: bool,
+        default: ColorDefault,
+    },
+    /// An angle in degrees on a dial: 0° points right, angles grow counter-clockwise
+    /// (paint.net's angle chooser).
+    Angle {
+        min: f64,
+        max: f64,
+    },
+    /// One of the document's layers (index from the bottom); starts on the active layer.
+    Layer,
+}
+
+/// Where a colour property starts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ColorDefault {
+    Primary,
+    Secondary,
+    Fixed(ColorBgra),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -22,6 +50,7 @@ pub enum Value {
     Float(f64),
     Bool(bool),
     Choice(usize),
+    Color(ColorBgra),
 }
 
 impl Value {
@@ -31,6 +60,7 @@ impl Value {
             Self::Float(v) => v.round() as i32,
             Self::Bool(b) => b as i32,
             Self::Choice(c) => c as i32,
+            Self::Color(_) => 0,
         }
     }
     pub fn float(self) -> f64 {
@@ -45,6 +75,12 @@ impl Value {
     pub fn choice(self) -> usize {
         self.int().max(0) as usize
     }
+    pub fn color(self) -> ColorBgra {
+        match self {
+            Self::Color(c) => c,
+            _ => ColorBgra::BLACK,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -52,6 +88,9 @@ pub struct PropDef {
     pub name: &'static str,
     pub kind: PropKind,
     pub default: Value,
+    /// Collapsible section the control sits in (closed until opened); `None` = always shown,
+    /// above the sections.
+    pub section: Option<&'static str>,
 }
 
 impl PropDef {
@@ -60,6 +99,7 @@ impl PropDef {
             name,
             kind: PropKind::Int { min, max },
             default: Value::Int(default),
+            section: None,
         }
     }
     pub const fn float(
@@ -73,6 +113,7 @@ impl PropDef {
             name,
             kind: PropKind::Float { min, max, decimals },
             default: Value::Float(default),
+            section: None,
         }
     }
     pub const fn bool(name: &'static str, default: bool) -> Self {
@@ -80,6 +121,7 @@ impl PropDef {
             name,
             kind: PropKind::Bool,
             default: Value::Bool(default),
+            section: None,
         }
     }
     pub const fn choice(
@@ -91,6 +133,55 @@ impl PropDef {
             name,
             kind: PropKind::Choice(options),
             default: Value::Choice(default),
+            section: None,
+        }
+    }
+    pub const fn color(name: &'static str, default: ColorDefault, alpha: bool) -> Self {
+        Self {
+            name,
+            kind: PropKind::Color { alpha, default },
+            default: Value::Color(match default {
+                ColorDefault::Fixed(c) => c,
+                ColorDefault::Primary => ColorBgra::BLACK,
+                ColorDefault::Secondary => ColorBgra::WHITE,
+            }),
+            section: None,
+        }
+    }
+    pub const fn angle(name: &'static str, default: f64, min: f64, max: f64) -> Self {
+        Self {
+            name,
+            kind: PropKind::Angle { min, max },
+            default: Value::Float(default),
+            section: None,
+        }
+    }
+    pub const fn layer(name: &'static str) -> Self {
+        Self {
+            name,
+            kind: PropKind::Layer,
+            default: Value::Choice(0),
+            section: None,
+        }
+    }
+    /// Put the control in a collapsible section.
+    pub const fn in_section(mut self, section: &'static str) -> Self {
+        self.section = Some(section);
+        self
+    }
+    /// The starting value in `env`: colours from the palette, layers at the active one.
+    pub fn default_in(&self, env: &Env) -> Value {
+        match self.kind {
+            PropKind::Color {
+                default: ColorDefault::Primary,
+                ..
+            } => Value::Color(env.primary),
+            PropKind::Color {
+                default: ColorDefault::Secondary,
+                ..
+            } => Value::Color(env.secondary),
+            PropKind::Layer => Value::Choice(env.active_layer),
+            _ => self.default,
         }
     }
 }
@@ -112,6 +203,11 @@ pub struct Env {
     pub bounds: Rect,
     /// The selection's coverage, if anything is selected (Selection effects outline it).
     pub selection: Option<std::sync::Arc<pnn_core::Mask>>,
+    /// The document's layers, bottom first, for effects that read another layer (masks).
+    pub layers: Vec<(String, Surface)>,
+    pub active_layer: usize,
+    /// The selection's outline (even-odd polygons, image pixels); empty = no selection.
+    pub selection_contours: std::sync::Arc<Vec<Vec<[f64; 2]>>>,
 }
 
 /// Fills rows of the effect's output.
@@ -181,12 +277,30 @@ pub struct EffectDef {
     /// No properties = applied directly, no dialog.
     pub props: Vec<PropDef>,
     pub link: Option<Link>,
+    /// Renders over the whole layer instead of only inside the selection (effects that draw
+    /// along or outside the selection's edge).
+    pub unclipped: bool,
     pub build: Build,
 }
 
 impl EffectDef {
     pub fn defaults(&self) -> Vec<Value> {
         self.props.iter().map(|p| p.default).collect()
+    }
+    /// Build the renderer; missing trailing values (e.g. from before an effect gained
+    /// options) take their defaults.
+    pub fn renderer(&self, values: &[Value], src: &Surface, env: &Env) -> Box<dyn Renderer> {
+        if values.len() >= self.props.len() {
+            return (self.build)(values, src, env);
+        }
+        let mut v = values.to_vec();
+        v.extend(self.props[values.len()..].iter().map(|p| p.default_in(env)));
+        (self.build)(&v, src, env)
+    }
+
+    /// Starting values in `env` (see [`PropDef::default_in`]).
+    pub fn defaults_in(&self, env: &Env) -> Vec<Value> {
+        self.props.iter().map(|p| p.default_in(env)).collect()
     }
 }
 

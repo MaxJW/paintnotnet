@@ -1,12 +1,10 @@
 //! Phase 4b: clipboard commands through real key events, with an in-memory clipboard
 //! (the desktop clipboard is never touched).
 
-mod common;
-
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use common::*;
+use crate::common::*;
 use eframe::egui::{Key, Modifiers, PointerButton};
 use egui_kittest::kittest::Queryable;
 use paintnotnet::clipboard::{ClipImage, MemoryClipboard};

@@ -67,9 +67,13 @@ all = { level = "warn", priority = -1 }
 # Image work is unusably slow unoptimised; keep our crates debuggable but optimise deps.
 [profile.dev]
 opt-level = 1
+# Line numbers in backtraces are enough; full debug info made every test binary huge and
+# linking it the slowest part of a build.
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 3
+debug = false
 
 [profile.release]
 lto = "thin"

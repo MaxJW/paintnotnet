@@ -14,7 +14,7 @@
 //! - From paint.net 5's docs only, maths guessed: Square Blur (alpha-weighted box) and Bokeh
 //!   Blur (disc average). Sketch Blur is not implemented (no description of its maths).
 
-use pnn_core::{ColorBgra, Rect, Surface};
+use pnn_core::{BlendMode, ColorBgra, Rect, Surface};
 
 use crate::framework::{EffectDef, PropDef, Renderer, Value};
 
@@ -106,6 +106,50 @@ fn boxed(a: &[i64], r: usize, out: &mut [i64]) {
 pub(crate) struct Separable {
     pub(crate) r: usize,
     pub(crate) kernel: fn(&[i64], usize, &mut [i64]),
+}
+
+const CHANNELS: &str = "Channels and blending";
+
+/// Gaussian Blur limited to some channels (the rest keep the source's), then blended onto the
+/// source with a blend mode (Normal = replace).
+struct ChannelBlur {
+    blur: Separable,
+    /// Red, green, blue, alpha.
+    channels: [bool; 4],
+    mode: BlendMode,
+}
+
+impl Renderer for ChannelBlur {
+    fn render_row(&self, src: &Surface, x0: u32, y: u32, out: &mut [ColorBgra]) {
+        let rect = Rect {
+            x: x0,
+            y,
+            width: out.len() as u32,
+            height: 1,
+        };
+        self.render_rect(src, rect, out);
+    }
+
+    fn render_rect(&self, src: &Surface, rect: Rect, out: &mut [ColorBgra]) {
+        self.blur.render_rect(src, rect, out);
+        let [r, g, b, a] = self.channels;
+        for (j, row) in out.chunks_mut(rect.width.max(1) as usize).enumerate() {
+            for (i, o) in row.iter_mut().enumerate() {
+                let s = src.get(rect.x + i as u32, rect.y + j as u32);
+                let mixed = ColorBgra::from_bgra(
+                    if b { o.b } else { s.b },
+                    if g { o.g } else { s.g },
+                    if r { o.r } else { s.r },
+                    if a { o.a } else { s.a },
+                );
+                *o = if self.mode == BlendMode::Normal {
+                    mixed
+                } else {
+                    self.mode.apply(s, mixed, 255)
+                };
+            }
+        }
+    }
 }
 
 impl Renderer for Separable {
@@ -524,18 +568,39 @@ pub fn def(name: &str) -> Option<EffectDef> {
     let d = |name: &'static str, props: Vec<PropDef>, build| EffectDef {
         name,
         props,
+        unclipped: false,
         link: None,
         build,
     };
     Some(match name {
         "Gaussian Blur" => d(
             "Gaussian Blur",
-            vec![PropDef::int("Radius", 2, 0, 200)],
+            vec![
+                PropDef::int("Radius", 2, 0, 200),
+                // Channel choice and blending (as BoltBait's Gaussian Blur+); the defaults
+                // give the plain blur.
+                PropDef::bool("Red", true).in_section(CHANNELS),
+                PropDef::bool("Green", true).in_section(CHANNELS),
+                PropDef::bool("Blue", true).in_section(CHANNELS),
+                PropDef::bool("Alpha", true).in_section(CHANNELS),
+                PropDef::choice("Blend mode", 0, &BlendMode::NAMES).in_section(CHANNELS),
+            ],
             |v: &[Value], _, _| {
-                Box::new(Separable {
+                let blur = Separable {
                     r: v[0].int().max(0) as usize,
                     kernel: tent,
-                })
+                };
+                let channels = [v[1].bool(), v[2].bool(), v[3].bool(), v[4].bool()];
+                let mode = BlendMode::ALL[v[5].choice().min(BlendMode::ALL.len() - 1)];
+                if channels == [true; 4] && mode == BlendMode::Normal {
+                    Box::new(blur)
+                } else {
+                    Box::new(ChannelBlur {
+                        blur,
+                        channels,
+                        mode,
+                    })
+                }
             },
         ),
         "Square Blur" => d(
@@ -709,8 +774,11 @@ mod tests {
             secondary: ColorBgra::WHITE,
             bounds: all,
             selection: None,
+            layers: Vec::new(),
+            active_layer: 0,
+            selection_contours: Default::default(),
         };
-        let r = (d.build)(&values, src, &env);
+        let r = d.renderer(&values, src, &env);
         render_rect(r.as_ref(), src, all)
     }
 
@@ -854,6 +922,9 @@ mod tests {
             secondary: ColorBgra::WHITE,
             bounds: all,
             selection: None,
+            layers: Vec::new(),
+            active_layer: 0,
+            selection_contours: Default::default(),
         };
         for (name, v) in [
             ("Gaussian Blur", vec![Value::Int(2)]),
@@ -873,7 +944,7 @@ mod tests {
             ("Surface Blur", vec![Value::Int(6), Value::Int(15)]),
             ("Bokeh Blur", vec![Value::Int(20)]),
         ] {
-            let r = (def(name).unwrap().build)(&v, &src, &env);
+            let r = def(name).unwrap().renderer(&v, &src, &env);
             // Render in 256² tiles in parallel, as the app does.
             use rayon::prelude::*;
             let tiles: Vec<Rect> = (0..9)
@@ -896,6 +967,42 @@ mod tests {
                 v.first(),
                 t.elapsed().as_secs_f64() * 1000.0
             );
+        }
+    }
+
+    #[test]
+    fn gaussian_channels_and_blend() {
+        // Left half red, right half blue, opaque.
+        let mut src = Surface::new_transparent(20, 10);
+        for y in 0..10 {
+            for x in 0..20 {
+                let c = if x < 10 { (255, 0, 0) } else { (0, 0, 255) };
+                src.set(x, y, ColorBgra::from_rgba(c.0, c.1, c.2, 255));
+            }
+        }
+        let v = |r, g, b, a, mode| {
+            vec![
+                Value::Int(4),
+                Value::Bool(r),
+                Value::Bool(g),
+                Value::Bool(b),
+                Value::Bool(a),
+                Value::Choice(mode),
+            ]
+        };
+        let all = run("Gaussian Blur", v(true, true, true, true, 0), &src);
+        let plain = run("Gaussian Blur", vec![Value::Int(4)], &src);
+        assert_eq!(all, plain, "defaults are the plain blur");
+        // Only red blurred: blue keeps its hard edge.
+        let red = run("Gaussian Blur", v(true, false, false, true, 0), &src);
+        let at = |o: &[ColorBgra], x: usize| o[5 * 20 + x];
+        assert!(at(&red, 10).r > 0 && at(&red, 10).r < 255);
+        assert_eq!((at(&red, 9).b, at(&red, 10).b), (0, 255));
+        // Darken (BlendMode::ALL[11]) never brightens a channel.
+        let dark = run("Gaussian Blur", v(true, true, true, true, 11), &src);
+        for x in 0..20 {
+            assert!(at(&dark, x).r <= src.get(x as u32, 5).r);
+            assert!(at(&dark, x).b <= src.get(x as u32, 5).b);
         }
     }
 }

@@ -1,8 +1,6 @@
 //! Phase 8a: the effect framework through the Adjustments menu shortcuts.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use eframe::egui::{Key, Modifiers, PointerButton};
 use egui_kittest::kittest::Queryable;
 use pnn_core::{ColorBgra, Document, Layer, Surface};

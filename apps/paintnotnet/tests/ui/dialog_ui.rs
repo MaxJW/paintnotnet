@@ -1,8 +1,6 @@
 //! Effect and document dialogs: movable, previewing live behind them, Cancel reverts.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use eframe::egui::{Event, Key, Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::kittest::Queryable;
 use pnn_core::{ColorBgra, Document, Layer, Surface};

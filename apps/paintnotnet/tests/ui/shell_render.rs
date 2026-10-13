@@ -738,3 +738,94 @@ fn settings_and_palette_render() {
         image.save(format!("{dir}/shell-palette.png")).unwrap();
     }
 }
+
+fn effect_named(name: &str, category: pnn_effects::Category) -> Command {
+    let (id, _) = pnn_effects::effects_in(category)
+        .find(|(_, e)| e.name == name)
+        .unwrap();
+    Command::Effect(id)
+}
+
+/// The built-in Object and Selection effects' dialogs: Bevel Object (angle dial, colour
+/// section opened) over a red object, and Outline Selection (colour well, dropdowns) dashed
+/// around an elliptical selection.
+#[test]
+fn object_and_selection_dialogs_render() {
+    let mut h = harness();
+    {
+        let tab = h.state_mut().workspace_mut().active_mut().unwrap();
+        let a = tab.doc.active_index();
+        tab.doc.modify_layer(a, None, |l| {
+            l.surface = pnn_core::Surface::new_transparent(800, 600);
+            for y in 150..450 {
+                for x in 200..600 {
+                    let (dx, dy) = (x as f32 - 400.0, y as f32 - 300.0);
+                    if (dx / 200.0).powi(2) + (dy / 150.0).powi(2) <= 1.0 {
+                        l.surface
+                            .set(x, y, pnn_core::ColorBgra::from_rgba(210, 40, 40, 255));
+                    }
+                }
+            }
+        });
+    }
+    let ctx = h.ctx.clone();
+    h.state_mut().execute(
+        &ctx,
+        Triggered::once(effect_named("Bevel Object", pnn_effects::Category::Object)),
+    );
+    h.step();
+    // "Colors" is also the Colors window's title: open the dialog's section header.
+    h.get_by_role_and_label(eframe::egui::accesskit::Role::Button, "Colors")
+        .click();
+    for _ in 0..8 {
+        h.step();
+    }
+    let dump = std::env::var("PNN_RENDER_DUMP").ok();
+    if let Some(dir) = &dump
+        && let Ok(image) = h.render()
+    {
+        image.save(format!("{dir}/shell-bevel.png")).unwrap();
+    }
+    h.get_by_label("OK").click();
+    for _ in 0..4 {
+        h.step();
+    }
+    {
+        let tab = h.state_mut().workspace_mut().active_mut().unwrap();
+        tab.doc
+            .set_selection(pnn_core::Selection::ellipse(150.0, 120.0, 650.0, 480.0));
+    }
+    h.state_mut().execute(
+        &ctx,
+        Triggered::once(effect_named(
+            "Outline Selection",
+            pnn_effects::Category::Selection,
+        )),
+    );
+    h.step();
+    {
+        use pnn_effects::framework::Value;
+        let e = h.state_mut().effect_mut().unwrap();
+        e.set_values(
+            &ctx,
+            vec![
+                Value::Int(8),
+                Value::Color(pnn_core::ColorBgra::from_rgba(30, 90, 220, 255)),
+                Value::Choice(1),
+                Value::Choice(1),
+                Value::Choice(1),
+                Value::Bool(true),
+            ],
+        );
+    }
+    for _ in 0..8 {
+        h.step();
+    }
+    if let Some(dir) = &dump
+        && let Ok(image) = h.render()
+    {
+        image
+            .save(format!("{dir}/shell-outline-selection.png"))
+            .unwrap();
+    }
+}

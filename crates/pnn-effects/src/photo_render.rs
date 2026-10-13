@@ -17,7 +17,7 @@ use pnn_core::{BlendMode, ColorBgra, Rect, Surface};
 use crate::adjustments::BrightnessContrast;
 use crate::blurs::{LocalHistogram, Separable, tent};
 use crate::distort::{bilinear_clamped, perlin};
-use crate::framework::{EffectDef, Env, PropDef, Renderer, Value, intensity};
+use crate::framework::{ColorDefault, EffectDef, Env, PropDef, Renderer, Value, intensity};
 
 fn lerp_c(a: ColorBgra, b: ColorBgra, t: f64) -> ColorBgra {
     let l = |x: u8, y: u8| (x as f64 + (y as f64 - x as f64) * t).clamp(0.0, 255.0) as u8;
@@ -328,6 +328,7 @@ pub fn def(name: &str) -> Option<EffectDef> {
     let d = |name: &'static str, props: Vec<PropDef>, build| EffectDef {
         name,
         props,
+        unclipped: false,
         link: None,
         build,
     };
@@ -476,6 +477,7 @@ pub fn def(name: &str) -> Option<EffectDef> {
                     PropDef::choice("Blend mode", 0, &BLEND_NAMES),
                     PropDef::int("Seed", 0, 0, 255),
                 ],
+                unclipped: false,
                 link: None,
                 build: if turb {
                     |v: &[Value], src: &Surface, env: &Env| clouds(v, src, env, true)
@@ -584,8 +586,10 @@ pub fn def(name: &str) -> Option<EffectDef> {
                 PropDef::float("Angle", 45.0, -180.0, 180.0, 2),
                 PropDef::int("Opacity", 50, 0, 100),
                 PropDef::bool("Only draw shadow", false),
+                // Any colour (BoltBait's Drop Shadow Plus offered primary or secondary).
+                PropDef::color("Color", ColorDefault::Primary, false),
             ],
-            |v: &[Value], _, env: &Env| {
+            |v: &[Value], _, _: &Env| {
                 let (dist, ang) = (v[1].int() as f64, v[2].float().to_radians());
                 Box::new(DropShadow {
                     blur: Separable {
@@ -597,7 +601,7 @@ pub fn def(name: &str) -> Option<EffectDef> {
                         (dist * ang.cos()).round() as i64,
                         (dist * ang.sin()).round() as i64,
                     ],
-                    color: env.primary,
+                    color: v[5].color(),
                     opacity: v[3].int() as f64 / 100.0,
                     only_shadow: v[4].bool(),
                 })
@@ -675,8 +679,11 @@ mod tests {
             secondary: ColorBgra::WHITE,
             bounds: all,
             selection: None,
+            layers: Vec::new(),
+            active_layer: 0,
+            selection_contours: Default::default(),
         };
-        render_rect((d.build)(&values, src, &env).as_ref(), src, all)
+        render_rect(d.renderer(&values, src, &env).as_ref(), src, all)
     }
 
     #[test]

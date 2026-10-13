@@ -1,8 +1,6 @@
 //! Phase 9: Effects menu items through the effect framework.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use eframe::egui::Key;
 use egui_kittest::kittest::Queryable;
 use paintnotnet::commands::{Command, Triggered};

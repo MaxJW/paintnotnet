@@ -1,9 +1,7 @@
 //! Canvas view input: wheel zoom (default) and paint.net's wheel scrolling (Settings), and
 //! panning past the image edge.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use eframe::egui::{Event, Modifiers, MouseWheelUnit, PointerButton, Pos2, vec2};
 use egui_kittest::Harness;
 use paintnotnet::app::PaintNotNetApp;
