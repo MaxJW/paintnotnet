@@ -138,6 +138,18 @@ impl<F: Fn(ColorBgra) -> ColorBgra + Send + Sync> Renderer for PixelOp<F> {
     }
 }
 
+/// A per-pixel operation that also needs the pixel's position (e.g. seeded noise).
+pub struct PixelOpXY<F: Fn(ColorBgra, u32, u32) -> ColorBgra + Send + Sync>(pub F);
+
+impl<F: Fn(ColorBgra, u32, u32) -> ColorBgra + Send + Sync> Renderer for PixelOpXY<F> {
+    fn render_row(&self, src: &Surface, x0: u32, y: u32, out: &mut [ColorBgra]) {
+        for (i, o) in out.iter_mut().enumerate() {
+            let x = x0 + i as u32;
+            *o = (self.0)(src.get(x, y), x, y);
+        }
+    }
+}
+
 /// A per-channel lookup table on B, G, R (alpha kept): 3.36 `UnaryPixelOps.ChannelCurve`.
 pub struct ChannelCurve {
     pub b: [u8; 256],

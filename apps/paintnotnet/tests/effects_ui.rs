@@ -61,18 +61,15 @@ fn gaussian_blur_from_the_effects_menu() {
 }
 
 #[test]
-fn every_blur_opens_previews_and_cancels() {
-    for name in [
-        "Gaussian Blur",
-        "Motion Blur",
-        "Radial Blur",
-        "Zoom Blur",
-        "Fragment Blur",
-        "Median Blur",
-        "Surface Blur",
-        "Square Blur",
-        "Bokeh Blur",
-    ] {
+fn every_implemented_effect_opens_previews_and_cancels() {
+    let names: Vec<&str> = pnn_effects::EFFECTS
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| pnn_effects::effect_def(pnn_effects::EffectId(*i as u16)).is_some())
+        .map(|(_, e)| e.name)
+        .collect();
+    assert!(names.len() >= 28, "{names:?}");
+    for name in names {
         let mut h = harness_with(halves());
         let n = history_names(&h).len();
         run(&mut h, effect(name));

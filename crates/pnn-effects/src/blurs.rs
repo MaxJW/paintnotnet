@@ -73,7 +73,7 @@ pub fn bilinear(src: &Surface, x: f32, y: f32) -> ColorBgra {
 
 /// Weighted 1-D tent (r+1−|d|) of `a` (length L + 2r, index r = first output): out[j] for
 /// j in 0..L, via two running box sums.
-fn tent(a: &[i64], r: usize, out: &mut [i64]) {
+pub(crate) fn tent(a: &[i64], r: usize, out: &mut [i64]) {
     let n = a.len();
     let mut s = vec![0i64; n + 1];
     for i in 0..n {
@@ -103,9 +103,9 @@ fn boxed(a: &[i64], r: usize, out: &mut [i64]) {
 }
 
 /// Separable alpha-weighted blur with a 1-D kernel applied on both axes.
-struct Separable {
-    r: usize,
-    kernel: fn(&[i64], usize, &mut [i64]),
+pub(crate) struct Separable {
+    pub(crate) r: usize,
+    pub(crate) kernel: fn(&[i64], usize, &mut [i64]),
 }
 
 impl Renderer for Separable {
@@ -355,9 +355,10 @@ impl Renderer for Fragment {
 
 /// A disc-shaped sliding histogram (3.36 `LocalHistogramEffect.RenderRect`), with an
 /// operation on (source pixel, histograms, area).
-struct LocalHistogram<F: Fn(ColorBgra, &[[u32; 256]; 4], u32) -> ColorBgra + Send + Sync> {
-    radius: i32,
-    apply: F,
+pub(crate) struct LocalHistogram<F: Fn(ColorBgra, &[[u32; 256]; 4], u32) -> ColorBgra + Send + Sync>
+{
+    pub(crate) radius: i32,
+    pub(crate) apply: F,
 }
 
 impl<F: Fn(ColorBgra, &[[u32; 256]; 4], u32) -> ColorBgra + Send + Sync> Renderer

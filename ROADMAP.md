@@ -5,7 +5,7 @@ where you try it. A phase is only ticked off once its acceptance checks have bee
 shown passing.
 
 **Current state (2026-10-13):** Phases 0–8 are complete, verified and committed (Phase 5
-still awaits your sign-off on the feel). **Next: Phase 9b (Distort, Noise, Stylize, Artistic)**; 9a (Blurs) is done. After all phases, compare against the paint.net 5.1.12 release files the user provided
+still awaits your sign-off on the feel). **Next: Phase 9c (Photo, Render, Object, Color)**; 9a–9b are done. After all phases, compare against the paint.net 5.1.12 release files the user provided
 (`~/Downloads/paint.net.5.1.12.portable.x64`; the user states the owners gave permission).
 Functionality first: the user wants every feature working
 before the visual refresh (Phase 12).
@@ -198,8 +198,11 @@ Guessed or approximated (paint.net doesn't document them):
 - [x] Ported from 3.36: Gaussian (its tent kernel, alpha-weighted, computed with running sums: radius 200 on 4K in ~0.15 s), Motion, Radial, Zoom (fixed-point maths as 3.36), Fragment, Median (disc histogram percentile), Surface (3.36 intensity weights); 5.x-only with guessed maths: Square (alpha-weighted box), Bokeh (disc average)
 - **Verified 2026-10-13:** 3 engine tests (Gaussian vs a brute-force port of 3.36's O(r²) loop within ±1 at r = 1, 3, 7; every blur keeps flat areas; median/surface keep edges) and 2 UI tests (Gaussian from the menu previews, OK, Ctrl+F; every blur opens and Cancel restores exactly). CI passes (268 tests).
 - Differences/gaps: Median fixes 3.36's off-by-one percentile (3.36 brightened flat areas by one level); Radial/Zoom centres are two Offset numbers, not 3.36's pan control; Sketch Blur not implemented (no published maths); slow at extremes on 4K (Motion distance 200 ≈ 6 s, Radial ≈ 1.3 s) though the preview streams in without blocking.
-### 9b Distort, Noise, Stylize, Artistic
-- [ ] Bulge, Crystalize, Dents, Frosted Glass, Morphology, Pixelate, Polar Inversion, Tile Reflection, Twist; Add Noise, Reduce Noise; Edge Detect, Emboss, Outline, Relief; Ink Sketch, Oil Painting, Pencil Sketch
+### 9b ✅ Distort, Noise, Stylize, Artistic (+ Glow)
+- [x] Ported from 3.36: Bulge, Dents (`WarpEffectBase` + `PerlinNoise2D`), Frosted Glass, Pixelate, Polar Inversion, Tile Reflection, Twist (RGSS supersampling, clamped/wrapped/reflected bilinear sampling); Add Noise (3.36 normal lookup), Reduce Noise; Edge Detect, Relief, Emboss (3.36 angle kernels), Outline; Ink Sketch (BoltBait's, MIT), Oil Painting, Pencil Sketch; Glow (Photo, needed by Ink Sketch)
+- [x] 5.x-only, maths guessed: Crystalize (jittered Voronoi cells), Morphology (dilate/erode over a square)
+- **Verified 2026-10-13:** 6 engine tests (3.36 RGSS offsets, Perlin determinism, every distortion runs + neutral settings keep the image, Pixelate cells, Morphology dilate/erode, Emboss/Relief/Add Noise/Oil Painting known values) and the UI test now opens and cancels every implemented effect (28). A contact sheet of all effects at their defaults was checked by eye. CI passes (275 tests).
+- Differences: randomness (Add Noise, Frosted Glass, Dents, Crystalize) is a position hash with a Seed setting instead of 3.36's clock-seeded RNG, so previews match results; Edge Detect is 3.36's angle kernel, not 5.x's Prewitt/Sobel; Outline keeps 3.36's quirk of skipping empty blue bins for alpha.
 ### 9c Photo, Render, Object, Color
 - [ ] Glow, Red Eye Removal, Sharpen, Soften Portrait, Straighten, Vignette; Clouds, Julia, Mandelbrot, Turbulence; Drop Shadow; Quantize
 

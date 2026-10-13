@@ -281,14 +281,14 @@ fn auto_level(src: &pnn_core::Surface, bounds: pnn_core::Rect) -> ChannelCurve {
 }
 
 /// 3.36 `BrightnessAndContrastAdjustment`: a table indexed by (intensity, channel value).
-struct BrightnessContrast {
+pub(crate) struct BrightnessContrast {
     table: Vec<u8>,
     /// Contrast +100: threshold on intensity.
     threshold: bool,
 }
 
 impl BrightnessContrast {
-    fn new(brightness: i32, contrast: i32) -> Self {
+    pub(crate) fn new(brightness: i32, contrast: i32) -> Self {
         let (multiply, divide) = match contrast {
             c if c < 0 => (c + 100, 100),
             c if c > 0 => (100, 100 - c),

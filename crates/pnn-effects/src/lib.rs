@@ -6,9 +6,11 @@
 pub mod adjustments;
 pub mod blurs;
 pub mod curves;
+pub mod distort;
 pub mod feather;
 pub mod framework;
 pub mod rotate_zoom;
+pub mod stylize;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Adjustment {
@@ -218,6 +220,8 @@ pub fn effects_in(category: Category) -> impl Iterator<Item = (EffectId, &'stati
 pub fn effect_def(id: EffectId) -> Option<framework::EffectDef> {
     let name = effect(id).name;
     blurs::def(name)
+        .or_else(|| distort::def(name))
+        .or_else(|| stylize::def(name))
 }
 
 #[cfg(test)]
