@@ -182,6 +182,7 @@ Guessed or approximated (paint.net doesn't document them):
 - Differences: Hue / Saturation doesn't round HSV to whole percents as 3.36 did (that banded photos); the 5.x docs' description of Saturation "starting at zero" conflicts with their own example, so 3.36's 0–200 (default 100) is kept; Auto-Level's histogram covers the selection's bounding box, not just selected pixels; the 5.x-only adjustments have no shortcuts (none documented).
 ### 8c Curves and Levels
 - [ ] Curves (luminosity / RGB, editable points), Levels (histograms, in/out, gamma, per channel)
+- Notes for starting 8c (read 2026-10-13, nothing written yet): 3.36 `Effects/CurvesEffectConfigToken.cs` builds tables with `Core/SplineInterpolator.cs` (Numerical Recipes natural cubic spline) through integer control points, default (0,0),(255,255); Luminosity mode = `UnaryPixelOps.LuminosityCurve` (shift RGB by curve[intensity] − intensity), RGB mode = `ChannelCurve` with R/G/B checkboxes. Levels = `UnaryPixelOps.Level` (already ported as `adjustments::level_curve`) + `Effects/LevelsEffectConfigDialog.cs`; Auto button = `auto_level`. 5.x docs saved in `reference/pdn5-docs/Curves.html`, `Levels.html` (left-click adds/drags points, right-click removes; Levels input black/white, output black/grey/white, R/G/B checkboxes, histograms).
 
 ## Phase 9: Stock effects
 - [ ] Artistic, Blurs, Color, Distort, Noise, Object (Drop Shadow), Photo, Render, Stylize (full list in the inventory)
