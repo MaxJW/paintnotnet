@@ -4,8 +4,9 @@ Design and rationale: [PLAN.md](PLAN.md). Each phase ends with a usable app and 
 where you try it. A phase is only ticked off once its acceptance checks have been run and
 shown passing.
 
-**Current state (2026-10-13):** Phases 0–8 are complete, verified and committed (Phase 5
-still awaits your sign-off on the feel). **Next: Phase 9c (Photo, Render, Object, Color)**; 9a–9b are done. After all phases, compare against the paint.net 5.1.12 release files the user provided
+**Current state (2026-10-13):** Phases 0–9 are complete, verified and committed (Phase 5
+still awaits your sign-off on the feel). Phase 9 (stock effects) is done except Sketch Blur. **Next: Phase 10 (BoltBait-class
+built-ins).** After all phases, compare against the paint.net 5.1.12 release files the user provided
 (`~/Downloads/paint.net.5.1.12.portable.x64`; the user states the owners gave permission).
 Functionality first: the user wants every feature working
 before the visual refresh (Phase 12).
@@ -192,7 +193,7 @@ Guessed or approximated (paint.net doesn't document them):
 - **Verified:** dialog drag test (moves with the title bar, still usable), Feather Object previews on open, changes live, Cancel reverts with no history step; WebP engine test (lossless exact incl. alpha, lossy close and smaller) and a UI test (Ctrl+S on a .webp → settings → Lossless → OK → file loads back pixel-exact). CI passes (256 tests).
 - Not done: WebP metadata (EXIF/ICC/XMP) and animation, which pdn-webp keeps; document-dialog effects (Feather Object etc.) still render on the UI thread, so very large images preview slower than the adjustments do.
 
-## Phase 9: Stock effects
+## Phase 9: Stock effects ✅ (except Sketch Blur)
 ### 9a ✅ Blurs
 - [x] Effects menu items run through the effect framework (live tiled preview, movable dialog, OK/Cancel, Repeat); renderers can now render whole rectangles (`render_rect`) to share work across rows; history entries use 3.36's effect icons
 - [x] Ported from 3.36: Gaussian (its tent kernel, alpha-weighted, computed with running sums: radius 200 on 4K in ~0.15 s), Motion, Radial, Zoom (fixed-point maths as 3.36), Fragment, Median (disc histogram percentile), Surface (3.36 intensity weights); 5.x-only with guessed maths: Square (alpha-weighted box), Bokeh (disc average)
@@ -203,8 +204,11 @@ Guessed or approximated (paint.net doesn't document them):
 - [x] 5.x-only, maths guessed: Crystalize (jittered Voronoi cells), Morphology (dilate/erode over a square)
 - **Verified 2026-10-13:** 6 engine tests (3.36 RGSS offsets, Perlin determinism, every distortion runs + neutral settings keep the image, Pixelate cells, Morphology dilate/erode, Emboss/Relief/Add Noise/Oil Painting known values) and the UI test now opens and cancels every implemented effect (28). A contact sheet of all effects at their defaults was checked by eye. CI passes (275 tests).
 - Differences: randomness (Add Noise, Frosted Glass, Dents, Crystalize) is a position hash with a Seed setting instead of 3.36's clock-seeded RNG, so previews match results; Edge Detect is 3.36's angle kernel, not 5.x's Prewitt/Sobel; Outline keeps 3.36's quirk of skipping empty blue bins for alpha.
-### 9c Photo, Render, Object, Color
-- [ ] Glow, Red Eye Removal, Sharpen, Soften Portrait, Straighten, Vignette; Clouds, Julia, Mandelbrot, Turbulence; Drop Shadow; Quantize
+### 9c ✅ Photo, Render, Object, Color
+- [x] Ported from 3.36: Sharpen, Red Eye Removal, Soften Portrait (BoltBait's, MIT), Vignette (linear light, `SrgbUtility`), Clouds (its Perlin cells + blend mode), Julia Fractal, Mandelbrot Fractal
+- [x] 5.x-only, maths guessed: Straighten (rotate ±45°, zoomed to fill), Turbulence (absolute-value cloud octaves), Drop Shadow (blurred offset alpha in the primary colour under the object; radius, distance, angle, opacity, only-shadow), Quantize (median cut, 2–256 colours, ordered dithering 0–8)
+- **Verified 2026-10-13:** 4 engine tests (all run; drop shadow falls down-right under the object; Quantize limits colours, Straighten 0° is identity; Clouds seeded and spanning both colours); the UI test opens/cancels every effect (39 now); contact sheet checked. CI passes (279 tests).
+- Differences: Drop Shadow's colour is the primary colour (the framework has no colour property yet); Quantize has no Octree option and dithers with a 4×4 Bayer matrix, not error diffusion; Sharpen fixes the same off-by-one percentile as Median.
 
 ## Phase 10: BoltBait-class built-ins
 - [ ] Ask you which ones you actually used, then build in that order. Likely first: Outline Object/Selection, Inner Shadow, Bevel, Drop Shadow Plus, Switch Alpha↔Gray, Apply Alpha Mask, Transparency, Color Balance

@@ -9,6 +9,7 @@ pub mod curves;
 pub mod distort;
 pub mod feather;
 pub mod framework;
+pub mod photo_render;
 pub mod rotate_zoom;
 pub mod stylize;
 
@@ -222,6 +223,7 @@ pub fn effect_def(id: EffectId) -> Option<framework::EffectDef> {
     blurs::def(name)
         .or_else(|| distort::def(name))
         .or_else(|| stylize::def(name))
+        .or_else(|| photo_render::def(name))
 }
 
 #[cfg(test)]

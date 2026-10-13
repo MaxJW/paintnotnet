@@ -153,6 +153,20 @@ pub mod perlin {
         lerp(e1, e2, v)
     }
 
+    /// One noise cell at lattice (ix, iy) with fractional (x, y): 3.36 Clouds' `Noise`.
+    pub fn noise_cell(ix: u8, iy: u8, x: f64, y: f64, seed: u8) -> f64 {
+        let (u, v) = (fade(x), fade(y));
+        let (ix, iy, s) = (ix as usize, iy as usize, seed as usize);
+        let a = p(ix + s) + iy;
+        let (aa, ab) = (p(a), p(a + 1));
+        let b = p(ix + 1 + s) + iy;
+        let (ba, bb) = (p(b), p(b + 1));
+        let lerp = |a: f64, b: f64, t: f64| a + t * (b - a);
+        let e1 = lerp(grad(p(aa), x, y), grad(p(ba), x - 1.0, y), u);
+        let e2 = lerp(grad(p(ab), x, y - 1.0), grad(p(bb), x - 1.0, y - 1.0), u);
+        lerp(e1, e2, v)
+    }
+
     /// Octaved, rotated noise as 3.36's `Noise(x, y, detail, roughness, seed)`.
     pub fn noise(mut x: f64, mut y: f64, detail: f64, roughness: f64, seed: u8) -> f64 {
         let a = 137.2f64.to_radians();
