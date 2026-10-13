@@ -5,7 +5,7 @@ where you try it. A phase is only ticked off once its acceptance checks have bee
 shown passing.
 
 **Current state (2026-10-13):** Phases 0–5 are complete, verified and committed (Phase 5
-still awaits your sign-off on the feel). **Next: Phase 6 (painting and fill tools).**
+still awaits your sign-off on the feel). **Next: Phase 6b (Paint Bucket and Gradient)**; 6a (Paintbrush, Eraser) is done.
 Functionality first: the user wants every feature working
 before the visual refresh (Phase 12).
 
@@ -129,10 +129,19 @@ Guessed or approximated (paint.net doesn't document them):
 - Guessed (no 3.36 source, 5.x docs give no maths): profile curves, Feather Object's threshold semantics, the overlay tint colour. Adjust after you try it.
 
 ## Phase 6: Painting and fill tools
-- [ ] Paintbrush: size (fractional), hardness, spacing, smoothing, antialiasing, blend mode, fill style, [ ] and Ctrl+[ ]
-- [ ] Eraser, Paint Bucket (tolerance, flood mode, sampling, Shift toggle), Gradient (7 types, colour/transparency, 3 repeat modes, editable nubs, Shift 15°)
-- [ ] Color Picker (layer/image, sample size, after-click behaviour, Ctrl samples image), Recolor, Clone Stamp (Ctrl+click source)
-- [ ] Tool blend modes and the Overwrite mode
+### 6a ✅ Paintbrush, Eraser, blend modes
+- [x] Paintbrush (`pnn-tools::brush`): size (fractional), hardness, spacing, smoothing, antialiasing, blend mode, fill style (Solid + 6 hatches), [ ] and Ctrl+[ ]; left = primary, right = secondary; brush outline at the pointer; one history step per stroke, committed on tool change too
+- [x] Eraser (alpha × (1 − coverage), colour kept, as 3.36's `EraserTool`)
+- [x] Tool blend modes and the Overwrite mode (coverage-weighted replace)
+- [x] Strokes honour the (soft) selection; a stroke never builds up over itself
+- **Verified 2026-10-13:** 13 engine tests (dab profile, aliased symmetry, continuity, no build-up, spacing carry, smoothing through samples, erase/overwrite, hatches) and 6 UI tests (stroke + undo, secondary + no build-up, selection clip, Eraser, Overwrite, tool switch mid-stroke). Render checked. Real display, 3840×2160 image, a pointer move per frame (`PNN_SMOKE_BRUSH=<width>`): 164.8 fps at widths 20, 200 and 800 (p99 ≤ 6.5 ms). CI passes (189 tests).
+- Guessed (5.x doesn't publish them): the hardness falloff (smoothstep from r·h − ½ to r + ½), sweeping between dabs up to 50% spacing, Catmull-Rom smoothing one sample behind, the hatch set and its 8×8 phase (3.36 had GDI+'s 53 hatches). Pressure is not supported (no tablet).
+### 6b Paint Bucket and Gradient
+- [ ] Paint Bucket (tolerance, flood mode, sampling, Shift toggle, fill style, antialiasing, blend)
+- [ ] Gradient (7 types, colour/transparency, 3 repeat modes, editable nubs, Shift 15°, right-drag swaps colours)
+### 6c Color Picker, Recolor, Clone Stamp
+- [ ] Color Picker (layer/image, sample size, after-click behaviour, Ctrl samples image)
+- [ ] Recolor, Clone Stamp (Ctrl+click source)
 
 ## Phase 7: Text, Line/Curve, Shapes
 - [ ] Text tool: font, size, style, alignment; editable until Finish/Esc

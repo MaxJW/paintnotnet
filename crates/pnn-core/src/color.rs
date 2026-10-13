@@ -49,6 +49,21 @@ impl ColorBgra {
     }
 }
 
+/// Mix `a` towards `b` by `t`/255 in premultiplied space (straight alpha in and out). Used for
+/// coverage-weighted Overwrite and soft selection edges.
+pub fn lerp_premultiplied(a: ColorBgra, b: ColorBgra, t: u8) -> ColorBgra {
+    let t = t as u32;
+    let (aa, ba) = (a.a as u32, b.a as u32);
+    let out_a = (aa * (255 - t) + ba * t) / 255;
+    if out_a == 0 {
+        return ColorBgra::TRANSPARENT;
+    }
+    let ch = |x: u8, y: u8| {
+        ((x as u32 * aa * (255 - t) + y as u32 * ba * t) / (out_a * 255)).min(255) as u8
+    };
+    ColorBgra::from_bgra(ch(a.b, b.b), ch(a.g, b.g), ch(a.r, b.r), out_a as u8)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

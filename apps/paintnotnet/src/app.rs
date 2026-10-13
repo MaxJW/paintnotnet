@@ -74,6 +74,7 @@ pub struct PaintNotNetApp {
     pub(crate) doc_dialog: Option<crate::doc_dialogs::DocDialog>,
     /// Pencil stroke in progress.
     pub(crate) stroke: Option<crate::actions::PencilStroke>,
+    pub(crate) brush: Option<crate::paint_tools::BrushStroke>,
     /// Selection being drawn.
     pub(crate) select_drag: Option<crate::selection_tools::SelectDrag>,
     /// Keyboard modifiers this frame (tools read Shift etc. mid-drag).
@@ -135,6 +136,7 @@ impl PaintNotNetApp {
             units: Units::Pixels,
             doc_dialog: None,
             stroke: None,
+            brush: None,
             select_drag: None,
             modifiers: egui::Modifiers::NONE,
             move_session: None,
@@ -211,6 +213,7 @@ impl PaintNotNetApp {
     pub fn set_tool(&mut self, tool: ToolKind) {
         if tool != self.tool {
             self.finish_move();
+            self.finish_brush_stroke();
             self.previous_tool = self.tool;
             self.tool = tool;
         }
@@ -684,6 +687,7 @@ impl PaintNotNetApp {
         let Some(smoke) = &mut self.smoke else { return };
         let started = *smoke.started.get_or_insert(now);
         let elapsed = now - started;
+        let duration = smoke.duration;
         // PNN_SMOKE_FEATHER=1: drag the feather radius every frame on a large selection with
         // the preview overlay on (the live-slider case), instead of sweeping the view.
         if std::env::var_os("PNN_SMOKE_FEATHER").is_some() {
@@ -703,6 +707,30 @@ impl PaintNotNetApp {
                 };
                 tab.doc.set_selection(base.with_feather(feather));
             }
+        } else if let Ok(width) = std::env::var("PNN_SMOKE_BRUSH") {
+            // PNN_SMOKE_BRUSH=<width>: paint one long Paintbrush stroke, a pointer move per
+            // frame, across the image.
+            let Some(tab) = self.workspace.active() else {
+                return;
+            };
+            let (w, h) = (tab.doc.width() as f64, tab.doc.height() as f64);
+            let t = elapsed.as_secs_f64();
+            let pos = [
+                w * (0.5 + 0.42 * (t * 0.8).cos()),
+                h * (0.5 + 0.4 * (t * 1.9).sin()),
+            ];
+            if self.brush.is_none() {
+                self.tool = ToolKind::Paintbrush;
+                self.settings.brush_width = width.parse().unwrap_or(50.0);
+                self.settings.primary = pnn_core::ColorBgra::from_rgba(200, 40, 40, 160);
+                self.brush_tool_event(crate::canvas::ToolEvent::Down {
+                    pos,
+                    button: crate::canvas::ToolButton::Primary,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            } else {
+                self.brush_tool_event(crate::canvas::ToolEvent::Move { pos });
+            }
         } else if let Some(tab) = self.workspace.active_mut() {
             // Sweep zoom (about 1%–800%) and pan so the canvas redraws every frame.
             let vp = self.canvas.viewport;
@@ -718,7 +746,7 @@ impl PaintNotNetApp {
                 view.clamp(img, vp);
             }
         }
-        if elapsed < smoke.duration {
+        if elapsed < duration {
             return;
         }
         let env = self.diagnostics.environment();
@@ -1199,6 +1227,7 @@ impl eframe::App for PaintNotNetApp {
         }
 
         self.canvas.tool_cursor = match self.tool {
+            ToolKind::Paintbrush | ToolKind::Eraser => Some(egui::CursorIcon::Crosshair),
             ToolKind::Pencil
             | ToolKind::RectangleSelect
             | ToolKind::EllipseSelect
@@ -1208,6 +1237,8 @@ impl eframe::App for PaintNotNetApp {
             _ => None,
         };
         self.canvas.handles = self.move_handles();
+        self.canvas.brush_outline = matches!(self.tool, ToolKind::Paintbrush | ToolKind::Eraser)
+            .then_some(self.settings.brush_width);
         let preview = self.row2.feather_preview
             || self
                 .doc_dialog

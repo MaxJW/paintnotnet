@@ -350,6 +350,7 @@ impl PaintNotNetApp {
         for event in events {
             match self.tool {
                 ToolKind::Pencil => self.pencil(event),
+                ToolKind::Paintbrush | ToolKind::Eraser => self.brush_tool_event(event),
                 ToolKind::RectangleSelect
                 | ToolKind::EllipseSelect
                 | ToolKind::LassoSelect

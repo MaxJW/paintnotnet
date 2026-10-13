@@ -2936,6 +2936,7 @@ name = "pnn-tools"
 version = "0.1.0"
 dependencies = [
  "pnn-core",
+ "rayon",
 ]
 
 [[package]]

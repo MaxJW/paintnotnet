@@ -50,6 +50,8 @@ pub struct CanvasState {
     pub tool_cursor: Option<egui::CursorIcon>,
     /// Feather preview: (mask identity, coverage) to tint outside of, set by the app.
     pub overlay: Option<(u64, std::sync::Arc<pnn_core::Mask>)>,
+    /// Brush outline diameter (image px) to draw around the pointer.
+    pub brush_outline: Option<f32>,
     /// Move tool nubs to draw (image coordinates).
     pub handles: Option<[[f64; 2]; 8]>,
     pub pixel_grid: bool,
@@ -326,9 +328,24 @@ pub fn show(
             );
         }
     }
+    // The brush outline around the pointer (paint.net's `BrushPreviewRenderer`).
+    if let (Some(d), Some(cur)) = (state.brush_outline, state.cursor)
+        && ui.rect_contains_pointer(canvas_rect)
+    {
+        let sp = view.image_to_screen(cur, vp);
+        let c = egui::pos2(
+            canvas_rect.min.x + (sp[0] / ppp) as f32,
+            canvas_rect.min.y + (sp[1] / ppp) as f32,
+        );
+        let r = (d as f64 / 2.0 * view.zoom / ppp) as f32;
+        if r >= 2.0 {
+            let painter = ui.painter().with_clip_rect(canvas_rect);
+            painter.circle_stroke(c, r + 1.0, egui::Stroke::new(1.0, egui::Color32::WHITE));
+            painter.circle_stroke(c, r, egui::Stroke::new(1.0, egui::Color32::BLACK));
+        }
+    }
 }
 
-/// Upload composite tiles whose revision differs from what the GPU holds.
 /// Upload the feather-preview mask when it changed since the last upload.
 fn sync_overlay(
     gpu: &egui_wgpu::RenderState,

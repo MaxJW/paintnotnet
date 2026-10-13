@@ -327,6 +327,10 @@ fn options(
             }
             sep(ui);
             ui.checkbox(&mut s.smoothing, "Smoothing");
+            if tool == Paintbrush {
+                sep(ui);
+                fill_style(ui, s);
+            }
             sep(ui);
             antialiasing(ui, s, icons);
             if tool != Eraser {
@@ -637,6 +641,24 @@ fn antialiasing(ui: &mut egui::Ui, s: &mut ToolSettings, icons: &Icons) {
     if icon_button(ui, icons, icon, name, true, false).clicked() {
         s.antialiasing = !s.antialiasing;
     }
+}
+
+/// Solid colour or a hatch (primary on secondary), as paint.net's Fill dropdown.
+fn fill_style(ui: &mut egui::Ui, s: &mut ToolSettings) {
+    let name = |f: FillStyle| match f {
+        FillStyle::Solid => "Solid Color",
+        FillStyle::Hatch(i) => brush::HATCHES[(i as usize).min(brush::HATCHES.len() - 1)],
+    };
+    ui.label("Fill:");
+    egui::ComboBox::from_id_salt("fill_style")
+        .selected_text(name(s.fill))
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut s.fill, FillStyle::Solid, name(FillStyle::Solid));
+            for i in 0..brush::HATCHES.len() as u8 {
+                let f = FillStyle::Hatch(i);
+                ui.selectable_value(&mut s.fill, f, name(f));
+            }
+        });
 }
 
 fn blend(ui: &mut egui::Ui, s: &mut ToolSettings, icons: &Icons) {

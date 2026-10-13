@@ -286,3 +286,91 @@ fn feather_preview_render() {
             .unwrap();
     }
 }
+
+/// Paintbrush strokes through real pointer events: a soft, half-transparent loop that
+/// crosses itself (no build-up), a hatched stroke, and the brush outline at the pointer.
+#[test]
+fn paintbrush_render() {
+    use eframe::egui::{Event, Modifiers, PointerButton, Pos2};
+    let mut h = harness();
+    h.state_mut().set_tool(pnn_tools::ToolKind::Paintbrush);
+    h.step();
+    let to_screen = |h: &Harness<'_, PaintNotNetApp>, x: f64, y: f64| {
+        let rect = h.state().canvas().rect.unwrap();
+        let view = h.state().workspace().active().unwrap().view.unwrap();
+        let s = view.image_to_screen([x, y], [rect.width() as f64, rect.height() as f64]);
+        Pos2::new(rect.min.x + s[0] as f32, rect.min.y + s[1] as f32)
+    };
+    let stroke = |h: &mut Harness<'_, PaintNotNetApp>, pts: &[(f64, f64)], release: bool| {
+        h.event(Event::PointerMoved(to_screen(h, pts[0].0, pts[0].1)));
+        h.step();
+        let press = |pressed, pos| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        h.event(press(true, to_screen(h, pts[0].0, pts[0].1)));
+        h.step();
+        for &(x, y) in &pts[1..] {
+            h.event(Event::PointerMoved(to_screen(h, x, y)));
+            h.step();
+        }
+        if release {
+            let last = *pts.last().unwrap();
+            h.event(press(false, to_screen(h, last.0, last.1)));
+            h.step();
+        }
+    };
+    {
+        let s = h.state_mut().settings_mut();
+        s.brush_width = 50.0;
+        s.hardness = 0;
+        s.primary = pnn_core::ColorBgra::from_rgba(200, 30, 30, 160);
+    }
+    let lp: Vec<(f64, f64)> = (0..=40)
+        .map(|i| {
+            let t = i as f64 / 40.0 * std::f64::consts::TAU * 1.25;
+            (250.0 + 150.0 * t.cos(), 250.0 + 120.0 * (2.0 * t).sin())
+        })
+        .collect();
+    stroke(&mut h, &lp, true);
+    {
+        let s = h.state_mut().settings_mut();
+        s.brush_width = 60.0;
+        s.hardness = 100;
+        s.primary = pnn_core::ColorBgra::from_rgba(20, 60, 200, 255);
+        s.secondary = pnn_core::ColorBgra::from_rgba(255, 220, 120, 255);
+        s.fill = pnn_tools::FillStyle::Hatch(5);
+    }
+    stroke(
+        &mut h,
+        &[
+            (480.0, 120.0),
+            (560.0, 250.0),
+            (640.0, 300.0),
+            (720.0, 480.0),
+        ],
+        true,
+    );
+    h.event(Event::PointerMoved(to_screen(&h, 600.0, 520.0)));
+    for _ in 0..3 {
+        h.step();
+    }
+    let names: Vec<String> = h
+        .state()
+        .workspace()
+        .active()
+        .unwrap()
+        .history
+        .entries()
+        .iter()
+        .map(|e| e.name.clone())
+        .collect();
+    assert_eq!(names.iter().filter(|n| *n == "Paintbrush").count(), 2);
+    if let Ok(dir) = std::env::var("PNN_RENDER_DUMP")
+        && let Ok(image) = h.render()
+    {
+        image.save(format!("{dir}/shell-paintbrush.png")).unwrap();
+    }
+}

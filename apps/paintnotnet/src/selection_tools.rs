@@ -411,22 +411,7 @@ pub fn fill_masked(surface: &mut pnn_core::Surface, mask: &Mask, color: pnn_core
     }
 }
 
-pub fn lerp_premultiplied(
-    a: pnn_core::ColorBgra,
-    b: pnn_core::ColorBgra,
-    t: u8,
-) -> pnn_core::ColorBgra {
-    let t = t as u32;
-    let (aa, ba) = (a.a as u32, b.a as u32);
-    let out_a = (aa * (255 - t) + ba * t) / 255;
-    if out_a == 0 {
-        return pnn_core::ColorBgra::TRANSPARENT;
-    }
-    let ch = |x: u8, y: u8| {
-        ((x as u32 * aa * (255 - t) + y as u32 * ba * t) / (out_a * 255)).min(255) as u8
-    };
-    pnn_core::ColorBgra::from_bgra(ch(a.b, b.b), ch(a.g, b.g), ch(a.r, b.r), out_a as u8)
-}
+pub use pnn_core::color::lerp_premultiplied;
 
 /// Crop a layer to `r`, clearing pixels outside the selection to transparent.
 fn crop_masked(surface: &pnn_core::Surface, mask: &Mask, r: pnn_core::Rect) -> pnn_core::Surface {

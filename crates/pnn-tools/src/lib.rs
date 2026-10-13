@@ -5,6 +5,7 @@
 //! "Name: help" as paint.net 5 does. Tools window order and shortcut letters are from the
 //! paint.net 5 docs (`ToolsWindow.html`, `KeyboardMouseCommands.html`).
 
+pub mod brush;
 pub mod settings;
 
 pub use settings::*;
