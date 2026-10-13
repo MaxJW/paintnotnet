@@ -4,6 +4,7 @@
 //! Menu contents follow the paint.net 5 docs (`AdjustmentsMenu.html`, `Effects*Menu.html`).
 
 pub mod adjustments;
+pub mod curves;
 pub mod feather;
 pub mod framework;
 pub mod rotate_zoom;

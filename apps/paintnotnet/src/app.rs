@@ -102,6 +102,7 @@ pub struct PaintNotNetApp {
     pub(crate) last_applied: Option<(
         crate::effect_runner::EffectRef,
         Vec<pnn_effects::framework::Value>,
+        Option<crate::effect_runner::Custom>,
     )>,
     /// Selection revision the toolbar's feather fields were last synced from.
     pub(crate) synced_selection: u64,

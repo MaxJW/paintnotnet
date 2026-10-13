@@ -201,7 +201,9 @@ impl Command {
             return IMPLEMENTED_EFFECTS.contains(&pnn_effects::effect(id).name);
         }
         if let C::Adjustment(a) = self {
-            return pnn_effects::adjustments::def(a).is_some();
+            return crate::effect_runner::EffectRef::Adjustment(a)
+                .def()
+                .is_some();
         }
         matches!(
             self,

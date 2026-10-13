@@ -132,3 +132,90 @@ fn hue_saturation_dialog_and_auto_level() {
     press(&mut h, ctrl_shift(), Key::L);
     assert_eq!(history_names(&h).last().unwrap(), "Auto-Level");
 }
+
+/// Drag in screen space.
+fn screen_drag(h: &mut H<'_>, button: PointerButton, pts: &[eframe::egui::Pos2]) {
+    use eframe::egui::Event;
+    h.event(Event::PointerMoved(pts[0]));
+    h.step();
+    let b = |pressed, pos| Event::PointerButton {
+        pos,
+        button,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    h.event(b(true, pts[0]));
+    h.step();
+    for &p in &pts[1..] {
+        h.event(Event::PointerMoved(p));
+        h.step();
+    }
+    h.event(b(false, *pts.last().unwrap()));
+    h.step();
+    h.step();
+}
+
+#[test]
+fn curves_drag_adds_a_point_and_previews() {
+    let mut h = harness_with(ramp());
+    press(&mut h, ctrl_shift(), Key::M);
+    settle(&mut h);
+    let g = h.get_by_label("Curve graph").rect();
+    // Grab the diagonal at input 128 and pull it up to output ~200.
+    let at = |x: f32, y: f32| {
+        eframe::egui::pos2(
+            g.left() + x / 255.0 * g.width(),
+            g.bottom() - y / 255.0 * g.height(),
+        )
+    };
+    screen_drag(
+        &mut h,
+        PointerButton::Primary,
+        &[at(128.0, 128.0), at(128.0, 160.0), at(128.0, 200.0)],
+    );
+    settle(&mut h);
+    // x = 50 has v = 128: brightened live, before OK.
+    let v = doc(&h).layer(0).surface.get(50, 40).r;
+    assert!((190..=210).contains(&v), "live curve preview: {v}");
+    // Right-click the point to remove it: back to identity.
+    screen_drag(&mut h, PointerButton::Secondary, &[at(128.0, 200.0)]);
+    settle(&mut h);
+    assert_eq!(doc(&h).layer(0).surface.get(50, 40).r, 128);
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert_eq!(history_names(&h).last().unwrap(), "Curves");
+}
+
+#[test]
+fn levels_auto_button_stretches_then_ok() {
+    // A narrow ramp 60..=159.
+    let mut s = Surface::new_transparent(100, 80);
+    for y in 0..80 {
+        for x in 0..100 {
+            let v = 60 + x as u8;
+            s.set(x, y, ColorBgra::from_rgba(v, v, v, 255));
+        }
+    }
+    let mut h = harness_with(Document::from_layers(100, 80, vec![Layer::new("B", s)]));
+    press(&mut h, ctrl(), Key::L);
+    settle(&mut h);
+    assert_eq!(
+        doc(&h).layer(0).surface.get(0, 0).r,
+        60,
+        "defaults change nothing"
+    );
+    h.get_by_label("Auto").click();
+    settle(&mut h);
+    let s = &doc(&h).layer(0).surface;
+    assert_eq!(
+        (s.get(0, 0).r, s.get(99, 0).r),
+        (0, 255),
+        "auto levels previewed"
+    );
+    h.get_by_label("OK").click();
+    settle(&mut h);
+    assert_eq!(history_names(&h).last().unwrap(), "Levels");
+    // Ctrl+F repeats Levels with the same (custom) settings.
+    let n = history_names(&h).len();
+    press(&mut h, ctrl(), Key::F);
+    assert_eq!(history_names(&h).len(), n + 1);
+}

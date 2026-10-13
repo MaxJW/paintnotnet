@@ -14,6 +14,7 @@ use std::sync::mpsc::{Receiver, channel};
 use eframe::egui;
 use pnn_core::{ColorBgra, Mask, Rect, Surface, TILE_SIZE, Tile, TileCoord};
 use pnn_effects::Adjustment;
+use pnn_effects::curves::{self, Curves, Histogram, Levels, Points};
 use pnn_effects::framework::{EffectDef, Env, PropKind, Renderer, Value};
 
 use crate::app::PaintNotNetApp;
@@ -28,7 +29,26 @@ pub enum EffectRef {
 impl EffectRef {
     pub fn def(self) -> Option<EffectDef> {
         match self {
+            // Custom dialogs: the settings live in `Custom`, not properties.
+            Self::Adjustment(a @ (Adjustment::Curves | Adjustment::Levels)) => Some(EffectDef {
+                name: a.name(),
+                props: Vec::new(),
+                link: None,
+                build: |_, _, _| Box::new(pnn_effects::framework::PixelOp(|c| c)),
+            }),
             Self::Adjustment(a) => pnn_effects::adjustments::def(a),
+        }
+    }
+
+    /// Settings for effects with their own dialog.
+    fn custom(self, src: &Surface, bounds: Rect) -> Option<Custom> {
+        match self {
+            Self::Adjustment(Adjustment::Curves) => Some(Custom::Curves(Curves::default())),
+            Self::Adjustment(Adjustment::Levels) => Some(Custom::Levels {
+                levels: Levels::default(),
+                input: Box::new(Histogram::of(src, bounds)),
+            }),
+            _ => None,
         }
     }
     /// History icon: the menu icon, or a near one for 5.x-only adjustments.
@@ -42,10 +62,22 @@ impl EffectRef {
     }
 }
 
+/// Settings of effects with a custom dialog (Curves, Levels).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Custom {
+    Curves(Curves),
+    Levels {
+        levels: Levels,
+        /// Histogram of the source (the dialog's input histogram); boxed, it's 6 KiB.
+        input: Box<Histogram>,
+    },
+}
+
 type TileResult = (TileCoord, Option<Arc<Tile<ColorBgra>>>);
 
 struct Job {
     values: Vec<Value>,
+    custom: Option<Custom>,
     rx: Receiver<TileResult>,
     cancel: Arc<AtomicBool>,
     total: usize,
@@ -58,6 +90,9 @@ pub struct EffectSession {
     target: EffectRef,
     def: EffectDef,
     pub values: Vec<Value>,
+    pub custom: Option<Custom>,
+    /// Curves: the point being dragged in each edited channel.
+    grab: Vec<Option<u8>>,
     before: Surface,
     selection: Option<Arc<Mask>>,
     env: Env,
@@ -132,14 +167,22 @@ impl EffectSession {
     }
 
     /// Start rendering the current values in the background.
+    fn renderer(&self) -> Box<dyn Renderer> {
+        match &self.custom {
+            Some(Custom::Curves(c)) => c.renderer(),
+            Some(Custom::Levels { levels, .. }) => levels.renderer(),
+            None => (self.def.build)(&self.values, &self.before, &self.env),
+        }
+    }
+
     fn spawn(&mut self, ctx: &egui::Context) {
-        let renderer: Arc<dyn Renderer> =
-            (self.def.build)(&self.values, &self.before, &self.env).into();
+        let renderer: Arc<dyn Renderer> = self.renderer().into();
         let (tx, rx) = channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let tiles = self.tiles();
         self.job = Some(Job {
             values: self.values.clone(),
+            custom: self.custom.clone(),
             rx,
             cancel: cancel.clone(),
             total: tiles.len(),
@@ -168,7 +211,7 @@ impl EffectSession {
     /// Render everything now (OK before the preview finished, Repeat, no-dialog adjustments).
     fn render_all(&self) -> Vec<TileResult> {
         use rayon::prelude::*;
-        let renderer = (self.def.build)(&self.values, &self.before, &self.env);
+        let renderer = self.renderer();
         let (src, selection, bounds) = (&self.before, self.selection.as_deref(), self.env.bounds);
         self.tiles()
             .par_iter()
@@ -179,6 +222,12 @@ impl EffectSession {
     /// Set the settings and restart the preview (tests, scripted use).
     pub fn set_values(&mut self, ctx: &egui::Context, values: Vec<Value>) {
         self.values = values;
+        self.spawn(ctx);
+    }
+
+    /// Replace a custom dialog's settings and restart the preview (tests).
+    pub fn set_custom(&mut self, ctx: &egui::Context, custom: Custom) {
+        self.custom = Some(custom);
         self.spawn(ctx);
     }
 
@@ -199,9 +248,9 @@ impl EffectSession {
     }
 
     fn preview_done(&self) -> bool {
-        self.job
-            .as_ref()
-            .is_some_and(|j| j.values == self.values && j.received == j.total)
+        self.job.as_ref().is_some_and(|j| {
+            j.values == self.values && j.custom == self.custom && j.received == j.total
+        })
     }
 }
 
@@ -226,10 +275,11 @@ impl PaintNotNetApp {
             return;
         };
         let values = def.defaults();
-        let interactive = !def.props.is_empty();
-        let Some(session) = self.effect_session(target, def, values) else {
+        let Some(mut session) = self.effect_session(target, def, values, None) else {
             return;
         };
+        session.custom = target.custom(&session.before, session.env.bounds);
+        let interactive = !session.def.props.is_empty() || session.custom.is_some();
         self.effect = Some(session);
         if interactive {
             if let Some(s) = self.effect.as_mut() {
@@ -245,6 +295,7 @@ impl PaintNotNetApp {
         target: EffectRef,
         def: EffectDef,
         values: Vec<Value>,
+        custom: Option<Custom>,
     ) -> Option<EffectSession> {
         let antialias = self.antialiased_selection();
         let (primary, secondary) = (self.settings.primary, self.settings.secondary);
@@ -264,6 +315,8 @@ impl PaintNotNetApp {
             target,
             def,
             values,
+            custom,
+            grab: Vec::new(),
             before: tab.doc.layer(layer).surface.clone(),
             selection: tab.selection_mask(antialias),
             env: Env {
@@ -277,13 +330,13 @@ impl PaintNotNetApp {
 
     /// Effects > Repeat (Ctrl+F): the last effect with its last settings, no dialog.
     pub(crate) fn repeat_effect(&mut self) -> bool {
-        let Some((target, values)) = self.last_applied.clone() else {
+        let Some((target, values, custom)) = self.last_applied.clone() else {
             return false;
         };
         let Some(def) = target.def() else {
             return false;
         };
-        if let Some(s) = self.effect_session(target, def, values) {
+        if let Some(s) = self.effect_session(target, def, values, custom) {
             self.effect = Some(s);
             self.finish_effect(true);
         }
@@ -307,6 +360,9 @@ impl PaintNotNetApp {
         let mut changed = false;
         let def = &s.def;
         let values = &mut s.values;
+        let custom = &mut s.custom;
+        let grab = &mut s.grab;
+        let (before, bounds) = (&s.before, s.env.bounds);
         // Movable, so the live preview behind it can be watched; opens centred, then stays
         // where it was dragged (egui remembers the position per effect).
         egui::Window::new(def.name)
@@ -317,6 +373,13 @@ impl PaintNotNetApp {
             .default_pos(ctx.content_rect().center())
             .show(ctx, |ui| {
                 ui.set_min_width(300.0);
+                match custom {
+                    Some(Custom::Curves(c)) => changed |= curves_ui(ui, c, grab),
+                    Some(Custom::Levels { levels, input }) => {
+                        changed |= levels_ui(ui, levels, input, before, bounds)
+                    }
+                    None => {}
+                }
                 for (i, p) in def.props.iter().enumerate() {
                     let before = values[i];
                     property_ui(ui, p.name, &p.kind, &mut values[i], p.default);
@@ -383,12 +446,12 @@ impl PaintNotNetApp {
             put_tiles(tab, s.layer, tiles);
         }
         tab.commit(s.def.name, s.target.icon());
-        self.last_applied = Some((s.target, s.values.clone()));
+        self.last_applied = Some((s.target, s.values.clone(), s.custom.clone()));
     }
 
     /// Name for Effects > Repeat.
     pub(crate) fn last_effect_name(&self) -> Option<&'static str> {
-        let (t, _) = self.last_applied.as_ref()?;
+        let (t, _, _) = self.last_applied.as_ref()?;
         match t {
             EffectRef::Adjustment(a) => Some(a.name()),
         }
@@ -445,4 +508,335 @@ fn property_ui(ui: &mut egui::Ui, name: &str, kind: &PropKind, v: &mut Value, de
             *v = Value::Choice(c);
         }
     }
+}
+
+/// The Curves dialog body (3.36 `CurvesEffectConfigDialog` / `CurveControl`): Luminosity or
+/// RGB, a 256×256 graph, left-drag to add or move points, right-click to remove one.
+fn curves_ui(ui: &mut egui::Ui, c: &mut Curves, grab: &mut Vec<Option<u8>>) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label("Transfer map:");
+        egui::ComboBox::from_id_salt("curves_mode")
+            .selected_text(if c.luminosity { "Luminosity" } else { "RGB" })
+            .show_ui(ui, |ui| {
+                changed |= ui
+                    .selectable_value(&mut c.luminosity, true, "Luminosity")
+                    .changed();
+                changed |= ui
+                    .selectable_value(&mut c.luminosity, false, "RGB")
+                    .changed();
+            });
+    });
+    let size = egui::vec2(256.0, 256.0);
+    let (resp, painter) = ui.allocate_painter(size, egui::Sense::click_and_drag());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Curve graph"));
+    let rect = resp.rect;
+    let to_screen = |x: f32, y: f32| {
+        egui::pos2(
+            rect.left() + x / 255.0 * rect.width(),
+            rect.bottom() - y / 255.0 * rect.height(),
+        )
+    };
+    let to_curve = |p: egui::Pos2| {
+        let x = ((p.x - rect.left()) / rect.width() * 255.0)
+            .round()
+            .clamp(0.0, 255.0);
+        let y = ((rect.bottom() - p.y) / rect.height() * 255.0)
+            .round()
+            .clamp(0.0, 255.0);
+        (x as u8, y as u8)
+    };
+    // Grid and the identity diagonal.
+    painter.rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
+    let grid = egui::Stroke::new(1.0, ui.visuals().weak_text_color().gamma_multiply(0.4));
+    for i in 1..4 {
+        let t = i as f32 * 255.0 / 4.0;
+        painter.line_segment([to_screen(t, 0.0), to_screen(t, 255.0)], grid);
+        painter.line_segment([to_screen(0.0, t), to_screen(255.0, t)], grid);
+    }
+    painter.line_segment([to_screen(0.0, 0.0), to_screen(255.0, 255.0)], grid);
+    // Interaction.
+    if let Some(p) = resp.interact_pointer_pos() {
+        let (x, y) = to_curve(p);
+        if resp.drag_started_by(egui::PointerButton::Primary)
+            || (resp.clicked_by(egui::PointerButton::Primary) && grab.is_empty())
+        {
+            *grab = c
+                .edited()
+                .into_iter()
+                .map(|pts| {
+                    Some(
+                        curves::point_near(pts, x as i32, y as i32).unwrap_or_else(|| {
+                            let k = x.clamp(1, 254);
+                            pts.insert(k, y);
+                            k
+                        }),
+                    )
+                })
+                .collect();
+            changed = true;
+        }
+        if resp.dragged_by(egui::PointerButton::Primary) && !grab.is_empty() {
+            for (pts, g) in c.edited().into_iter().zip(grab.iter_mut()) {
+                if let Some(k) = g {
+                    // Don't drag onto another point.
+                    if *k == 0 || *k == 255 || !pts.contains_key(&x.clamp(1, 254)) || x == *k {
+                        *k = curves::move_point(pts, *k, x, y);
+                    }
+                }
+            }
+            changed = true;
+        }
+        if resp.secondary_clicked() {
+            for pts in c.edited() {
+                if let Some(k) = curves::point_near(pts, x as i32, y as i32)
+                    && k != 0
+                    && k != 255
+                {
+                    pts.remove(&k);
+                    changed = true;
+                }
+            }
+        }
+    }
+    if resp.drag_stopped() || resp.clicked() {
+        grab.clear();
+    }
+    // Curves and points.
+    let draw = |pts: &Points, color: egui::Color32| {
+        let t = curves::spline_table(pts);
+        let line: Vec<egui::Pos2> = (0..256).map(|i| to_screen(i as f32, t[i] as f32)).collect();
+        painter.add(egui::Shape::line(line, egui::Stroke::new(1.5, color)));
+        for (&px, &py) in pts {
+            painter.circle_stroke(
+                to_screen(px as f32, py as f32),
+                3.5,
+                egui::Stroke::new(1.0, color),
+            );
+        }
+    };
+    if c.luminosity {
+        draw(&c.lum, ui.visuals().strong_text_color());
+    } else {
+        let colors = [
+            egui::Color32::from_rgb(230, 60, 60),
+            egui::Color32::from_rgb(60, 200, 60),
+            egui::Color32::from_rgb(70, 110, 240),
+        ];
+        for ((pts, color), on) in c.rgb.iter().zip(colors).zip(c.mask) {
+            let color = if on {
+                color
+            } else {
+                color.gamma_multiply(0.35)
+            };
+            draw(pts, color);
+        }
+    }
+    if let Some(p) = resp.hover_pos() {
+        let (x, y) = to_curve(p);
+        ui.label(format!("({x}, {y})"));
+    } else {
+        ui.label(" ");
+    }
+    if !c.luminosity {
+        ui.horizontal(|ui| {
+            for (i, name) in ["Red", "Green", "Blue"].iter().enumerate() {
+                ui.checkbox(&mut c.mask[i], *name);
+            }
+        });
+    }
+    ui.label("Tip: drag to add or move a point; right-click a point to remove it.");
+    if ui.button("Reset").clicked() {
+        let mode = c.luminosity;
+        *c = Curves {
+            luminosity: mode,
+            ..Curves::default()
+        };
+        changed = true;
+    }
+    changed
+}
+
+/// The Levels dialog body (3.36 `LevelsEffectConfigDialog`): input black/white with the input
+/// histogram, output black/gamma/white with the output histogram, channel checkboxes, Auto
+/// and Reset. Values show the first checked channel; edits apply to every checked one.
+fn levels_ui(
+    ui: &mut egui::Ui,
+    l: &mut Levels,
+    input: &Histogram,
+    src: &Surface,
+    bounds: Rect,
+) -> bool {
+    let mut changed = false;
+    // Blue, green, red storage; shown as R, G, B.
+    let order = [(2usize, "R"), (1, "G"), (0, "B")];
+    let first = order
+        .iter()
+        .find(|(c, _)| l.mask[*c])
+        .map_or(2, |(c, _)| *c);
+    let output = input.mapped(&l.curve());
+    let histogram = |ui: &mut egui::Ui, h: &Histogram, mask: [bool; 3]| {
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(130.0, 160.0), egui::Sense::hover());
+        let p = ui.painter_at(rect);
+        p.rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
+        let max = (0..3)
+            .flat_map(|c| h.0[c].iter().copied())
+            .max()
+            .unwrap_or(1)
+            .max(1) as f32;
+        let colors = [
+            egui::Color32::from_rgb(70, 110, 240),
+            egui::Color32::from_rgb(60, 200, 60),
+            egui::Color32::from_rgb(230, 60, 60),
+        ];
+        for c in 0..3 {
+            if !mask[c] {
+                continue;
+            }
+            // One bar per value, 255 at the top (paint.net draws its histograms vertically);
+            // square-root scaled so small counts stay visible.
+            let row = rect.height() / 256.0;
+            for v in 0..256 {
+                let n = h.0[c][v];
+                if n == 0 {
+                    continue;
+                }
+                let y = rect.bottom() - (v as f32 + 1.0) * row;
+                let w = (n as f32 / max).sqrt() * rect.width();
+                p.rect_filled(
+                    egui::Rect::from_min_size(
+                        egui::pos2(rect.left(), y),
+                        egui::vec2(w.max(1.0), row.max(1.0)),
+                    ),
+                    0.0,
+                    colors[c].gamma_multiply(0.55),
+                );
+            }
+        }
+    };
+    ui.horizontal(|ui| {
+        ui.vertical(|ui| {
+            ui.label(egui::RichText::new("Input").strong());
+            changed |= level_edit(
+                ui,
+                l,
+                first,
+                "White:",
+                |l, c| l.in_hi[c] as f64,
+                |l, c, v| l.in_hi[c] = (v as u8).max(l.in_lo[c].saturating_add(1)),
+                1.0..=255.0,
+                1.0,
+                0,
+            );
+            histogram(ui, input, l.mask);
+            changed |= level_edit(
+                ui,
+                l,
+                first,
+                "Black:",
+                |l, c| l.in_lo[c] as f64,
+                |l, c, v| l.in_lo[c] = (v as u8).min(l.in_hi[c].saturating_sub(1)),
+                0.0..=254.0,
+                1.0,
+                0,
+            );
+        });
+        ui.vertical(|ui| {
+            ui.label(egui::RichText::new("Output").strong());
+            changed |= level_edit(
+                ui,
+                l,
+                first,
+                "White:",
+                |l, c| l.out_hi[c] as f64,
+                |l, c, v| l.out_hi[c] = (v as u8).max(l.out_lo[c].saturating_add(1)),
+                1.0..=255.0,
+                1.0,
+                0,
+            );
+            histogram(ui, &output, l.mask);
+            changed |= level_edit(
+                ui,
+                l,
+                first,
+                "Gamma:",
+                |l, c| l.gamma[c] as f64,
+                |l, c, v| l.gamma[c] = v as f32,
+                0.1..=10.0,
+                0.01,
+                2,
+            );
+            changed |= level_edit(
+                ui,
+                l,
+                first,
+                "Black:",
+                |l, c| l.out_lo[c] as f64,
+                |l, c, v| l.out_lo[c] = (v as u8).min(l.out_hi[c].saturating_sub(1)),
+                0.0..=254.0,
+                1.0,
+                0,
+            );
+        });
+    });
+    ui.horizontal(|ui| {
+        for (c, name) in order {
+            ui.checkbox(&mut l.mask[c], name);
+        }
+        ui.separator();
+        if ui.button("Auto").clicked() {
+            let mask = l.mask;
+            *l = Levels {
+                mask,
+                ..Levels::auto(src, bounds)
+            };
+            changed = true;
+        }
+        if ui.button("Reset").clicked() {
+            let mask = l.mask;
+            *l = Levels {
+                mask,
+                ..Levels::default()
+            };
+            changed = true;
+        }
+    });
+    changed
+}
+
+/// One Levels number: shows channel `first`, writes every checked channel.
+#[allow(clippy::too_many_arguments)]
+fn level_edit(
+    ui: &mut egui::Ui,
+    l: &mut Levels,
+    first: usize,
+    label: &str,
+    get: fn(&Levels, usize) -> f64,
+    set: fn(&mut Levels, usize, f64),
+    range: std::ops::RangeInclusive<f64>,
+    speed: f64,
+    decimals: usize,
+) -> bool {
+    let mut v = get(l, first);
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(label);
+        if ui
+            .add(
+                egui::DragValue::new(&mut v)
+                    .range(range)
+                    .speed(speed)
+                    .max_decimals(decimals),
+            )
+            .changed()
+        {
+            for c in 0..3 {
+                if l.mask[c] {
+                    set(l, c, v);
+                }
+            }
+            changed = true;
+        }
+    });
+    changed
 }

@@ -4,9 +4,9 @@ Design and rationale: [PLAN.md](PLAN.md). Each phase ends with a usable app and 
 where you try it. A phase is only ticked off once its acceptance checks have been run and
 shown passing.
 
-**Current state (2026-10-13):** Phases 0–7 are complete, verified and committed (Phase 5
-still awaits your sign-off on the feel). Phase 7 (Line/Curve, Shapes, Text) is done. Phases 8a (effect framework) and 8b (simple adjustments) are done.
-**Next: Phase 8c (Curves, Levels).** After all phases, compare against the paint.net 5.1.12 release files the user provided
+**Current state (2026-10-13):** Phases 0–8 are complete, verified and committed (Phase 5
+still awaits your sign-off on the feel). Phase 7 (Line/Curve, Shapes, Text) is done. Phase 8 (effect framework, all 13 adjustments) is done. **Next: Phase 9 (stock
+effects).** After all phases, compare against the paint.net 5.1.12 release files the user provided
 (`~/Downloads/paint.net.5.1.12.portable.x64`; the user states the owners gave permission).
 Functionality first: the user wants every feature working
 before the visual refresh (Phase 12).
@@ -168,7 +168,7 @@ Guessed or approximated (paint.net doesn't document them):
 - **Verified 2026-10-13:** 3 engine tests (anchor and alignment, bold/underline/aliased, caret across lines + size maths) and 4 UI tests (typing with 'e' not switching tools + Esc commit, Enter/Backspace/bold restyle, Ctrl+Z + click-elsewhere commit, move nub). Render checked (bold italic underlined centred two lines with Unicode). CI passes (239 tests).
 - Guessed/different: line height 1.2 × size, underline/strikeout position and thickness; the 5.x docs' size formula ("points × DPI / 96") reads oddly, so standard pt × DPI / 72 is used (check later); 5.x's Smooth/Sharp rendering modes (DirectWrite) aren't offered; no mouse text selection or Ctrl+C/V within text; the caret is black rather than inverted.
 
-## Phase 8: Adjustments and the effect framework
+## Phase 8: Adjustments and the effect framework ✅
 ### 8a ✅ Effect framework
 - [x] `pnn-effects::framework`: typed properties (int, float, bool, choice; linked values as 3.36's `LinkValuesBasedOnBooleanRule`), a renderer prepared once per settings and rendering rows; pixel-op and channel-curve helpers; 3.36 `GetIntensityByte`
 - [x] Generated dialogs (slider + number + reset per property) with a live preview rendered tile by tile on worker threads and streamed onto the canvas (cancelled when settings change); OK = one history step named after the effect (rendered synchronously if the preview hadn't finished), Cancel/Esc restores, Enter = OK; soft selections mix by coverage; Effects > Repeat (Ctrl+F) re-applies the last effect with its settings and the menu shows its name
@@ -180,9 +180,12 @@ Guessed or approximated (paint.net doesn't document them):
 - [x] From the 5.x docs (maths guessed): Sepia's Intensity control (5.x gives Sepia a dialog), Exposure (±5 EV gain in linear light), Highlights / Shadows (luminance tone curve), Temperature and Tint (linear-light channel gains)
 - **Verified 2026-10-13:** 7 more engine tests (Brightness/Contrast against 3.36 values, Hue/Sat rotation/desaturate/lightness, Auto-Level stretch, photo adjustments identity at defaults and direction) and 1 UI test (Hue/Sat dialog OK, Auto-Level). Dialog with live preview checked in a render. CI passes (252 tests).
 - Differences: Hue / Saturation doesn't round HSV to whole percents as 3.36 did (that banded photos); the 5.x docs' description of Saturation "starting at zero" conflicts with their own example, so 3.36's 0–200 (default 100) is kept; Auto-Level's histogram covers the selection's bounding box, not just selected pixels; the 5.x-only adjustments have no shortcuts (none documented).
-### 8c Curves and Levels
-- [ ] Curves (luminosity / RGB, editable points), Levels (histograms, in/out, gamma, per channel)
-- Notes for starting 8c (read 2026-10-13, nothing written yet): 3.36 `Effects/CurvesEffectConfigToken.cs` builds tables with `Core/SplineInterpolator.cs` (Numerical Recipes natural cubic spline) through integer control points, default (0,0),(255,255); Luminosity mode = `UnaryPixelOps.LuminosityCurve` (shift RGB by curve[intensity] − intensity), RGB mode = `ChannelCurve` with R/G/B checkboxes. Levels = `UnaryPixelOps.Level` (already ported as `adjustments::level_curve`) + `Effects/LevelsEffectConfigDialog.cs`; Auto button = `auto_level`. 5.x docs saved in `reference/pdn5-docs/Curves.html`, `Levels.html` (left-click adds/drags points, right-click removes; Levels input black/white, output black/grey/white, R/G/B checkboxes, histograms).
+### 8c ✅ Curves and Levels
+- [x] Curves (Ctrl+Shift+M): 3.36 `SplineInterpolator` tables; Luminosity (`LuminosityCurve`) or RGB (`ChannelCurve`) with Red/Green/Blue checkboxes choosing which curves an edit moves; 256×256 graph with grid and diagonal; drag to add or move a point, right-click removes one, grab radius √30 as 3.36; input/output readout; Reset
+- [x] Levels (Ctrl+L): 3.36 `Level` maths; input white/black with the input histogram, output white/gamma/black with the live output histogram; R/G/B checkboxes (edits apply to checked channels); Auto (= Auto-Level's settings) and Reset
+- [x] Both use the effect framework's background live preview and Repeat (Ctrl+F repeats with the same curve/levels)
+- **Verified 2026-10-13:** 4 engine tests (spline through points and 3.36 identity/inversion, point editing, luminosity vs RGB, Levels + Auto + histogram mapping) and 2 UI tests (a real mouse drag on the curve graph previews live, right-click removes, Enter commits; Levels Auto previews, OK commits, Ctrl+F repeats). Both dialogs checked in renders. CI passes (263 tests).
+- Differences: Curves end points move only vertically; Levels' colour swatches and gradient sliders are number boxes here, and the output grey point is shown as gamma.
 
 ### Requested along the way (2026-10-13) ✅
 - [x] Effect and document dialogs (Feather Selection/Object, Blur Selection Edge, adjustments, Rotate/Zoom, Layer Properties…) are movable windows: they open centred, can be dragged aside, and remember where they were left. The canvas behind them previews live, from the moment they open (defaults shown at once, as paint.net does) and on every change; Cancel/Esc restores the layer.

@@ -637,3 +637,54 @@ fn adjustment_dialog_render() {
         image.save(format!("{dir}/shell-adjustment.png")).unwrap();
     }
 }
+
+/// Curves (RGB, red lifted) and Levels dialogs over a live preview.
+#[test]
+fn curves_and_levels_render() {
+    use paintnotnet::effect_runner::Custom;
+    use pnn_effects::Adjustment;
+    use pnn_effects::curves::{Curves, Points};
+    for (adj, file) in [
+        (Adjustment::Curves, "curves"),
+        (Adjustment::Levels, "levels"),
+    ] {
+        let mut h = harness();
+        {
+            let tab = h.state_mut().workspace_mut().active_mut().unwrap();
+            let (w, hh) = (tab.doc.width(), tab.doc.height());
+            let a = tab.doc.active_index();
+            tab.doc.modify_layer(a, None, |l| {
+                for y in 0..hh {
+                    for x in 0..w {
+                        let v = ((x + y) * 255 / (w + hh)) as u8;
+                        let c = pnn_core::ColorBgra::from_rgba(v, v / 2 + 60, 200 - v / 2, 255);
+                        l.surface.set(x, y, c);
+                    }
+                }
+            });
+        }
+        let ctx = h.ctx.clone();
+        h.state_mut()
+            .execute(&ctx, Triggered::once(Command::Adjustment(adj)));
+        if adj == Adjustment::Curves {
+            let mut c = Curves {
+                luminosity: false,
+                mask: [true, false, false],
+                ..Curves::default()
+            };
+            c.rgb[0] = Points::from([(0, 0), (90, 170), (255, 255)]);
+            h.state_mut()
+                .effect_mut()
+                .unwrap()
+                .set_custom(&ctx, Custom::Curves(c));
+        }
+        for _ in 0..6 {
+            h.step();
+        }
+        if let Ok(dir) = std::env::var("PNN_RENDER_DUMP")
+            && let Ok(image) = h.render()
+        {
+            image.save(format!("{dir}/shell-{file}.png")).unwrap();
+        }
+    }
+}
