@@ -8,6 +8,10 @@ pub const MAX_DIMENSION: u32 = 65535;
 pub enum Modal {
     NewImage(NewImage),
     About,
+    /// The pasted image is larger than the canvas (paint.net asks the same).
+    PasteLarger {
+        new_layer: bool,
+    },
     /// Saving a layered image in a flat format (paint.net's WarnAboutFlattening).
     FlattenForSave {
         key: u64,
@@ -59,6 +63,10 @@ pub enum ModalResult {
         key: u64,
         quality: u8,
         then: SaveTarget,
+    },
+    PasteExpand {
+        new_layer: bool,
+        expand: bool,
     },
     FlattenAndSave {
         key: u64,
@@ -146,6 +154,20 @@ impl Modal {
                     ui.add_space(8.0);
                     let ok = ModalResult::FlattenAndSave { key: *key, then: then.clone() };
                     buttons(ui, &[("Flatten", ok), ("Cancel", ModalResult::Cancelled)])
+                }
+                Modal::PasteLarger { new_layer } => {
+                    ui.heading("Paste");
+                    ui.label("The image being pasted is larger than the canvas size. What would you like to do?");
+                    ui.add_space(8.0);
+                    let n = *new_layer;
+                    buttons(
+                        ui,
+                        &[
+                            ("Expand canvas", ModalResult::PasteExpand { new_layer: n, expand: true }),
+                            ("Keep canvas size", ModalResult::PasteExpand { new_layer: n, expand: false }),
+                            ("Cancel", ModalResult::Cancelled),
+                        ],
+                    )
                 }
                 Modal::About => {
                     ui.heading("paintnotnet");

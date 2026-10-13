@@ -4,8 +4,8 @@ Design and rationale: [PLAN.md](PLAN.md). Each phase ends with a usable app and 
 where you try it. A phase is only ticked off once its acceptance checks have been run and
 shown passing.
 
-**Current state (2026-10-09):** Phases 0–3 are complete, verified and committed.
-**Next: Phase 4b (clipboard).** Phases 4a and 4c are committed. Functionality first: the user wants every feature working
+**Current state (2026-10-13):** Phases 0–4 are complete, verified and committed.
+**Next: Phase 5 (feather).** Functionality first: the user wants every feature working
 before the visual refresh (Phase 12).
 
 Reference source: paint.net 3.36.7 (OpenPDN, MIT code) is cloned at `reference/OpenPDN`
@@ -92,7 +92,7 @@ Guessed or approximated (paint.net doesn't document them):
 - Duplicate keeps the layer name (3.36); visibility toggles are named "Layer Visibility".
 - History disk spill (paint.net keeps history on disk) isn't implemented; the budget drops oldest steps instead.
 
-## Phase 4: Selections
+## Phase 4: Selections ✅
 ### 4a ✅ Selection core, tools, Edit commands
 - [x] Selection = even-odd polygon set (`pnn-core::selection`), as paint.net; combine modes are polygon booleans (`i_overlay`); coverage mask rasterised antialiased or pixelated (`tiny-skia`), cached per tab; selection stored in the document so it undoes
 - [x] Rectangle / Ellipse / Lasso Select, Magic Wand (paint.net's `CheckColor` tolerance maths, premultiplied/straight alpha, contiguous scanline fill or global, Layer/Image sampling); pixel-exact stencil→polygon tracing (holes, diagonal touches)
@@ -102,8 +102,11 @@ Guessed or approximated (paint.net doesn't document them):
 - **Verified 2026-10-09:** CI passes (145 tests). UI tests drive every chord, Magic Wand contiguous vs Shift-global, Delete/Backspace/Ctrl+I/Ctrl+A/Enter, crop + undo, Pencil clipping. Ants checked in a render.
 - Differences to confirm: paint.net 4+ lets you adjust a rectangle/ellipse selection with handles after drawing (not yet); 3.36 deselected after Erase Selection, 5.x appears not to (kept).
 
-### 4b Clipboard
-- [ ] Cut / Copy / Copy Merged / Paste / Paste into New Layer / Paste into New Image via the Wayland clipboard; Copy Selection / Paste Selection (JSON text)
+### 4b ✅ Clipboard
+- [x] Cut / Copy / Copy Merged (selection region, alpha × coverage; whole layer if nothing selected), Paste and Paste into New Layer as floating pixels in Move Selected Pixels mode at the top-left of the visible canvas, Paste into New Image (also used when nothing is open); paint.net's "larger than the canvas" prompt (Expand canvas / Keep canvas size)
+- [x] Copy Selection / Paste Selection as paint.net's polygonList JSON text
+- [x] Desktop clipboard via `arboard` (Wayland data-control, X11 fallback) behind a `Clipboard` trait; tests use an in-memory clipboard
+- **Verified:** 5 clipboard UI tests (copy→paste→move→finish, cut, new layer/new image, expand canvas, selection JSON); opt-in `system_clipboard_round_trip` passed against KWin 6.7 (image + text, previous text restored). CI passes (153 tests).
 
 ### 4c ✅ Move tools
 - [x] Move Selected Pixels / Move Selection: lift (coverage-scaled) pixels as a floating session over a pre-lift snapshot; drag inside to move, 8 nubs to scale in the selection's own frame (Shift keeps ratio, Alt about centre), right-drag or left-drag outside to rotate (Shift 15° steps), Ctrl moves a copy (and stamps the current float first), arrows 1 px / Ctrl+arrows 10 px, nothing selected = whole layer

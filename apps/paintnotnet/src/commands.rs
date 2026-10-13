@@ -273,6 +273,14 @@ impl Command {
                 | C::CropToSelection
                 | C::ZoomToSelection
                 | C::Finish
+                | C::Cut
+                | C::Copy
+                | C::CopyMerged
+                | C::Paste
+                | C::PasteIntoNewLayer
+                | C::PasteIntoNewImage
+                | C::CopySelection
+                | C::PasteSelection
         )
     }
 

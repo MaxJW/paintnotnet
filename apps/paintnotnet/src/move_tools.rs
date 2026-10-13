@@ -182,6 +182,39 @@ impl PaintNotNetApp {
         true
     }
 
+    /// Start floating `pixels` (pasted) over the document without lifting anything.
+    pub(crate) fn begin_float(
+        &mut self,
+        key: u64,
+        pixels: Surface,
+        rect: Rect,
+        selection: Selection,
+    ) {
+        let Some(tab) = self.workspace.tab_mut(key) else {
+            return;
+        };
+        let mut base = tab.doc.clone();
+        base.set_selection(selection.clone());
+        let bounds =
+            selection
+                .bounds()
+                .unwrap_or([0.0, 0.0, rect.width as f64, rect.height as f64]);
+        self.move_session = Some(MoveSession {
+            key,
+            kind: MoveKind::Pixels,
+            layer: base.active_index(),
+            base,
+            pixels,
+            rect,
+            selection,
+            bounds,
+            m: IDENTITY,
+            drag: None,
+            changed: true,
+        });
+        self.render_move();
+    }
+
     /// Redraw the session's result into its document.
     fn render_move(&mut self) {
         let resampling = sampling(self.settings.resampling);

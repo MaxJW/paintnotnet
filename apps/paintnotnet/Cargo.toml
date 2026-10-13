@@ -18,6 +18,7 @@ raw-window-handle.workspace = true
 rayon.workspace = true
 rfd.workspace = true
 image.workspace = true
+arboard.workspace = true
 log.workspace = true
 env_logger.workspace = true
 

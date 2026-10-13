@@ -80,6 +80,9 @@ pub struct PaintNotNetApp {
     pub(crate) modifiers: egui::Modifiers,
     /// Floating pixels / selection being moved.
     pub(crate) move_session: Option<crate::move_tools::MoveSession>,
+    pub(crate) clipboard: Box<dyn crate::clipboard::Clipboard>,
+    /// Image waiting for the "larger than the canvas" answer.
+    pub(crate) pending_paste: Option<crate::clipboard::ClipImage>,
 }
 
 impl PaintNotNetApp {
@@ -131,6 +134,8 @@ impl PaintNotNetApp {
             select_drag: None,
             modifiers: egui::Modifiers::NONE,
             move_session: None,
+            clipboard: Box::new(crate::clipboard::SystemClipboard::new()),
+            pending_paste: None,
         }
     }
 
@@ -245,7 +250,10 @@ impl PaintNotNetApp {
         } else if !keeps_move_session(t.command) {
             self.finish_move();
         }
-        if self.selection_command(t.command) || self.document_command(t.command) {
+        if self.clipboard_command(t.command)
+            || self.selection_command(t.command)
+            || self.document_command(t.command)
+        {
             return;
         }
         let vp = self.canvas.viewport;
@@ -547,6 +555,11 @@ impl PaintNotNetApp {
                     tab.save_options.jpeg_quality = quality;
                 }
                 self.write(key, then);
+            }
+            ModalResult::PasteExpand { new_layer, expand } => {
+                if let Some(image) = self.pending_paste.take() {
+                    self.paste(image, new_layer, expand);
+                }
             }
             ModalResult::FlattenAndSave { key, mut then } => {
                 if let Some(tab) = self.workspace.tab_mut(key) {
@@ -964,7 +977,9 @@ impl CommandState {
             | Command::FillSelection
             | Command::FillSelectionSecondary
             | Command::CropToSelection
-            | Command::ZoomToSelection => self.has_selection,
+            | Command::ZoomToSelection
+            | Command::CopySelection => self.has_selection,
+            Command::Cut | Command::Copy | Command::CopyMerged => self.has_doc,
             _ => true,
         }
     }

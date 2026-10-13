@@ -3,6 +3,7 @@
 pub mod actions;
 pub mod app;
 pub mod canvas;
+pub mod clipboard;
 pub mod commands;
 pub mod diagnostics;
 pub mod dialogs;
