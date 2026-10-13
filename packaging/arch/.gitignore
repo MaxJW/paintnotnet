@@ -1,0 +1,6 @@
+# makepkg output
+/src/
+/pkg/
+/paintnotnet/
+*.pkg.tar.*
+*.log

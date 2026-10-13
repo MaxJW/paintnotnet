@@ -7,7 +7,7 @@ shown passing.
 **Current state (2026-10-13):** Phases 0–9 and the first batch of 10 are complete, verified and committed (Phase 5
 still awaits your sign-off on the feel). Phase 9 (stock effects) is done except Sketch Blur, and Phase 10's first batch of
 BoltBait-class effects is in. Phases 11a (OpenRaster, autosave, crash recovery) and 11b (settings, rebindable keys, command palette) are done.
-**Next: Phase 11c (packaging)**, then more of the BoltBait pack in
+Phase 11c (packaging) is done. **Next:** your call on the optional 11c items (pen pressure, pop-out windows), then more of the BoltBait pack in
 whatever order you rank it. After all phases, compare against the paint.net 5.1.12 release files the user provided
 (`~/Downloads/paint.net.5.1.12.portable.x64`; the user states the owners gave permission).
 Functionality first: the user wants every feature working
@@ -238,8 +238,13 @@ Guessed or approximated (paint.net doesn't document them):
 - [x] KDE Plasma global menu: the menus are exported as `com.canonical.dbusmenu` (labels, mnemonics, icons, shortcuts, check marks, live enabled state, Repeat label) and linked to the window with KWin's `org_kde_kwin_appmenu` Wayland protocol; used only while Plasma's menu registrar runs, and the in-window bar hides meanwhile. Settings › General › Menus turns it off. While a dialog is open the whole menu is greyed out.
 - **Verified 2026-10-13:** UI tests for wheel zoom about the pointer, Shift+wheel, the Scroll setting, middle-drag past the edge (stops with the corner mid-canvas and stays), and hover-switching File → Edit (fails without the change); global-menu unit tests (labels, tree, shortcuts, `(ia{sv}av)` layout, depth). **On the real Plasma 6.7.5 Wayland desktop:** the panel's global menu showed File … Help with the in-window bar hidden; a D-Bus `clicked` event on File › New… opened the New Image dialog; with the setting off the bar came back and the panel showed nothing. CI passes (303 tests).
 - Not checked: opening the dropdowns with the mouse and how Plasma draws our shortcuts and icons in them (no way to click the panel from here); toggling the setting while running; X11 sessions (unsupported: the window keeps its own menu bar there). Two `unsafe` calls (joining winit's Wayland connection) live in `global_menu/wayland.rs`, the only unsafe code in the project.
-### 11c Packaging (next)
-- [ ] Packaging: PKGBUILD for CachyOS/Arch, .desktop file, MIME associations, icon
+### 11c ✅ Packaging
+- [x] `packaging/arch/PKGBUILD` (`paintnotnet-git`): builds the committed HEAD of this checkout (`cd packaging/arch && makepkg -si`); installs the binary, `paintnotnet.desktop`, the icon (SVG + 16–512 px PNGs in hicolor), and LICENSE, NOTICE and the 3.36 icon attribution under `/usr/share/licenses/paintnotnet-git/`. `options=('!lto')`: makepkg's LTO (on in CachyOS's makepkg.conf) turns the bundled libwebp into GCC bitcode that Rust's linker can't read.
+- [x] `.desktop` file named after the Wayland app_id `paintnotnet`, so KWin matches the window to it; opens files with `%F`; MimeType lists the formats Open reads: OpenRaster, PNG, JPEG, BMP, GIF, TIFF, TGA, WebP (all already defined by shared-mime-info, so no MIME XML is needed)
+- [x] App icon: original artwork (canvas tile, transparency checkerboard, gradient brush stroke), `packaging/paintnotnet.svg`; also the X11 window icon. Not derived from paint.net's logo.
+- [x] `LICENSE` (MIT, as Cargo.toml already declared) added at the root
+- **Verified 2026-10-13:** `desktop-file-validate` passes; `makepkg -C` builds `paintnotnet-git-0.1.0.r27` (first try failed with undefined `WebP*` symbols → `!lto`); package contents and .PKGINFO checked; the packaged binary links only libc/libm/libgcc_s (Wayland, Vulkan and xkbcommon are loaded at run time) and its smoke test ran on Wayland/Vulkan at 164.8 fps.
+- Not checked: installing it (needs `sudo pacman -U`), the launcher entry, the icon in the title bar and task manager, and "Open with" from Dolphin. A second file opened from Dolphin starts a second window (paint.net opens it as a tab in the running one; not done).
 - [ ] Optional: pop-out panels, tablet pressure
 
 ## Phase 12: Visual refresh (after functionality)

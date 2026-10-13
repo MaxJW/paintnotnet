@@ -29,7 +29,14 @@ fn main() -> ExitCode {
             // Wayland app_id: lets KDE match the .desktop file and window rules.
             .with_app_id("paintnotnet")
             .with_inner_size([1280.0, 800.0])
-            .with_min_inner_size([640.0, 480.0]),
+            .with_min_inner_size([640.0, 480.0])
+            // X11 window icon; on Wayland the desktop shows the .desktop file's icon.
+            .with_icon(
+                eframe::icon_data::from_png_bytes(include_bytes!(
+                    "../../../packaging/paintnotnet-256.png"
+                ))
+                .unwrap_or_default(),
+            ),
         renderer: eframe::Renderer::Wgpu,
         wgpu_options: WgpuConfiguration {
             // Brush strokes should land on screen as early as possible.

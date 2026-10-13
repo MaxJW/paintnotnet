@@ -1,0 +1,73 @@
+# Maintainer: Max Wilson
+#
+# Builds the committed HEAD of the checkout this file lives in (uncommitted changes are not
+# included). From this directory: `makepkg -si`.
+
+pkgname=paintnotnet-git
+_pkgname=paintnotnet
+pkgver=0.1.0.r27.gab731eb
+pkgrel=1
+pkgdesc='Image and photo editor for Linux modelled on paint.net'
+arch=('x86_64' 'aarch64')
+# Code: MIT. Embedded paint.net 3.36 menu/tool icons: CC BY-NC-ND 2.5 (unmodified).
+license=('MIT' 'CC-BY-NC-ND-2.5')
+depends=(
+  'gcc-libs'
+  'glibc'
+  'hicolor-icon-theme'
+  'libxkbcommon'
+  'vulkan-icd-loader'
+  'wayland'
+)
+makedepends=('cargo' 'git' 'librsvg')
+optdepends=(
+  'xdg-desktop-portal: Open and Save As dialogs'
+  'libx11: X11 sessions'
+  'libxcursor: X11 sessions'
+  'libxi: X11 sessions'
+  'libxrandr: X11 sessions'
+)
+# makepkg's LTO builds the bundled libwebp C code as GCC bitcode, which Rust's linker can't
+# read (undefined WebP* symbols). The Rust code keeps its own thin LTO from Cargo.toml.
+options=('!lto')
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+source=("$_pkgname::git+file://${startdir%/packaging/arch}")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  printf '%s.r%s.g%s' \
+    "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)" \
+    "$(git rev-list --count HEAD)" \
+    "$(git rev-parse --short=7 HEAD)"
+}
+
+prepare() {
+  cd "$_pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$_pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release -p paintnotnet
+}
+
+package() {
+  cd "$_pkgname"
+  install -Dm755 target/release/paintnotnet "$pkgdir/usr/bin/paintnotnet"
+  install -Dm644 packaging/paintnotnet.desktop -t "$pkgdir/usr/share/applications/"
+  install -Dm644 packaging/paintnotnet.svg -t "$pkgdir/usr/share/icons/hicolor/scalable/apps/"
+  local size
+  for size in 16 22 24 32 48 64 128 256 512; do
+    install -dm755 "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps"
+    rsvg-convert -w "$size" -h "$size" packaging/paintnotnet.svg \
+      -o "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/paintnotnet.png"
+  done
+  install -Dm644 LICENSE NOTICE -t "$pkgdir/usr/share/licenses/$pkgname/"
+  install -Dm644 assets/icons/pdn336/README.md \
+    "$pkgdir/usr/share/licenses/$pkgname/paint.net-3.36-icons.md"
+}

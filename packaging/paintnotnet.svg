@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- paintnotnet app icon. Original artwork for this project (MIT, see LICENSE). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#dfe5ee"/>
+    </linearGradient>
+    <linearGradient id="stroke" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#2b6de8"/>
+      <stop offset="0.5" stop-color="#d63ad0"/>
+      <stop offset="1" stop-color="#ff9a1f"/>
+    </linearGradient>
+    <pattern id="checks" width="32" height="32" patternUnits="userSpaceOnUse">
+      <rect width="32" height="32" fill="#ffffff"/>
+      <rect width="16" height="16" fill="#c4ccd8"/>
+      <rect x="16" y="16" width="16" height="16" fill="#c4ccd8"/>
+    </pattern>
+    <clipPath id="inside">
+      <rect x="16" y="16" width="224" height="224" rx="44"/>
+    </clipPath>
+  </defs>
+  <!-- Canvas tile -->
+  <rect x="16" y="16" width="224" height="224" rx="44" fill="url(#tile)"/>
+  <!-- Transparent corner (lower right) -->
+  <path d="M240 96 L240 240 L96 240 Z" fill="url(#checks)" clip-path="url(#inside)"/>
+  <!-- Brush stroke -->
+  <path d="M60 184 C 92 112, 132 196, 170 120 S 204 72, 208 70" fill="none"
+        stroke="url(#stroke)" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="16" y="16" width="224" height="224" rx="44" fill="none" stroke="#7d8aa0" stroke-width="6"/>
+</svg>
