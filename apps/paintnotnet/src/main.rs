@@ -45,9 +45,16 @@ fn main() -> ExitCode {
         Box::new(move |cc| {
             let smoke_run = smoke.is_some();
             let mut app = PaintNotNetApp::new(cc, smoke, files);
-            // Autosave every minute for crash recovery (not in smoke tests).
-            if !smoke_run && let Some(dir) = paintnotnet::autosave::default_state_dir() {
-                app.enable_autosave(dir, std::time::Duration::from_secs(60));
+            if !smoke_run {
+                // Autosave for crash recovery, then the user's settings (which may change
+                // its interval). Smoke tests use neither.
+                if let Some(dir) = paintnotnet::autosave::default_state_dir() {
+                    app.enable_autosave(dir, std::time::Duration::from_secs(60));
+                }
+                if let Some(path) = paintnotnet::config::default_path() {
+                    let config = paintnotnet::config::Config::load(&path);
+                    app.set_config(&cc.egui_ctx, config, Some(path));
+                }
             }
             Ok(Box::new(app))
         }),

@@ -7,6 +7,7 @@
 
 use eframe::egui::vec2;
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use paintnotnet::app::PaintNotNetApp;
 use paintnotnet::commands::{Command, Panel, Triggered};
 use pnn_core::Document;
@@ -686,5 +687,54 @@ fn curves_and_levels_render() {
         {
             image.save(format!("{dir}/shell-{file}.png")).unwrap();
         }
+    }
+}
+
+/// Settings › Keyboard and the command palette.
+#[test]
+fn settings_and_palette_render() {
+    use eframe::egui::{Event, Key, Modifiers};
+    let mut h = harness();
+    let ctx = h.ctx.clone();
+    h.state_mut()
+        .execute(&ctx, Triggered::once(Command::Settings));
+    h.step();
+    h.step();
+    h.get_by_label("Keyboard").click();
+    for _ in 0..3 {
+        h.step();
+    }
+    h.event(Event::Text("blur".into()));
+    for _ in 0..3 {
+        h.step();
+    }
+    if let Ok(dir) = std::env::var("PNN_RENDER_DUMP")
+        && let Ok(image) = h.render()
+    {
+        image.save(format!("{dir}/shell-settings.png")).unwrap();
+    }
+    let mut h = harness();
+    let ctx = h.ctx.clone();
+    h.state_mut()
+        .execute(&ctx, Triggered::once(Command::CommandPalette));
+    h.step();
+    h.event(Event::Text("sha".into()));
+    for _ in 0..3 {
+        h.step();
+    }
+    h.event(Event::Key {
+        key: Key::ArrowDown,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    });
+    for _ in 0..3 {
+        h.step();
+    }
+    if let Ok(dir) = std::env::var("PNN_RENDER_DUMP")
+        && let Ok(image) = h.render()
+    {
+        image.save(format!("{dir}/shell-palette.png")).unwrap();
     }
 }

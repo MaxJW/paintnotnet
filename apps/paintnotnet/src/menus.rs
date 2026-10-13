@@ -615,6 +615,78 @@ pub fn adjustment_icon(a: Adjustment) -> Option<Icon> {
     }
 }
 
+/// Every command reachable from the menus or the keymap (the Settings shortcut list, the
+/// command palette and the settings file all use it).
+pub fn all_commands() -> Vec<Command> {
+    fn walk(entries: &[Entry], out: &mut Vec<Command>) {
+        for e in entries {
+            match e {
+                Entry::Item { command, .. } | Entry::Check { command, .. } => {
+                    if !out.contains(command) {
+                        out.push(*command);
+                    }
+                }
+                Entry::Sub { entries, .. } => walk(entries, out),
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for m in menus() {
+        walk(&m.entries, &mut out);
+    }
+    for b in crate::commands::BINDINGS {
+        if !out.contains(&b.command) {
+            out.push(b.command);
+        }
+    }
+    out
+}
+
+/// A command's menu label ("Gaussian Blur", "Save As"), or a readable name for commands
+/// that only have a shortcut.
+pub fn command_label(c: Command) -> String {
+    fn find(entries: &[Entry], c: Command, path: &str) -> Option<String> {
+        for e in entries {
+            match e {
+                Entry::Item { label, command, .. } | Entry::Check { label, command, .. }
+                    if *command == c =>
+                {
+                    let l = parse_mnemonic(label).0.trim_end_matches("...").to_owned();
+                    return Some(if path.is_empty() {
+                        l
+                    } else {
+                        format!("{path} › {l}")
+                    });
+                }
+                Entry::Sub { label, entries } => {
+                    let p = parse_mnemonic(label).0;
+                    if let Some(found) = find(entries, c, &p) {
+                        return Some(found);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+    for m in menus() {
+        if let Some(l) = find(&m.entries, c, "") {
+            return format!("{} › {l}", parse_mnemonic(m.title).0);
+        }
+    }
+    // Shortcut-only commands: a readable form of their id.
+    let id = c.id();
+    let mut out = String::new();
+    for (i, ch) in id.char_indices() {
+        if ch.is_uppercase() && i > 0 && !id[..i].ends_with('(') {
+            out.push(' ');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

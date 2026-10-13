@@ -98,6 +98,11 @@ pub struct PaintNotNetApp {
     pub(crate) last_effect: Option<pnn_effects::EffectId>,
     /// Autosave for crash recovery (enabled by `main`, so tests don't touch the real folder).
     pub(crate) autosave: Option<crate::autosave::Autosave>,
+    pub(crate) config: crate::config::Config,
+    /// Where settings are saved (set by `main`; tests keep settings in memory).
+    pub(crate) config_path: Option<std::path::PathBuf>,
+    pub(crate) settings_open: Option<crate::settings_ui::SettingsState>,
+    pub(crate) palette: Option<crate::settings_ui::PaletteState>,
     /// The adjustment/effect dialog in progress.
     pub(crate) effect: Option<crate::effect_runner::EffectSession>,
     /// Last applied effect and its settings, for Repeat (Ctrl+F).
@@ -171,6 +176,10 @@ impl PaintNotNetApp {
             pending_paste: None,
             last_effect: None,
             autosave: None,
+            config: crate::config::Config::default(),
+            config_path: None,
+            settings_open: None,
+            palette: None,
             effect: None,
             last_applied: None,
             synced_selection: 0,
@@ -342,6 +351,12 @@ impl PaintNotNetApp {
         }
         let vp = self.canvas.viewport;
         match t.command {
+            Command::Settings => {
+                self.settings_open = Some(Default::default());
+            }
+            Command::CommandPalette => {
+                self.palette = Some(Default::default());
+            }
             Command::Adjustment(a) => {
                 self.open_effect(ctx, crate::effect_runner::EffectRef::Adjustment(a))
             }
@@ -478,6 +493,23 @@ impl PaintNotNetApp {
         if self.workspace.remove(key).is_some() {
             self.released.push(key);
         }
+    }
+
+    /// Use `config` (loaded by `main` from `path`; changes are saved back there).
+    pub fn set_config(
+        &mut self,
+        ctx: &egui::Context,
+        config: crate::config::Config,
+        path: Option<std::path::PathBuf>,
+    ) {
+        self.config = config;
+        self.config_path = path;
+        self.apply_config(ctx);
+    }
+
+    /// Test access to the settings.
+    pub fn config(&self) -> &crate::config::Config {
+        &self.config
     }
 
     /// Turn on autosave into `state_dir`, offering to recover images a crashed session left.
@@ -1368,6 +1400,8 @@ impl eframe::App for PaintNotNetApp {
 
         let modal_open = self.modal.is_some()
             || self.effect.is_some()
+            || self.settings_open.is_some()
+            || self.palette.is_some()
             || self.files.dialog_open()
             || self.menu.open;
         if !modal_open && !ctx.egui_wants_keyboard_input() {
@@ -1534,6 +1568,8 @@ impl eframe::App for PaintNotNetApp {
         }
         self.run_doc_dialog(&ctx);
         self.run_effect(&ctx);
+        self.run_settings(&ctx);
+        self.run_palette(&ctx);
 
         for tab in self.workspace.tabs_mut() {
             shell::update_thumbnail(&ctx, tab, now);

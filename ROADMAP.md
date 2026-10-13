@@ -6,8 +6,8 @@ shown passing.
 
 **Current state (2026-10-13):** Phases 0–9 and the first batch of 10 are complete, verified and committed (Phase 5
 still awaits your sign-off on the feel). Phase 9 (stock effects) is done except Sketch Blur, and Phase 10's first batch of
-BoltBait-class effects is in. Phase 11a (OpenRaster, autosave, crash recovery) is done. **Next: Phase 11b (settings,
-rebindable keys, command palette)**, then 11c (packaging), then more of the BoltBait pack in
+BoltBait-class effects is in. Phases 11a (OpenRaster, autosave, crash recovery) and 11b (settings, rebindable keys, command palette) are done.
+**Next: Phase 11c (packaging)**, then more of the BoltBait pack in
 whatever order you rank it. After all phases, compare against the paint.net 5.1.12 release files the user provided
 (`~/Downloads/paint.net.5.1.12.portable.x64`; the user states the owners gave permission).
 Functionality first: the user wants every feature working
@@ -225,7 +225,12 @@ Guessed or approximated (paint.net doesn't document them):
 - [x] Autosave every 60 s of changed documents to `~/.local/state/paintnotnet/recovery/<pid>/` (ORA, written atomically on a worker thread); saving/closing removes a document's file, a clean exit removes the folder; at startup a dead session's images are offered back (Recover opens them unsaved, with their original paths; Discard deletes them)
 - **Verified 2026-10-13:** ORA round trip (layers, names with XML specials, opacity, hidden, Glow, active layer, DPI, mimetype first), every blend mode maps both ways; **Krita** opened our file and exported a composite within 1 level of ours (Multiply at 78%), and our reader loaded Krita's re-saved ORA (cropped layer at offset 16,12, Multiply, opacity); UI tests: Ctrl+S on a layered .ora saves without flattening and reloads; autosave writes a changed document; a crashed session's image is offered back and recovered unsaved under its original name. CI passes (290 tests).
 - Not checked: a real crash on the display (the dead session is simulated in tests). Autosave interval isn't configurable yet (Settings, 11b).
-- [ ] Settings dialog, rebindable keymap UI, command palette (Ctrl+K)
+### 11b ✅ Settings, rebindable keys, command palette
+- [x] Settings (Ctrl+Shift+X, paint.net's shortcut) with General (appearance: follow system/dark/light; autosave interval in minutes, 0 = off) and Keyboard tabs, saved to `~/.config/paintnotnet/settings.toml`
+- [x] Keyboard tab: searchable list of every command with its shortcuts; Change captures the next chord, Clear unbinds, Reset restores the built-in; a chord already in use moves to the new command (with a note saying which lost it)
+- [x] Command palette (Ctrl+K): type to filter every menu and shortcut command, Up/Down/Enter to run, Esc to close
+- **Verified 2026-10-13:** UI tests rebind Invert Colors to Ctrl+J through the real dialog (then Ctrl+J inverts and Ctrl+Shift+I does nothing), switch appearance to Light, and run Gaussian Blur from the palette; renders of Settings › Keyboard and the palette checked by eye. CI passes (295 tests).
+- The shortcut editor and the palette are paintnotnet additions (paint.net 5.x has neither); paint.net's Settings has more pages (tools, updates, plugins) that aren't copied.
 - [ ] Packaging: PKGBUILD for CachyOS/Arch, .desktop file, MIME associations, icon
 - [ ] Optional: pop-out panels, tablet pressure
 

@@ -139,6 +139,8 @@ pub enum Command {
     ToggleWindow(Panel),
     ResetWindow(Panel),
     Settings,
+    /// Ctrl+K (paintnotnet addition): search and run any menu command.
+    CommandPalette,
     HelpTopics,
     About,
     OpenMenu(MenuId),
@@ -188,10 +190,15 @@ use Command as C;
 impl Command {
     /// Shortcut text shown in menus and tooltips (first binding).
     pub fn shortcut_text(self) -> Option<String> {
-        BINDINGS
+        bindings()
             .iter()
             .find(|b| b.command == self)
             .map(|b| b.chord.text())
+    }
+
+    /// Stable identifier for settings files.
+    pub fn id(self) -> String {
+        format!("{self:?}")
     }
 
     /// Whether the command does something yet. Unimplemented commands stay visible in
@@ -209,6 +216,8 @@ impl Command {
         matches!(
             self,
             C::FeatherSelection
+                | C::Settings
+                | C::CommandPalette
                 | C::NewImage
                 | C::Open
                 | C::Close
@@ -336,6 +345,37 @@ impl Chord {
             && self.shift.is_none_or(|s| s == m.shift)
     }
 
+    /// Parse `Chord::text` output ("Ctrl+Shift+K").
+    pub fn parse(text: &str) -> Option<Chord> {
+        let (mut ctrl, mut alt, mut shift) = (false, false, false);
+        let mut parts: Vec<&str> = text.split('+').collect();
+        // A trailing "+" key ("Ctrl++") splits into empty parts.
+        if text.ends_with("++") {
+            parts.truncate(parts.len() - 2);
+            parts.push("+");
+        }
+        let key_name = parts.pop()?;
+        for p in parts {
+            match p {
+                "Ctrl" => ctrl = true,
+                "Alt" => alt = true,
+                "Shift" => shift = true,
+                _ => return None,
+            }
+        }
+        let key = ALL_KEYS
+            .iter()
+            .copied()
+            .find(|&k| key_text(k) == key_name)
+            .or_else(|| Key::from_name(key_name))?;
+        Some(Chord {
+            ctrl,
+            alt,
+            shift: Some(shift),
+            key,
+        })
+    }
+
     pub fn text(&self) -> String {
         let mut s = String::new();
         if self.ctrl {
@@ -351,6 +391,24 @@ impl Chord {
         s
     }
 }
+
+/// Keys with a custom label in `key_text`, for parsing it back.
+const ALL_KEYS: &[Key] = &[
+    Key::Plus,
+    Key::Minus,
+    Key::Comma,
+    Key::Period,
+    Key::Slash,
+    Key::OpenBracket,
+    Key::CloseBracket,
+    Key::Backtick,
+    Key::PageUp,
+    Key::PageDown,
+    Key::Delete,
+    Key::Insert,
+    Key::Backspace,
+    Key::Escape,
+];
 
 pub fn key_text(key: Key) -> &'static str {
     match key {
@@ -372,9 +430,44 @@ pub fn key_text(key: Key) -> &'static str {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Binding {
     pub chord: Chord,
     pub command: Command,
+}
+
+/// Shortcuts the user rebound in Settings: each listed command's chords replace its built-in
+/// ones (an empty list unbinds it).
+static OVERRIDES: std::sync::RwLock<Vec<(Command, Vec<Chord>)>> =
+    std::sync::RwLock::new(Vec::new());
+
+pub fn set_overrides(o: Vec<(Command, Vec<Chord>)>) {
+    if let Ok(mut w) = OVERRIDES.write() {
+        *w = o;
+    }
+}
+
+pub fn overrides() -> Vec<(Command, Vec<Chord>)> {
+    OVERRIDES.read().map(|o| o.clone()).unwrap_or_default()
+}
+
+/// The keymap in effect: built-in bindings with the user's overrides applied (overridden
+/// chords first, so they win over a built-in use of the same chord).
+pub fn bindings() -> Vec<Binding> {
+    let o = overrides();
+    let mut out: Vec<Binding> = o
+        .iter()
+        .flat_map(|(c, chords)| chords.iter().map(|&chord| Binding { chord, command: *c }))
+        .collect();
+    out.extend(BINDINGS.iter().copied().filter(|b| {
+        !o.iter().any(|(c, chords)| {
+            *c == b.command
+                || chords.iter().any(|ch| {
+                    ch.key == b.chord.key && ch.ctrl == b.chord.ctrl && ch.alt == b.chord.alt
+                })
+        })
+    }));
+    out
 }
 
 const N: bool = false;
@@ -493,6 +586,7 @@ pub static BINDINGS: &[Binding] = &[
     b(Y, N, Y, Key::F7, C::ResetWindow(Panel::Layers)),
     b(Y, N, Y, Key::F8, C::ResetWindow(Panel::Colors)),
     b(N, Y, N, Key::X, C::Settings),
+    b(Y, N, N, Key::K, C::CommandPalette),
     b(N, N, N, Key::F1, C::HelpTopics),
     b(N, Y, N, Key::F, C::OpenMenu(MenuId::File)),
     b(N, Y, N, Key::E, C::OpenMenu(MenuId::Edit)),
@@ -573,13 +667,9 @@ pub static BINDINGS: &[Binding] = &[
 ];
 
 /// Find the binding for a key event.
-pub fn lookup(
-    key: Key,
-    physical: Option<Key>,
-    modifiers: egui::Modifiers,
-) -> Option<&'static Binding> {
-    BINDINGS
-        .iter()
+pub fn lookup(key: Key, physical: Option<Key>, modifiers: egui::Modifiers) -> Option<Binding> {
+    bindings()
+        .into_iter()
         .find(|b| b.chord.matches(key, physical, modifiers))
 }
 

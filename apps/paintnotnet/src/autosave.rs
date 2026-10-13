@@ -50,9 +50,18 @@ impl Autosave {
         }
     }
 
+    /// Minutes between passes; 0 stops autosaving.
+    pub fn set_interval(&mut self, minutes: u32) {
+        self.interval = if minutes == 0 {
+            Duration::MAX
+        } else {
+            Duration::from_secs(minutes as u64 * 60)
+        };
+    }
+
     /// Whether a write pass is due.
     pub fn due(&self, now: Instant) -> bool {
-        now.duration_since(self.last) >= self.interval
+        self.interval != Duration::MAX && now.duration_since(self.last) >= self.interval
     }
 
     /// Write changed, unsaved documents if the interval has passed.
@@ -62,7 +71,7 @@ impl Autosave {
         now: Instant,
         docs: Vec<(u64, Document, bool, String, Option<PathBuf>)>,
     ) {
-        if now.duration_since(self.last) < self.interval {
+        if !self.due(now) {
             return;
         }
         self.last = now;
