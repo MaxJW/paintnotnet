@@ -100,8 +100,8 @@ impl PaintNotNetApp {
                 "Feather Selection" | "Blur Selection Edge" => {
                     tab.is_some_and(|t| !t.doc.selection().is_empty())
                 }
-                "Feather Object" => has,
-                _ => return None,
+                // Every other effect works on the active layer.
+                _ => has,
             },
             _ => return None,
         })

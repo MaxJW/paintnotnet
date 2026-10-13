@@ -342,6 +342,9 @@ impl PaintNotNetApp {
             Command::Adjustment(a) => {
                 self.open_effect(ctx, crate::effect_runner::EffectRef::Adjustment(a))
             }
+            Command::Effect(id) => {
+                self.open_effect(ctx, crate::effect_runner::EffectRef::Effect(id))
+            }
             Command::RepeatEffect => {
                 if !self.repeat_effect()
                     && let Some(id) = self.last_effect

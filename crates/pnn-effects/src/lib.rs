@@ -4,6 +4,7 @@
 //! Menu contents follow the paint.net 5 docs (`AdjustmentsMenu.html`, `Effects*Menu.html`).
 
 pub mod adjustments;
+pub mod blurs;
 pub mod curves;
 pub mod feather;
 pub mod framework;
@@ -211,6 +212,12 @@ pub fn effects_in(category: Category) -> impl Iterator<Item = (EffectId, &'stati
         .enumerate()
         .filter(move |(_, e)| e.category == category)
         .map(|(i, e)| (EffectId(i as u16), e))
+}
+
+/// The framework definition of a menu effect, if implemented.
+pub fn effect_def(id: EffectId) -> Option<framework::EffectDef> {
+    let name = effect(id).name;
+    blurs::def(name)
 }
 
 #[cfg(test)]

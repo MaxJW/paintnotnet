@@ -5,8 +5,7 @@ where you try it. A phase is only ticked off once its acceptance checks have bee
 shown passing.
 
 **Current state (2026-10-13):** Phases 0–8 are complete, verified and committed (Phase 5
-still awaits your sign-off on the feel). Phase 7 (Line/Curve, Shapes, Text) is done. Phase 8 (effect framework, all 13 adjustments) is done. **Next: Phase 9 (stock
-effects).** After all phases, compare against the paint.net 5.1.12 release files the user provided
+still awaits your sign-off on the feel). **Next: Phase 9b (Distort, Noise, Stylize, Artistic)**; 9a (Blurs) is done. After all phases, compare against the paint.net 5.1.12 release files the user provided
 (`~/Downloads/paint.net.5.1.12.portable.x64`; the user states the owners gave permission).
 Functionality first: the user wants every feature working
 before the visual refresh (Phase 12).
@@ -194,7 +193,15 @@ Guessed or approximated (paint.net doesn't document them):
 - Not done: WebP metadata (EXIF/ICC/XMP) and animation, which pdn-webp keeps; document-dialog effects (Feather Object etc.) still render on the UI thread, so very large images preview slower than the adjustments do.
 
 ## Phase 9: Stock effects
-- [ ] Artistic, Blurs, Color, Distort, Noise, Object (Drop Shadow), Photo, Render, Stylize (full list in the inventory)
+### 9a ✅ Blurs
+- [x] Effects menu items run through the effect framework (live tiled preview, movable dialog, OK/Cancel, Repeat); renderers can now render whole rectangles (`render_rect`) to share work across rows; history entries use 3.36's effect icons
+- [x] Ported from 3.36: Gaussian (its tent kernel, alpha-weighted, computed with running sums: radius 200 on 4K in ~0.15 s), Motion, Radial, Zoom (fixed-point maths as 3.36), Fragment, Median (disc histogram percentile), Surface (3.36 intensity weights); 5.x-only with guessed maths: Square (alpha-weighted box), Bokeh (disc average)
+- **Verified 2026-10-13:** 3 engine tests (Gaussian vs a brute-force port of 3.36's O(r²) loop within ±1 at r = 1, 3, 7; every blur keeps flat areas; median/surface keep edges) and 2 UI tests (Gaussian from the menu previews, OK, Ctrl+F; every blur opens and Cancel restores exactly). CI passes (268 tests).
+- Differences/gaps: Median fixes 3.36's off-by-one percentile (3.36 brightened flat areas by one level); Radial/Zoom centres are two Offset numbers, not 3.36's pan control; Sketch Blur not implemented (no published maths); slow at extremes on 4K (Motion distance 200 ≈ 6 s, Radial ≈ 1.3 s) though the preview streams in without blocking.
+### 9b Distort, Noise, Stylize, Artistic
+- [ ] Bulge, Crystalize, Dents, Frosted Glass, Morphology, Pixelate, Polar Inversion, Tile Reflection, Twist; Add Noise, Reduce Noise; Edge Detect, Emboss, Outline, Relief; Ink Sketch, Oil Painting, Pencil Sketch
+### 9c Photo, Render, Object, Color
+- [ ] Glow, Red Eye Removal, Sharpen, Soften Portrait, Straighten, Vignette; Clouds, Julia, Mandelbrot, Turbulence; Drop Shadow; Quantize
 
 ## Phase 10: BoltBait-class built-ins
 - [ ] Ask you which ones you actually used, then build in that order. Likely first: Outline Object/Selection, Inner Shadow, Bevel, Drop Shadow Plus, Switch Alpha↔Gray, Apply Alpha Mask, Transparency, Color Balance

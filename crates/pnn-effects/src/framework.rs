@@ -116,6 +116,15 @@ pub struct Env {
 pub trait Renderer: Send + Sync {
     /// Write output pixels for row `y`, columns `x0 .. x0 + out.len()`.
     fn render_row(&self, src: &Surface, x0: u32, y: u32, out: &mut [ColorBgra]);
+
+    /// Write `rect` (row-major, `rect.width` wide). Effects that share work across rows (e.g.
+    /// separable blurs) override this; the default renders row by row.
+    fn render_rect(&self, src: &Surface, rect: Rect, out: &mut [ColorBgra]) {
+        let w = rect.width as usize;
+        for (j, row) in out.chunks_mut(w.max(1)).enumerate() {
+            self.render_row(src, rect.x, rect.y + j as u32, row);
+        }
+    }
 }
 
 /// A per-pixel operation (most adjustments).

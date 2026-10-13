@@ -198,7 +198,8 @@ impl Command {
     /// menus (disabled), as paint.net shows its full menus.
     pub fn implemented(self) -> bool {
         if let C::Effect(id) = self {
-            return IMPLEMENTED_EFFECTS.contains(&pnn_effects::effect(id).name);
+            return IMPLEMENTED_EFFECTS.contains(&pnn_effects::effect(id).name)
+                || pnn_effects::effect_def(id).is_some();
         }
         if let C::Adjustment(a) = self {
             return crate::effect_runner::EffectRef::Adjustment(a)

@@ -24,6 +24,7 @@ use crate::icons::Icon;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EffectRef {
     Adjustment(Adjustment),
+    Effect(pnn_effects::EffectId),
 }
 
 impl EffectRef {
@@ -37,6 +38,7 @@ impl EffectRef {
                 build: |_, _, _| Box::new(pnn_effects::framework::PixelOp(|c| c)),
             }),
             Self::Adjustment(a) => pnn_effects::adjustments::def(a),
+            Self::Effect(id) => pnn_effects::effect_def(id),
         }
     }
 
@@ -58,6 +60,7 @@ impl EffectRef {
                 Adjustment::InvertAlpha => Icon::InvertColors,
                 _ => Icon::BrightnessContrast,
             }),
+            Self::Effect(id) => effect_icon(pnn_effects::effect(id).name),
         }
     }
 }
@@ -139,9 +142,20 @@ fn render_tile(
     let y1 = (bounds.y + bounds.height)
         .min(oy + TILE_SIZE)
         .min(src.height());
-    let mut row = vec![ColorBgra::TRANSPARENT; (x1.saturating_sub(x0)) as usize];
+    if x1 <= x0 || y1 <= y0 {
+        return src.tile(c).cloned();
+    }
+    let rw = (x1 - x0) as usize;
+    let mut rendered = vec![ColorBgra::TRANSPARENT; rw * (y1 - y0) as usize];
+    let rect = Rect {
+        x: x0,
+        y: y0,
+        width: x1 - x0,
+        height: y1 - y0,
+    };
+    renderer.render_rect(src, rect, &mut rendered);
     for y in y0..y1 {
-        renderer.render_row(src, x0, y, &mut row);
+        let row = &rendered[(y - y0) as usize * rw..(y - y0 + 1) as usize * rw];
         let out = tile.row_mut(y - oy);
         for (i, &new) in row.iter().enumerate() {
             let x = x0 + i as u32;
@@ -454,6 +468,7 @@ impl PaintNotNetApp {
         let (t, _, _) = self.last_applied.as_ref()?;
         match t {
             EffectRef::Adjustment(a) => Some(a.name()),
+            EffectRef::Effect(id) => Some(pnn_effects::effect(*id).name),
         }
     }
 }
@@ -839,4 +854,41 @@ fn level_edit(
         }
     });
     changed
+}
+
+/// History icon for a menu effect: its 3.36 icon where one exists.
+fn effect_icon(name: &str) -> Icon {
+    match name {
+        "Add Noise" => Icon::FxAddNoise,
+        "Bulge" => Icon::FxBulge,
+        "Clouds" => Icon::FxClouds,
+        "Dents" => Icon::FxDents,
+        "Edge Detect" => Icon::FxEdgeDetect,
+        "Emboss" => Icon::FxEmboss,
+        "Fragment Blur" => Icon::FxFragment,
+        "Frosted Glass" => Icon::FxFrostedGlass,
+        "Glow" => Icon::FxGlow,
+        "Ink Sketch" => Icon::FxInkSketch,
+        "Julia Fractal" => Icon::FxJulia,
+        "Mandelbrot Fractal" => Icon::FxMandelbrot,
+        "Median Blur" => Icon::FxMedian,
+        "Motion Blur" => Icon::FxMotionBlur,
+        "Oil Painting" => Icon::FxOilPainting,
+        "Outline" => Icon::FxOutline,
+        "Pencil Sketch" => Icon::FxPencilSketch,
+        "Pixelate" => Icon::FxPixelate,
+        "Polar Inversion" => Icon::FxPolarInversion,
+        "Radial Blur" => Icon::FxRadialBlur,
+        "Red Eye Removal" => Icon::FxRedEye,
+        "Reduce Noise" => Icon::FxReduceNoise,
+        "Relief" => Icon::FxRelief,
+        "Sharpen" => Icon::FxSharpen,
+        "Soften Portrait" => Icon::FxSoftenPortrait,
+        "Surface Blur" => Icon::FxSurfaceBlur,
+        "Tile Reflection" => Icon::FxTile,
+        "Twist" => Icon::FxTwist,
+        "Vignette" => Icon::FxVignette,
+        "Zoom Blur" => Icon::FxZoomBlur,
+        _ => Icon::FxBlur,
+    }
 }
