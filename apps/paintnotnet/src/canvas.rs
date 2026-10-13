@@ -50,6 +50,8 @@ pub struct CanvasState {
     pub tool_cursor: Option<egui::CursorIcon>,
     /// Feather preview: (mask identity, coverage) to tint outside of, set by the app.
     pub overlay: Option<(u64, std::sync::Arc<pnn_core::Mask>)>,
+    /// Gradient start/end nubs (image coordinates).
+    pub gradient_nubs: Option<[[f64; 2]; 2]>,
     /// Brush outline diameter (image px) to draw around the pointer.
     pub brush_outline: Option<f32>,
     /// Move tool nubs to draw (image coordinates).
@@ -325,6 +327,29 @@ pub fn show(
                 egui::Color32::WHITE,
                 stroke,
                 egui::StrokeKind::Inside,
+            );
+        }
+    }
+    if let Some(nubs) = state.gradient_nubs {
+        // 3.36 draws the gradient's nubs as circles (`MoveNubShape.Circle`).
+        let painter = ui.painter().with_clip_rect(canvas_rect);
+        let pts = nubs.map(|p| {
+            let sp = view.image_to_screen(p, vp);
+            egui::pos2(
+                canvas_rect.min.x + (sp[0] / ppp) as f32,
+                canvas_rect.min.y + (sp[1] / ppp) as f32,
+            )
+        });
+        painter.line_segment(
+            pts,
+            egui::Stroke::new(1.0, egui::Color32::from_black_alpha(128)),
+        );
+        for c in pts {
+            painter.circle(
+                c,
+                4.5,
+                egui::Color32::WHITE,
+                egui::Stroke::new(1.0, egui::Color32::BLACK),
             );
         }
     }

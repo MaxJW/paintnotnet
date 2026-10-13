@@ -374,3 +374,52 @@ fn paintbrush_render() {
         image.save(format!("{dir}/shell-paintbrush.png")).unwrap();
     }
 }
+
+/// A live radial gradient with its two nubs, and a Paint Bucket fill (hatched) under it.
+#[test]
+fn gradient_render() {
+    use eframe::egui::{Event, Modifiers, PointerButton, Pos2};
+    let mut h = harness();
+    let to_screen = |h: &Harness<'_, PaintNotNetApp>, x: f64, y: f64| {
+        let rect = h.state().canvas().rect.unwrap();
+        let view = h.state().workspace().active().unwrap().view.unwrap();
+        let s = view.image_to_screen([x, y], [rect.width() as f64, rect.height() as f64]);
+        Pos2::new(rect.min.x + s[0] as f32, rect.min.y + s[1] as f32)
+    };
+    let drag = |h: &mut Harness<'_, PaintNotNetApp>, pts: &[(f64, f64)]| {
+        let press = |pressed, pos| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        h.event(Event::PointerMoved(to_screen(h, pts[0].0, pts[0].1)));
+        h.step();
+        h.event(press(true, to_screen(h, pts[0].0, pts[0].1)));
+        h.step();
+        for &(x, y) in &pts[1..] {
+            h.event(Event::PointerMoved(to_screen(h, x, y)));
+            h.step();
+        }
+        let last = *pts.last().unwrap();
+        h.event(press(false, to_screen(h, last.0, last.1)));
+        h.step();
+    };
+    {
+        let s = h.state_mut().settings_mut();
+        s.primary = pnn_core::ColorBgra::from_rgba(250, 200, 40, 255);
+        s.secondary = pnn_core::ColorBgra::from_rgba(40, 60, 160, 255);
+        s.gradient_type = pnn_tools::GradientType::Radial;
+    }
+    h.state_mut().set_tool(pnn_tools::ToolKind::Gradient);
+    h.step();
+    drag(&mut h, &[(400.0, 300.0), (550.0, 350.0), (650.0, 420.0)]);
+    for _ in 0..3 {
+        h.step();
+    }
+    if let Ok(dir) = std::env::var("PNN_RENDER_DUMP")
+        && let Ok(image) = h.render()
+    {
+        image.save(format!("{dir}/shell-gradient.png")).unwrap();
+    }
+}

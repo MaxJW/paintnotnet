@@ -5,7 +5,7 @@ where you try it. A phase is only ticked off once its acceptance checks have bee
 shown passing.
 
 **Current state (2026-10-13):** Phases 0–5 are complete, verified and committed (Phase 5
-still awaits your sign-off on the feel). **Next: Phase 6b (Paint Bucket and Gradient)**; 6a (Paintbrush, Eraser) is done.
+still awaits your sign-off on the feel). **Next: Phase 6c (Color Picker, Recolor, Clone Stamp)**; 6a–6b are done.
 Functionality first: the user wants every feature working
 before the visual refresh (Phase 12).
 
@@ -136,9 +136,12 @@ Guessed or approximated (paint.net doesn't document them):
 - [x] Strokes honour the (soft) selection; a stroke never builds up over itself
 - **Verified 2026-10-13:** 13 engine tests (dab profile, aliased symmetry, continuity, no build-up, spacing carry, smoothing through samples, erase/overwrite, hatches) and 6 UI tests (stroke + undo, secondary + no build-up, selection clip, Eraser, Overwrite, tool switch mid-stroke). Render checked. Real display, 3840×2160 image, a pointer move per frame (`PNN_SMOKE_BRUSH=<width>`): 164.8 fps at widths 20, 200 and 800 (p99 ≤ 6.5 ms). CI passes (189 tests).
 - Guessed (5.x doesn't publish them): the hardness falloff (smoothstep from r·h − ½ to r + ½), sweeping between dabs up to 50% spacing, Catmull-Rom smoothing one sample behind, the hatch set and its 8×8 phase (3.36 had GDI+'s 53 hatches). Pressure is not supported (no tablet).
-### 6b Paint Bucket and Gradient
-- [ ] Paint Bucket (tolerance, flood mode, sampling, Shift toggle, fill style, antialiasing, blend)
-- [ ] Gradient (7 types, colour/transparency, 3 repeat modes, editable nubs, Shift 15°, right-drag swaps colours)
+### 6b ✅ Paint Bucket and Gradient
+- [x] Paint Bucket (3.36 `PaintBucketTool`/`FloodToolBase`): Magic Wand tolerance test, contiguous/global with Shift flipping it, flood limited to the selection and ignored outside it, Sampling Layer/Image, fill style, blend mode/Overwrite, right button swaps colours
+- [x] Gradient (3.36 `GradientRenderer(s)` maths ported): Linear, Linear (Reflected), Diamond, Radial, Conical, Spiral ↻/↺; Color/Transparency mode; No Repeat / Repeat Wrapped / Repeat Reflected; blend mode/Overwrite; nubs stay editable (drag either, right-click a nub swaps colours), Shift 15°, right-drag draws swapped; Enter, Esc, toolbar Finish, a new gradient, tool or document change commit; Undo takes back a live gradient; re-renders when colours/options change
+- **Verified 2026-10-13:** 7 gradient engine tests (each type, repeat modes, spirals, `ColorBgra.Blend` table, render modes, 15° snap); 8 UI tests (bucket contiguous/Shift-global, selection limit, gradient draw → nub edit → Enter, Esc + Undo, new gradient commits + right-drag swap + tool change, transparency mode, Shift snap, toolbar Finish). Render checked. CI passes (205 tests).
+- Speed: a live gradient re-renders the whole layer once per frame. Real display: 1080p image 120 fps (linear) / 88 fps (conical); **4K image only ~30 fps**: gradient ~9.5 ms, display-tile conversion ~5 ms and GPU upload 6–10 ms per frame for a whole-image change. Same cost will hit live adjustment previews (Phase 8), so fix it there for all of them (render/convert only visible tiles first, or a GPU preview).
+- Differences/guesses: Esc commits (5.x docs) where 3.36 cancelled; spiral and repeat maths are paintnotnet's (5.x unpublished); Paint Bucket antialiasing has no visible effect (3.36 filled a pixel region; 5.x's AA fill is unknown).
 ### 6c Color Picker, Recolor, Clone Stamp
 - [ ] Color Picker (layer/image, sample size, after-click behaviour, Ctrl samples image)
 - [ ] Recolor, Clone Stamp (Ctrl+click source)

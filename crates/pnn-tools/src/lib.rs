@@ -6,6 +6,7 @@
 //! paint.net 5 docs (`ToolsWindow.html`, `KeyboardMouseCommands.html`).
 
 pub mod brush;
+pub mod gradient;
 pub mod settings;
 
 pub use settings::*;

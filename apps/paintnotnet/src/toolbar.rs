@@ -242,6 +242,8 @@ fn options(
             sep(ui);
             sampling(ui, s);
             sep(ui);
+            fill_style(ui, s);
+            sep(ui);
             antialiasing(ui, s, icons);
             blend(ui, s, icons);
         }

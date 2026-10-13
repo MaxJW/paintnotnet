@@ -9,6 +9,7 @@ pub mod diagnostics;
 pub mod dialogs;
 pub mod doc_dialogs;
 pub mod file_ops;
+pub mod fill_tools;
 pub mod icons;
 pub mod menus;
 pub mod move_tools;

@@ -75,6 +75,7 @@ pub struct PaintNotNetApp {
     /// Pencil stroke in progress.
     pub(crate) stroke: Option<crate::actions::PencilStroke>,
     pub(crate) brush: Option<crate::paint_tools::BrushStroke>,
+    pub(crate) gradient: Option<crate::fill_tools::GradientSession>,
     /// Selection being drawn.
     pub(crate) select_drag: Option<crate::selection_tools::SelectDrag>,
     /// Keyboard modifiers this frame (tools read Shift etc. mid-drag).
@@ -137,6 +138,7 @@ impl PaintNotNetApp {
             doc_dialog: None,
             stroke: None,
             brush: None,
+            gradient: None,
             select_drag: None,
             modifiers: egui::Modifiers::NONE,
             move_session: None,
@@ -214,6 +216,7 @@ impl PaintNotNetApp {
         if tool != self.tool {
             self.finish_move();
             self.finish_brush_stroke();
+            self.commit_gradient();
             self.previous_tool = self.tool;
             self.tool = tool;
         }
@@ -258,22 +261,32 @@ impl PaintNotNetApp {
 
     /// Run a command as if chosen from a menu or shortcut.
     pub fn execute(&mut self, ctx: &egui::Context, t: Triggered) {
-        if self.doc_dialog.is_some() || self.stroke.is_some() {
+        if self.doc_dialog.is_some() || self.stroke.is_some() || self.brush.is_some() {
             return;
         }
         if t.command == Command::Finish {
-            // Enter / Esc commits floating pixels; with nothing pending it deselects.
-            if self.move_session.is_some() {
+            // Enter / Esc commits floating pixels or a live gradient (paint.net 5 commits on
+            // Esc too; 3.36 cancelled the gradient); with nothing pending it deselects.
+            if self.gradient.is_some() {
+                self.commit_gradient();
+            } else if self.move_session.is_some() {
                 self.finish_move();
             } else if self.select_drag.is_none() {
                 self.selection_command(Command::Deselect);
             }
             return;
         }
+        if t.command == Command::Undo && self.cancel_gradient() {
+            // Undo takes back the live gradient first, as if it had been committed.
+            return;
+        }
         if matches!(t.command, Command::Undo | Command::Redo) {
             self.abandon_move();
         } else if !keeps_move_session(t.command) {
             self.finish_move();
+        }
+        if !keeps_move_session(t.command) {
+            self.commit_gradient();
         }
         if self.clipboard_command(t.command)
             || self.selection_command(t.command)
@@ -707,6 +720,28 @@ impl PaintNotNetApp {
                 };
                 tab.doc.set_selection(base.with_feather(feather));
             }
+        } else if let Ok(kind) = std::env::var("PNN_SMOKE_GRADIENT") {
+            // PNN_SMOKE_GRADIENT=<type index>: drag a live gradient's end nub every frame.
+            let Some(tab) = self.workspace.active() else {
+                return;
+            };
+            let (w, h) = (tab.doc.width() as f64, tab.doc.height() as f64);
+            let t = elapsed.as_secs_f64();
+            let pos = [
+                w * (0.5 + 0.4 * (t * 1.1).cos()),
+                h * (0.5 + 0.4 * (t * 1.7).sin()),
+            ];
+            if self.gradient.is_none() {
+                self.tool = ToolKind::Gradient;
+                let i: usize = kind.parse().unwrap_or(0);
+                self.settings.gradient_type = pnn_tools::GradientType::ALL[i.min(6)];
+                self.gradient_event(crate::canvas::ToolEvent::Down {
+                    pos: [w / 2.0, h / 2.0],
+                    button: crate::canvas::ToolButton::Primary,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            self.gradient_event(crate::canvas::ToolEvent::Move { pos });
         } else if let Ok(width) = std::env::var("PNN_SMOKE_BRUSH") {
             // PNN_SMOKE_BRUSH=<width>: paint one long Paintbrush stroke, a pointer move per
             // frame, across the image.
@@ -1176,7 +1211,8 @@ impl eframe::App for PaintNotNetApp {
 
         self.top_band(ui, &ctx);
         egui::Panel::top("tool_options").show(ui, |ui| {
-            let finish_enabled = false;
+            // The toolbar's Finish commits pending tool work, as Enter does.
+            let finish_enabled = self.gradient.is_some() || self.move_session.is_some();
             let palette = theme::palette(&ctx);
             match toolbar::row2(
                 ui,
@@ -1188,7 +1224,11 @@ impl eframe::App for PaintNotNetApp {
                 finish_enabled,
             ) {
                 Some(Row2Action::SelectTool(tool)) => self.set_tool(tool),
-                Some(Row2Action::Finish) | None => {}
+                Some(Row2Action::Finish) => {
+                    self.commit_gradient();
+                    self.finish_move();
+                }
+                None => {}
             }
         });
         self.toolbar_feather();
@@ -1227,7 +1267,10 @@ impl eframe::App for PaintNotNetApp {
         }
 
         self.canvas.tool_cursor = match self.tool {
-            ToolKind::Paintbrush | ToolKind::Eraser => Some(egui::CursorIcon::Crosshair),
+            ToolKind::Paintbrush
+            | ToolKind::Eraser
+            | ToolKind::PaintBucket
+            | ToolKind::Gradient => Some(egui::CursorIcon::Crosshair),
             ToolKind::Pencil
             | ToolKind::RectangleSelect
             | ToolKind::EllipseSelect
@@ -1236,7 +1279,9 @@ impl eframe::App for PaintNotNetApp {
             ToolKind::MoveSelectedPixels | ToolKind::MoveSelection => Some(egui::CursorIcon::Move),
             _ => None,
         };
+        self.refresh_gradient();
         self.canvas.handles = self.move_handles();
+        self.canvas.gradient_nubs = self.gradient_nubs();
         self.canvas.brush_outline = matches!(self.tool, ToolKind::Paintbrush | ToolKind::Eraser)
             .then_some(self.settings.brush_width);
         let preview = self.row2.feather_preview
