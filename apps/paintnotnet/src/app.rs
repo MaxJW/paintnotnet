@@ -76,6 +76,11 @@ pub struct PaintNotNetApp {
     pub(crate) stroke: Option<crate::actions::PencilStroke>,
     pub(crate) brush: Option<crate::paint_tools::BrushStroke>,
     pub(crate) gradient: Option<crate::fill_tools::GradientSession>,
+    pub(crate) clone_source: Option<crate::paint_tools::CloneSource>,
+    /// Recolor Ctrl/Shift picking in progress: (button, adjust).
+    pub(crate) recolor_picking: Option<(crate::canvas::ToolButton, bool)>,
+    /// Color Picker drag in progress: (button, Ctrl held at press).
+    pub(crate) picker: Option<(crate::canvas::ToolButton, bool)>,
     /// Selection being drawn.
     pub(crate) select_drag: Option<crate::selection_tools::SelectDrag>,
     /// Keyboard modifiers this frame (tools read Shift etc. mid-drag).
@@ -139,6 +144,9 @@ impl PaintNotNetApp {
             stroke: None,
             brush: None,
             gradient: None,
+            clone_source: None,
+            recolor_picking: None,
+            picker: None,
             select_drag: None,
             modifiers: egui::Modifiers::NONE,
             move_session: None,
@@ -1270,7 +1278,10 @@ impl eframe::App for PaintNotNetApp {
             ToolKind::Paintbrush
             | ToolKind::Eraser
             | ToolKind::PaintBucket
-            | ToolKind::Gradient => Some(egui::CursorIcon::Crosshair),
+            | ToolKind::Gradient
+            | ToolKind::ColorPicker
+            | ToolKind::Recolor
+            | ToolKind::CloneStamp => Some(egui::CursorIcon::Crosshair),
             ToolKind::Pencil
             | ToolKind::RectangleSelect
             | ToolKind::EllipseSelect
@@ -1282,8 +1293,16 @@ impl eframe::App for PaintNotNetApp {
         self.refresh_gradient();
         self.canvas.handles = self.move_handles();
         self.canvas.gradient_nubs = self.gradient_nubs();
-        self.canvas.brush_outline = matches!(self.tool, ToolKind::Paintbrush | ToolKind::Eraser)
-            .then_some(self.settings.brush_width);
+        self.canvas.brush_outline = matches!(
+            self.tool,
+            ToolKind::Paintbrush | ToolKind::Eraser | ToolKind::Recolor | ToolKind::CloneStamp
+        )
+        .then_some(self.settings.brush_width);
+        self.canvas.clone_source = if self.tool == ToolKind::CloneStamp {
+            self.clone_source_marker(self.canvas.cursor)
+        } else {
+            None
+        };
         let preview = self.row2.feather_preview
             || self
                 .doc_dialog

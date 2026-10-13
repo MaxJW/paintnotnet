@@ -311,6 +311,26 @@ pub enum StrokeOp {
     Overwrite,
     /// Alpha scaled by `1 − coverage`, colour kept (paint.net 3.36 `EraserTool`).
     Erase,
+    /// paint.net 3.36 `RecolorTool`: pixels within `tolerance` of `from` (its
+    /// `ColorDifference`) have their RGB shifted by `to − from`; alpha is kept.
+    Recolor {
+        from: ColorBgra,
+        to: ColorBgra,
+        tolerance: i32,
+    },
+}
+
+/// 3.36 `Utility.ColorDifference`: ⌈√((ΔR² + ΔG² + ΔB²) / 3)⌉.
+pub fn color_difference(a: ColorBgra, b: ColorBgra) -> i32 {
+    let d = |x: u8, y: u8| (x as i32 - y as i32).pow(2);
+    let sq = (d(a.r, b.r) + d(a.g, b.g) + d(a.b, b.b)) / 3;
+    (sq as f64).sqrt().ceil() as i32
+}
+
+/// The tolerance 3.36's Recolor uses: `Tolerance × 256`, but no more than the difference
+/// between the two colours (`RestrictTolerance`).
+pub fn recolor_tolerance(tolerance_pct: u8, from: ColorBgra, to: ColorBgra) -> i32 {
+    ((tolerance_pct as f32 / 100.0 * 256.0) as i32).min(color_difference(to, from))
 }
 
 /// Recomposite `r` of `layer` from its pre-stroke copy `before`: coverage is the stroke's
@@ -343,6 +363,27 @@ pub fn composite(
                     StrokeOp::Blend(mode) => {
                         let p = paint(x, y);
                         mode.apply(old, p.with_alpha((p.a as u32 * c / 255) as u8), 255)
+                    }
+                    StrokeOp::Recolor {
+                        from,
+                        to,
+                        tolerance,
+                    } => {
+                        if color_difference(old, from) > tolerance {
+                            old
+                        } else {
+                            // Shifted colour, mixed in by coverage at soft edges.
+                            let ch = |o: u8, t: u8, f: u8| {
+                                let adj = (o as i32 + t as i32 - f as i32).clamp(0, 255);
+                                (o as i32 + (adj - o as i32) * c as i32 / 255) as u8
+                            };
+                            ColorBgra::from_bgra(
+                                ch(old.b, to.b, from.b),
+                                ch(old.g, to.g, from.g),
+                                ch(old.r, to.r, from.r),
+                                old.a,
+                            )
+                        }
                     }
                 }
             };
@@ -573,5 +614,45 @@ mod tests {
                 times[30], times[59]
             );
         }
+    }
+
+    #[test]
+    fn recolor_shifts_matching_pixels_only() {
+        let mut layer = Surface::new_transparent(3, 1);
+        layer.set(0, 0, ColorBgra::from_rgba(200, 10, 10, 255)); // near red
+        layer.set(1, 0, ColorBgra::from_rgba(10, 200, 10, 128)); // green: no match
+        layer.set(2, 0, ColorBgra::from_rgba(250, 0, 0, 255)); // red, half coverage
+        let before = layer.clone();
+        let mut stroke: Mask = TiledBuffer::new(3, 1, 255);
+        stroke.set(2, 0, 128);
+        let (from, to) = (
+            ColorBgra::from_rgba(255, 0, 0, 255),
+            ColorBgra::from_rgba(0, 0, 255, 255),
+        );
+        let tolerance = recolor_tolerance(50, from, to);
+        assert_eq!(tolerance, 128, "50% × 256");
+        let all = Rect {
+            x: 0,
+            y: 0,
+            width: 3,
+            height: 1,
+        };
+        let op = StrokeOp::Recolor {
+            from,
+            to,
+            tolerance,
+        };
+        composite(&mut layer, &before, &stroke, None, all, op, |_, _| {
+            ColorBgra::BLACK
+        });
+        // (200,10,10) + (0,0,255) − (255,0,0) = (0, 10, 255) after clamping.
+        assert_eq!(layer.get(0, 0), ColorBgra::from_rgba(0, 10, 255, 255));
+        assert_eq!(layer.get(1, 0), before.get(1, 0));
+        let half = layer.get(2, 0);
+        assert!(
+            half.r > 100 && half.r < 150 && half.b > 100 && half.b < 150,
+            "{half:?}"
+        );
+        assert_eq!(color_difference(from, to), 209); // ⌈√(2·255²/3)⌉
     }
 }

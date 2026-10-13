@@ -4,8 +4,8 @@ Design and rationale: [PLAN.md](PLAN.md). Each phase ends with a usable app and 
 where you try it. A phase is only ticked off once its acceptance checks have been run and
 shown passing.
 
-**Current state (2026-10-13):** Phases 0–5 are complete, verified and committed (Phase 5
-still awaits your sign-off on the feel). **Next: Phase 6c (Color Picker, Recolor, Clone Stamp)**; 6a–6b are done.
+**Current state (2026-10-13):** Phases 0–6 are complete, verified and committed (Phase 5
+still awaits your sign-off on the feel). Phase 6 is done too. **Next: Phase 7 (Text, Line/Curve, Shapes).**
 Functionality first: the user wants every feature working
 before the visual refresh (Phase 12).
 
@@ -128,7 +128,7 @@ Guessed or approximated (paint.net doesn't document them):
 - **Verified 2026-10-13:** feather slider smoke test on the real display (KWin Wayland, RTX 3070, 3840×2160 image, 240 frames): **160.3 fps, mean 6.24 ms, p99 11.6 ms** against the 165 Hz vsync (6.06 ms); a plain smoke test runs at 164.6 fps, so the slider costs ~0.2 ms/frame on average with occasional 11 ms frames. Feather 0 is pixel-identical to a hard selection; golden square/thin-line/ring tests at r = 1, 8, 64; tile skipping is pixel-identical to per-pixel shaping for every profile × position. 6 feather UI tests (Shift+F6 → soft Delete, toolbar feather, moving feathered pixels, Feather Object, Blur Selection Edge, undo); preview render checked. CI passes.
 - Guessed (no 3.36 source, 5.x docs give no maths): profile curves, Feather Object's threshold semantics, the overlay tint colour. Adjust after you try it.
 
-## Phase 6: Painting and fill tools
+## Phase 6: Painting and fill tools ✅
 ### 6a ✅ Paintbrush, Eraser, blend modes
 - [x] Paintbrush (`pnn-tools::brush`): size (fractional), hardness, spacing, smoothing, antialiasing, blend mode, fill style (Solid + 6 hatches), [ ] and Ctrl+[ ]; left = primary, right = secondary; brush outline at the pointer; one history step per stroke, committed on tool change too
 - [x] Eraser (alpha × (1 − coverage), colour kept, as 3.36's `EraserTool`)
@@ -142,9 +142,12 @@ Guessed or approximated (paint.net doesn't document them):
 - **Verified 2026-10-13:** 7 gradient engine tests (each type, repeat modes, spirals, `ColorBgra.Blend` table, render modes, 15° snap); 8 UI tests (bucket contiguous/Shift-global, selection limit, gradient draw → nub edit → Enter, Esc + Undo, new gradient commits + right-drag swap + tool change, transparency mode, Shift snap, toolbar Finish). Render checked. CI passes (205 tests).
 - Speed: a live gradient re-renders the whole layer once per frame. Real display: 1080p image 120 fps (linear) / 88 fps (conical); **4K image only ~30 fps**: gradient ~9.5 ms, display-tile conversion ~5 ms and GPU upload 6–10 ms per frame for a whole-image change. Same cost will hit live adjustment previews (Phase 8), so fix it there for all of them (render/convert only visible tiles first, or a GPU preview).
 - Differences/guesses: Esc commits (5.x docs) where 3.36 cancelled; spiral and repeat maths are paintnotnet's (5.x unpublished); Paint Bucket antialiasing has no visible effect (3.36 filled a pixel region; 5.x's AA fill is unknown).
-### 6c Color Picker, Recolor, Clone Stamp
-- [ ] Color Picker (layer/image, sample size, after-click behaviour, Ctrl samples image)
-- [ ] Recolor, Clone Stamp (Ctrl+click source)
+### 6c ✅ Color Picker, Recolor, Clone Stamp
+- [x] Color Picker (3.36 `ColorPickerTool`): left → primary, right → secondary, also while dragging; Sampling Layer/Image, 1×1…11×11 squares (premultiplied average), Ctrl samples the image; after-click: stay / previous tool / Pencil
+- [x] Recolor (3.36 `RecoloringTool`): pixels within tolerance (`ColorDifference`, `Tolerance × 256`, capped at the colours' difference) of the secondary get its RGB shift to the primary (right button: the reverse), alpha kept, coverage-weighted at soft edges; Ctrl+click picks (keeps alpha); Shift+drag picks and moves the other colour by the same step
+- [x] Clone Stamp (3.36 `CloneStampTool`): Ctrl+click sets source point and layer; offset fixed by the first stroke and kept (aligned); copies from the pre-stroke source; source marker pulses
+- **Verified 2026-10-13:** 5 UI tests (picker primary/secondary, 3×3 average, layer vs Ctrl image sampling + switch to previous tool, Recolor stroke + tolerance + Ctrl pick, Clone Stamp no-source/clone/aligned second stroke) and a Recolor engine test. CI passes (211 tests). The clone-source marker drawing was not checked in a render.
+- Differences: 3.36's Clone Stamp scaled opacity by the primary colour's alpha⁴ (not done; 5.x unknown); Recolor and Clone Stamp use the brush engine (soft dabs, no build-up) instead of 3.36's per-dab blending.
 
 ## Phase 7: Text, Line/Curve, Shapes
 - [ ] Text tool: font, size, style, alignment; editable until Finish/Esc

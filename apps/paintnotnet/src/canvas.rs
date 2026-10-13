@@ -50,6 +50,8 @@ pub struct CanvasState {
     pub tool_cursor: Option<egui::CursorIcon>,
     /// Feather preview: (mask identity, coverage) to tint outside of, set by the app.
     pub overlay: Option<(u64, std::sync::Arc<pnn_core::Mask>)>,
+    /// Clone Stamp source marker (image coordinates).
+    pub clone_source: Option<[f64; 2]>,
     /// Gradient start/end nubs (image coordinates).
     pub gradient_nubs: Option<[[f64; 2]; 2]>,
     /// Brush outline diameter (image px) to draw around the pointer.
@@ -352,6 +354,29 @@ pub fn show(
                 egui::Stroke::new(1.0, egui::Color32::BLACK),
             );
         }
+    }
+    // The Clone Stamp's source: a second brush outline, pulsing as 3.36's `OnPulse`.
+    if let (Some(d), Some(src)) = (state.brush_outline, state.clone_source) {
+        let sp = view.image_to_screen(src, vp);
+        let c = egui::pos2(
+            canvas_rect.min.x + (sp[0] / ppp) as f32,
+            canvas_rect.min.y + (sp[1] / ppp) as f32,
+        );
+        let r = ((d as f64 / 2.0 * view.zoom / ppp) as f32).max(3.0);
+        let t = ui.input(|i| i.time);
+        let alpha = (((t * 1000.0 / 300.0).sin() + 1.0) / 2.0 * 224.0 + 31.0) as u8;
+        let painter = ui.painter().with_clip_rect(canvas_rect);
+        painter.circle_stroke(
+            c,
+            r + 1.0,
+            egui::Stroke::new(1.0, egui::Color32::from_white_alpha(alpha)),
+        );
+        painter.circle_stroke(
+            c,
+            r,
+            egui::Stroke::new(1.0, egui::Color32::from_black_alpha(alpha)),
+        );
+        ui.ctx().request_repaint();
     }
     // The brush outline around the pointer (paint.net's `BrushPreviewRenderer`).
     if let (Some(d), Some(cur)) = (state.brush_outline, state.cursor)
