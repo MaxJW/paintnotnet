@@ -95,6 +95,14 @@ impl PaintNotNetApp {
             | Command::Resize
             | Command::CanvasSize => has,
             Command::Flatten => n > 1,
+            Command::FeatherSelection => tab.is_some_and(|t| !t.doc.selection().is_empty()),
+            Command::Effect(id) => match pnn_effects::effect(id).name {
+                "Feather Selection" | "Blur Selection Edge" => {
+                    tab.is_some_and(|t| !t.doc.selection().is_empty())
+                }
+                "Feather Object" => has,
+                _ => return None,
+            },
             _ => return None,
         })
     }
@@ -232,6 +240,20 @@ impl PaintNotNetApp {
                 self.doc_dialog = Some(DocDialog::rotate_zoom(tab.key, &tab.doc))
             }
             Command::Resize => self.doc_dialog = Some(DocDialog::resize(tab.key, &tab.doc)),
+            Command::FeatherSelection => {
+                self.doc_dialog = Some(DocDialog::feather_selection(tab.key, &tab.doc))
+            }
+            Command::Effect(id) => {
+                self.doc_dialog = match pnn_effects::effect(id).name {
+                    "Feather Selection" => Some(DocDialog::feather_selection(tab.key, &tab.doc)),
+                    "Feather Object" => Some(DocDialog::feather_object(tab.key, &tab.doc)),
+                    "Blur Selection Edge" => {
+                        Some(DocDialog::blur_selection_edge(tab.key, &tab.doc))
+                    }
+                    _ => return false,
+                };
+                self.last_effect = Some(id);
+            }
             Command::CanvasSize => {
                 self.doc_dialog = Some(DocDialog::canvas_size(tab.key, &tab.doc))
             }
@@ -247,10 +269,11 @@ impl PaintNotNetApp {
         };
         let outcome = dialog.show(ctx);
         let (primary, secondary) = (self.settings.primary, self.settings.secondary);
+        let antialias = self.settings.selection_quality == pnn_tools::SelectionQuality::Antialiased;
         let key = dialog.key;
         match outcome {
             Outcome::Pending { changed: true } if dialog.live_preview() => {
-                let preview = dialog.apply(primary, secondary);
+                let preview = dialog.apply(primary, secondary, antialias);
                 if let Some(tab) = self.workspace.tab_mut(key) {
                     tab.doc = preview;
                 }
@@ -258,9 +281,10 @@ impl PaintNotNetApp {
             Outcome::Pending { .. } => {}
             Outcome::Ok => {
                 let dialog = self.doc_dialog.take().expect("open");
-                let result = dialog.apply(primary, secondary);
+                let result = dialog.apply(primary, secondary, antialias);
                 if let Some(tab) = self.workspace.tab_mut(key) {
-                    let unchanged = result.revision() == dialog.original.revision();
+                    let unchanged = result.revision() == dialog.original.revision()
+                        && result.selection_revision() == dialog.original.selection_revision();
                     tab.doc = result;
                     if !unchanged {
                         let icon = match dialog.kind {
@@ -268,6 +292,9 @@ impl PaintNotNetApp {
                             doc_dialogs::Kind::Resize(_) => Icon::Resize,
                             doc_dialogs::Kind::CanvasSize(_) => Icon::CanvasSize,
                             doc_dialogs::Kind::RotateZoom(_) => Icon::RotateZoom,
+                            doc_dialogs::Kind::FeatherSelection(_)
+                            | doc_dialogs::Kind::FeatherObject(_)
+                            | doc_dialogs::Kind::BlurSelectionEdge(_) => Icon::Selection,
                         };
                         tab.commit(dialog.history_name(), icon);
                     }

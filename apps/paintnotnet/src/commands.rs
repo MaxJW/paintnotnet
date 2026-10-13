@@ -15,6 +15,10 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, Key};
 use pnn_effects::{Adjustment, EffectId};
 
+/// Effects that work so far (by menu name).
+pub const IMPLEMENTED_EFFECTS: &[&str] =
+    &["Feather Object", "Feather Selection", "Blur Selection Edge"];
+
 /// A floating utility window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Panel {
@@ -193,9 +197,13 @@ impl Command {
     /// Whether the command does something yet. Unimplemented commands stay visible in
     /// menus (disabled), as paint.net shows its full menus.
     pub fn implemented(self) -> bool {
+        if let C::Effect(id) = self {
+            return IMPLEMENTED_EFFECTS.contains(&pnn_effects::effect(id).name);
+        }
         matches!(
             self,
-            C::NewImage
+            C::FeatherSelection
+                | C::NewImage
                 | C::Open
                 | C::Close
                 | C::Save

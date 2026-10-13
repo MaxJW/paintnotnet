@@ -5,6 +5,7 @@
 //! Wording follows paint.net 3.36 `Strings.resx` (CC BY-NC-ND, used unmodified).
 
 use eframe::egui::{self, Align, Layout, vec2};
+use pnn_core::selection::{Feather, FeatherPosition, FeatherProfile};
 use pnn_core::transform::{Anchor, Resampling};
 use pnn_core::{BlendMode, ColorBgra, Document};
 use pnn_effects::rotate_zoom::RotateZoom;
@@ -169,11 +170,39 @@ pub struct CanvasSize {
     pub fill: CanvasFill,
 }
 
+/// Effects > Object > Feather Object.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FeatherObject {
+    pub radius: f32,
+    pub profile: FeatherProfile,
+    /// Alpha at or above this counts as part of the object.
+    pub threshold: u8,
+    /// Treat the canvas border as an edge to feather against.
+    pub canvas_edge: bool,
+}
+
+impl Default for FeatherObject {
+    fn default() -> Self {
+        Self {
+            radius: 8.0,
+            profile: FeatherProfile::Smooth,
+            threshold: 128,
+            canvas_edge: false,
+        }
+    }
+}
+
 pub enum Kind {
     LayerProperties(LayerProperties),
     Resize(Resize),
     CanvasSize(CanvasSize),
     RotateZoom(RotateZoom),
+    /// Edit > Feather Selection (Shift+F6) and Effects > Selection > Feather Selection.
+    FeatherSelection(Feather),
+    FeatherObject(FeatherObject),
+    /// Effects > Selection > Blur Selection Edge: soften the selected pixels inward from the
+    /// selection's edge.
+    BlurSelectionEdge(Feather),
 }
 
 pub struct DocDialog {
@@ -225,6 +254,39 @@ impl DocDialog {
         }
     }
 
+    pub fn feather_selection(key: u64, doc: &Document) -> Self {
+        let mut f = doc.selection().feather();
+        if f.is_none() {
+            f.radius = 8.0;
+        }
+        Self {
+            key,
+            original: doc.clone(),
+            kind: Kind::FeatherSelection(f),
+        }
+    }
+
+    pub fn feather_object(key: u64, doc: &Document) -> Self {
+        Self {
+            key,
+            original: doc.clone(),
+            kind: Kind::FeatherObject(FeatherObject::default()),
+        }
+    }
+
+    pub fn blur_selection_edge(key: u64, doc: &Document) -> Self {
+        let f = Feather {
+            radius: 8.0,
+            profile: FeatherProfile::Smooth,
+            position: FeatherPosition::Inside,
+        };
+        Self {
+            key,
+            original: doc.clone(),
+            kind: Kind::BlurSelectionEdge(f),
+        }
+    }
+
     pub fn rotate_zoom(key: u64, doc: &Document) -> Self {
         Self {
             key,
@@ -239,12 +301,20 @@ impl DocDialog {
             Kind::Resize(_) => "Resize",
             Kind::CanvasSize(_) => "Canvas Size",
             Kind::RotateZoom(_) => "Rotate / Zoom",
+            Kind::FeatherSelection(_) => "Feather Selection",
+            Kind::FeatherObject(_) => "Feather Object",
+            Kind::BlurSelectionEdge(_) => "Blur Selection Edge",
         }
     }
 
     /// Whether the dialog previews live on the canvas (size-changing ones apply on OK).
     pub fn live_preview(&self) -> bool {
-        matches!(self.kind, Kind::LayerProperties(_) | Kind::RotateZoom(_))
+        !matches!(self.kind, Kind::Resize(_) | Kind::CanvasSize(_))
+    }
+
+    /// Show the selection overlay tint while this dialog is open.
+    pub fn wants_feather_preview(&self) -> bool {
+        matches!(self.kind, Kind::FeatherSelection(_))
     }
 
     pub fn show(&mut self, ctx: &egui::Context) -> Outcome {
@@ -261,6 +331,7 @@ impl DocDialog {
             .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0))
             .show(ctx, |ui| {
                 ui.set_min_width(300.0);
+                ui.set_max_width(420.0);
                 match &mut self.kind {
                     Kind::LayerProperties(p) => {
                         ui.label(egui::RichText::new("General").strong());
@@ -339,6 +410,37 @@ impl DocDialog {
                                 });
                         });
                     }
+                    Kind::FeatherSelection(f) => changed |= feather_controls(ui, f, true),
+                    Kind::BlurSelectionEdge(f) => changed |= feather_controls(ui, f, false),
+                    Kind::FeatherObject(fo) => {
+                        ui.horizontal(|ui| {
+                            ui.label("Radius:");
+                            changed |= ui
+                                .add(
+                                    egui::Slider::new(&mut fo.radius, 0.5..=250.0)
+                                        .logarithmic(true)
+                                        .suffix(" px"),
+                                )
+                                .changed();
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Profile:");
+                            for p in FeatherProfile::ALL {
+                                changed |=
+                                    ui.selectable_value(&mut fo.profile, p, p.name()).changed();
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Object threshold:");
+                            changed |= ui
+                                .add(egui::Slider::new(&mut fo.threshold, 1..=255))
+                                .on_hover_text("Alpha at or above this counts as the object")
+                                .changed();
+                        });
+                        changed |= ui
+                            .checkbox(&mut fo.canvas_edge, "Feather along the canvas edge too")
+                            .changed();
+                    }
                     Kind::RotateZoom(rz) => {
                         ui.label(egui::RichText::new("Roll / Rotate").strong());
                         ui.horizontal(|ui| {
@@ -379,13 +481,17 @@ impl DocDialog {
                     }
                 }
                 ui.add_space(8.0);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button("Cancel").clicked() {
-                        outcome = Some(Outcome::Cancel);
-                    }
-                    if ui.button("OK").clicked() {
-                        outcome = Some(Outcome::Ok);
-                    }
+                // A horizontal row keeps the right-aligned buttons from claiming the window's
+                // whole height (an auto-sized window would grow to fill the screen).
+                ui.horizontal(|ui| {
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.button("Cancel").clicked() {
+                            outcome = Some(Outcome::Cancel);
+                        }
+                        if ui.button("OK").clicked() {
+                            outcome = Some(Outcome::Ok);
+                        }
+                    });
                 });
             });
         let (enter, escape) = ctx.input(|i| {
@@ -404,7 +510,7 @@ impl DocDialog {
     }
 
     /// The document as it would be after OK.
-    pub fn apply(&self, primary: ColorBgra, secondary: ColorBgra) -> Document {
+    pub fn apply(&self, primary: ColorBgra, secondary: ColorBgra, antialias: bool) -> Document {
         use pnn_core::transform;
         let mut doc = self.original.clone();
         match &self.kind {
@@ -454,6 +560,45 @@ impl DocDialog {
                     l.surface = pnn_effects::rotate_zoom::rotate_zoom(&l.surface, rz)
                 });
             }
+            Kind::FeatherSelection(f) => {
+                let sel = doc.selection().clone().with_feather(*f);
+                doc.set_selection(sel);
+            }
+            Kind::FeatherObject(fo) => {
+                let (w, h) = (doc.width(), doc.height());
+                let selection = doc.selection().clone();
+                let i = doc.active_index();
+                doc.modify_layer(i, None, |l| {
+                    let feathered = pnn_effects::feather::feather_object(
+                        &l.surface,
+                        fo.radius,
+                        fo.profile,
+                        fo.threshold,
+                        fo.canvas_edge,
+                    );
+                    l.surface =
+                        clip_to_selection(&l.surface, feathered, &selection, w, h, antialias);
+                });
+            }
+            Kind::BlurSelectionEdge(f) => {
+                let (w, h) = (doc.width(), doc.height());
+                let selection = doc.selection().clone();
+                if !selection.is_empty() {
+                    let hard = selection.rasterize_hard(w, h, antialias);
+                    let soft = selection
+                        .clone()
+                        .with_feather(Feather {
+                            position: FeatherPosition::Inside,
+                            ..*f
+                        })
+                        .rasterize(w, h, antialias);
+                    let i = doc.active_index();
+                    let bounds = selection.pixel_bounds(w, h);
+                    doc.modify_layer(i, bounds, |l| {
+                        pnn_effects::feather::scale_alpha_inside(&mut l.surface, &hard, &soft)
+                    });
+                }
+            }
         }
         doc
     }
@@ -465,8 +610,72 @@ impl DocDialog {
             Kind::Resize(_) => "Resize",
             Kind::CanvasSize(_) => "Canvas Size",
             Kind::RotateZoom(_) => "Rotate / Zoom",
+            Kind::FeatherSelection(_) => "Feather Selection",
+            Kind::FeatherObject(_) => "Feather Object",
+            Kind::BlurSelectionEdge(_) => "Blur Selection Edge",
         }
     }
+}
+
+/// Radius, profile and (optionally) position controls. Returns true if anything changed.
+fn feather_controls(ui: &mut egui::Ui, f: &mut Feather, with_position: bool) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label("Radius:");
+        let slider = egui::Slider::new(&mut f.radius, 0.0..=250.0)
+            .logarithmic(true)
+            .suffix(" px");
+        changed |= ui.add(slider).changed();
+    });
+    ui.horizontal(|ui| {
+        ui.label("Profile:");
+        for p in FeatherProfile::ALL {
+            changed |= ui.selectable_value(&mut f.profile, p, p.name()).changed();
+        }
+    });
+    if with_position {
+        ui.horizontal(|ui| {
+            ui.label("Position:");
+            for p in FeatherPosition::ALL {
+                changed |= ui.selectable_value(&mut f.position, p, p.name()).changed();
+            }
+        });
+    }
+    changed
+}
+
+/// Keep `result` only inside the selection (blended by coverage); everything when nothing
+/// is selected.
+fn clip_to_selection(
+    original: &pnn_core::Surface,
+    result: pnn_core::Surface,
+    selection: &pnn_core::Selection,
+    w: u32,
+    h: u32,
+    antialias: bool,
+) -> pnn_core::Surface {
+    if selection.is_empty() {
+        return result;
+    }
+    let mask = selection.rasterize(w, h, antialias);
+    let mut out = original.clone();
+    for c in mask.tile_coords().collect::<Vec<_>>() {
+        let Some(m) = mask.tile(c) else { continue };
+        let src = result.tile(c);
+        let dst = out.tile_mut(c);
+        for (i, (p, &cov)) in dst.pixels_mut().iter_mut().zip(m.pixels()).enumerate() {
+            if cov == 0 {
+                continue;
+            }
+            let new = src.map_or(pnn_core::ColorBgra::TRANSPARENT, |t| t.pixels()[i]);
+            *p = if cov == 255 {
+                new
+            } else {
+                crate::selection_tools::lerp_premultiplied(*p, new, cov)
+            };
+        }
+    }
+    out
 }
 
 /// A copy of `layer` (same identity and properties) with new pixels.
@@ -506,7 +715,7 @@ mod tests {
             p.blend = BlendMode::Multiply;
             p.name = "Renamed".into();
         }
-        let out = d.apply(ColorBgra::BLACK, ColorBgra::WHITE);
+        let out = d.apply(ColorBgra::BLACK, ColorBgra::WHITE, true);
         assert_eq!(out.layer(0).opacity, 100);
         assert_eq!(out.layer(0).name, "Renamed");
         assert_eq!(doc.layer(0).opacity, 255, "original untouched");
@@ -523,7 +732,7 @@ mod tests {
             c.anchor = Anchor::TopLeft;
         }
         let red = ColorBgra::from_rgba(255, 0, 0, 255);
-        let out = d.apply(ColorBgra::BLACK, red);
+        let out = d.apply(ColorBgra::BLACK, red, true);
         assert_eq!((out.width(), out.height()), (20, 10));
         assert_eq!(out.layer(0).surface.get(15, 5), red);
         assert_eq!(out.layer(0).surface.get(5, 5), ColorBgra::WHITE);

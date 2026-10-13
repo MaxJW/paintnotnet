@@ -71,7 +71,9 @@ pub struct ViewUniforms {
     pub image_size: [f32; 2],
     pub grid: f32,
     pub srgb_target: f32,
-    pub _pad: [f32; 2],
+    /// 1.0 = tint pixels outside the selection mask (feather preview).
+    pub overlay: f32,
+    pub _pad: f32,
 }
 
 #[repr(C)]
@@ -83,6 +85,8 @@ struct ChunkUniforms {
 
 struct Chunk {
     texture: wgpu::Texture,
+    /// Selection coverage for the feather preview overlay (R8, one level).
+    overlay: wgpu::Texture,
     bind_group: wgpu::BindGroup,
     width: u32,
     height: u32,
@@ -132,6 +136,16 @@ impl CanvasRenderer {
             },
             count: None,
         };
+        let texture_entry = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
         let sampler_entry = |binding| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::FRAGMENT,
@@ -150,16 +164,8 @@ impl CanvasRenderer {
             label: Some("canvas chunk"),
             entries: &[
                 uniform_entry(0, wgpu::ShaderStages::VERTEX),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+                texture_entry(1),
+                texture_entry(2),
             ],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -267,6 +273,21 @@ impl CanvasRenderer {
                 let buffer =
                     create_uniform_buffer(device, "canvas chunk", bytemuck::bytes_of(&uniforms));
                 let view = texture.create_view(&Default::default());
+                let overlay = device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("canvas overlay"),
+                    size: wgpu::Extent3d {
+                        width: w,
+                        height: h,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::R8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                let overlay_view = overlay.create_view(&Default::default());
                 let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("canvas chunk"),
                     layout: &self.chunk_layout,
@@ -279,10 +300,15 @@ impl CanvasRenderer {
                             binding: 1,
                             resource: wgpu::BindingResource::TextureView(&view),
                         },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::TextureView(&overlay_view),
+                        },
                     ],
                 });
                 chunks.push(Chunk {
                     texture,
+                    overlay,
                     bind_group,
                     width: w,
                     height: h,
@@ -366,6 +392,52 @@ impl CanvasRenderer {
                 },
             );
         }
+    }
+
+    /// Write one tile of selection coverage for the feather preview (`None` = unselected).
+    pub fn upload_overlay(
+        &self,
+        queue: &wgpu::Queue,
+        key: u64,
+        c: TileCoord,
+        coverage: Option<&[u8]>,
+    ) {
+        static ZERO: [u8; (TILE_SIZE * TILE_SIZE) as usize] = [0; (TILE_SIZE * TILE_SIZE) as usize];
+        let Some(canvas) = self.canvases.get(&key) else {
+            return;
+        };
+        let chunk =
+            &canvas.chunks[((c.ty / CHUNK_TILES) * canvas.chunks_x + c.tx / CHUNK_TILES) as usize];
+        let (x, y) = (
+            (c.tx % CHUNK_TILES) * TILE_SIZE,
+            (c.ty % CHUNK_TILES) * TILE_SIZE,
+        );
+        if x >= chunk.width || y >= chunk.height {
+            return;
+        }
+        let (w, h) = (
+            TILE_SIZE.min(chunk.width - x),
+            TILE_SIZE.min(chunk.height - y),
+        );
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &chunk.overlay,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x, y, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            coverage.unwrap_or(&ZERO),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(TILE_SIZE),
+                rows_per_image: Some(h),
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 
     /// Free a closed document's textures.

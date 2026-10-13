@@ -48,6 +48,8 @@ pub struct CanvasState {
     tool_button: Option<ToolButton>,
     /// Cursor for the active tool over the canvas (set by the app).
     pub tool_cursor: Option<egui::CursorIcon>,
+    /// Feather preview: (mask identity, coverage) to tint outside of, set by the app.
+    pub overlay: Option<(u64, std::sync::Arc<pnn_core::Mask>)>,
     /// Move tool nubs to draw (image coordinates).
     pub handles: Option<[[f64; 2]; 8]>,
     pub pixel_grid: bool,
@@ -66,6 +68,10 @@ pub struct CanvasState {
 #[derive(Default)]
 pub struct GpuSync {
     revisions: Vec<u64>,
+    /// Which mask the overlay textures hold (0 = none uploaded).
+    overlay_revision: u64,
+    /// Identity of each uploaded overlay tile (0 = empty), to upload only what changed.
+    overlay_tiles: Vec<usize>,
 }
 
 pub fn surround_color(ui: &egui::Ui) -> egui::Color32 {
@@ -273,6 +279,9 @@ pub fn show(
         .rect_filled(canvas_rect, 0.0, surround_color(ui));
     if let Some(gpu) = gpu {
         sync_gpu(gpu, tab);
+        if let Some((rev, mask)) = &state.overlay {
+            sync_overlay(gpu, tab, *rev, mask);
+        }
         let origin = view.image_to_screen([0.0, 0.0], vp);
         let uniforms = ViewUniforms {
             origin: [origin[0] as f32, origin[1] as f32],
@@ -281,6 +290,7 @@ pub fn show(
             viewport: [vp[0] as f32, vp[1] as f32],
             image_size: [img[0] as f32, img[1] as f32],
             grid: if state.pixel_grid { 1.0 } else { 0.0 },
+            overlay: if state.overlay.is_some() { 1.0 } else { 0.0 },
             ..Default::default()
         };
         ui.painter()
@@ -294,7 +304,8 @@ pub fn show(
             ));
     }
     if !tab.doc.selection().is_empty() {
-        marching_ants(ui, tab.doc.selection(), &view, canvas_rect, vp, ppp);
+        let contours = tab.ant_contours(ui.ctx());
+        marching_ants(ui, &contours, &view, canvas_rect, vp, ppp);
     }
     if let Some(handles) = state.handles {
         let painter = ui.painter().with_clip_rect(canvas_rect);
@@ -318,6 +329,37 @@ pub fn show(
 }
 
 /// Upload composite tiles whose revision differs from what the GPU holds.
+/// Upload the feather-preview mask when it changed since the last upload.
+fn sync_overlay(
+    gpu: &egui_wgpu::RenderState,
+    tab: &mut DocumentTab,
+    rev: u64,
+    mask: &pnn_core::Mask,
+) {
+    if tab.gpu.overlay_revision == rev {
+        return;
+    }
+    let renderer = gpu.renderer.read();
+    let Some(canvas) = renderer.callback_resources.get::<CanvasRenderer>() else {
+        return;
+    };
+    let n = (mask.tiles_x() * mask.tiles_y()) as usize;
+    if tab.gpu.overlay_tiles.len() != n || tab.gpu.overlay_revision == 0 {
+        tab.gpu.overlay_tiles = vec![usize::MAX; n];
+    }
+    let tiles_x = mask.tiles_x();
+    for c in mask.tile_coords() {
+        let tile = mask.tile(c);
+        let id = tile.map_or(0, |t| std::sync::Arc::as_ptr(t) as usize);
+        let slot = &mut tab.gpu.overlay_tiles[(c.ty * tiles_x + c.tx) as usize];
+        if *slot != id {
+            canvas.upload_overlay(&gpu.queue, tab.key, c, tile.map(|t| t.pixels()));
+            *slot = id;
+        }
+    }
+    tab.gpu.overlay_revision = rev;
+}
+
 fn sync_gpu(gpu: &egui_wgpu::RenderState, tab: &mut DocumentTab) {
     tab.compositor.update(&tab.doc);
     let (w, h) = (tab.doc.width(), tab.doc.height());
@@ -332,6 +374,8 @@ fn sync_gpu(gpu: &egui_wgpu::RenderState, tab: &mut DocumentTab) {
     let sync = &mut tab.gpu;
     if recreated || sync.revisions.len() != (tx * ty) as usize {
         sync.revisions = vec![0; (tx * ty) as usize];
+        sync.overlay_revision = 0;
+        sync.overlay_tiles.clear();
     }
     let stale: Vec<TileCoord> = (0..ty)
         .flat_map(|ty| (0..tx).map(move |tx| TileCoord { tx, ty }))
@@ -569,7 +613,7 @@ fn rulers(
 /// polygon edges. Only segments near the visible area are drawn.
 fn marching_ants(
     ui: &mut egui::Ui,
-    selection: &pnn_core::Selection,
+    contours: &[pnn_core::selection::Contour],
     view: &View,
     canvas: Rect,
     vp: [f64; 2],
@@ -587,7 +631,7 @@ fn marching_ants(
         )
     };
     let mut segments = 0usize;
-    for contour in selection.contours() {
+    for contour in contours {
         let mut path: Vec<egui::Pos2> = contour.iter().map(|&p| to_screen(p)).collect();
         if path.len() < 2 {
             continue;

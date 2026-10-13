@@ -83,6 +83,10 @@ pub struct PaintNotNetApp {
     pub(crate) clipboard: Box<dyn crate::clipboard::Clipboard>,
     /// Image waiting for the "larger than the canvas" answer.
     pub(crate) pending_paste: Option<crate::clipboard::ClipImage>,
+    /// Last effect run (Effects > Repeat, Ctrl+F).
+    pub(crate) last_effect: Option<pnn_effects::EffectId>,
+    /// Selection revision the toolbar's feather fields were last synced from.
+    pub(crate) synced_selection: u64,
 }
 
 impl PaintNotNetApp {
@@ -136,6 +140,8 @@ impl PaintNotNetApp {
             move_session: None,
             clipboard: Box::new(crate::clipboard::SystemClipboard::new()),
             pending_paste: None,
+            last_effect: None,
+            synced_selection: 0,
         }
     }
 
@@ -168,6 +174,11 @@ impl PaintNotNetApp {
         self.doc_dialog.as_mut()
     }
 
+    /// The toolbar's feather Preview toggle.
+    pub fn set_feather_preview(&mut self, on: bool) {
+        self.row2.feather_preview = on;
+    }
+
     /// A menu is open (menus pause global shortcuts).
     pub fn menu_open(&self) -> bool {
         self.menu.open
@@ -179,6 +190,10 @@ impl PaintNotNetApp {
 
     pub fn settings(&self) -> &ToolSettings {
         &self.settings
+    }
+
+    pub fn settings_mut(&mut self) -> &mut ToolSettings {
+        &mut self.settings
     }
 
     pub fn panels(&self) -> &Panels {
@@ -206,13 +221,20 @@ impl PaintNotNetApp {
         CommandState {
             document: DOCUMENT_COMMANDS
                 .iter()
-                .map(|&c| (c, self.document_command_available(c).unwrap_or(false)))
+                .copied()
+                .chain(
+                    (0..pnn_effects::EFFECTS.len() as u16)
+                        .map(|i| Command::Effect(pnn_effects::EffectId(i)))
+                        .filter(|c| c.implemented()),
+                )
+                .map(|c| (c, self.document_command_available(c).unwrap_or(false)))
                 .collect(),
             has_doc: self.workspace.active().is_some(),
             has_selection: self
                 .workspace
                 .active()
                 .is_some_and(|t| !t.doc.selection().is_empty()),
+            repeat_effect: self.last_effect.is_some() && self.workspace.active().is_some(),
             any_dirty: self.workspace.tabs().iter().any(|t| t.is_dirty()),
             pixel_grid: self.canvas.pixel_grid,
             rulers: self.rulers,
@@ -662,9 +684,28 @@ impl PaintNotNetApp {
         let Some(smoke) = &mut self.smoke else { return };
         let started = *smoke.started.get_or_insert(now);
         let elapsed = now - started;
-        // Sweep zoom (about 1%–800%) and pan so the canvas redraws every frame.
-        let vp = self.canvas.viewport;
-        if let Some(tab) = self.workspace.active_mut() {
+        // PNN_SMOKE_FEATHER=1: drag the feather radius every frame on a large selection with
+        // the preview overlay on (the live-slider case), instead of sweeping the view.
+        if std::env::var_os("PNN_SMOKE_FEATHER").is_some() {
+            self.row2.feather_preview = true;
+            if let Some(tab) = self.workspace.active_mut() {
+                let (w, h) = (tab.doc.width() as f64, tab.doc.height() as f64);
+                let t = elapsed.as_secs_f64();
+                let radius = 24.0 + 20.0 * (t * 3.0).sin() as f32;
+                let base = if tab.doc.selection().is_empty() {
+                    pnn_core::Selection::ellipse(w * 0.05, h * 0.07, w * 0.95, h * 0.93)
+                } else {
+                    tab.doc.selection().clone()
+                };
+                let feather = pnn_core::selection::Feather {
+                    radius,
+                    ..pnn_core::selection::Feather::NONE
+                };
+                tab.doc.set_selection(base.with_feather(feather));
+            }
+        } else if let Some(tab) = self.workspace.active_mut() {
+            // Sweep zoom (about 1%–800%) and pan so the canvas redraws every frame.
+            let vp = self.canvas.viewport;
             let img = tab.image_size();
             if let Some(view) = tab.view.as_mut() {
                 let t = elapsed.as_secs_f64();
@@ -912,6 +953,7 @@ pub struct CommandState {
     pub document: Vec<(Command, bool)>,
     pub has_doc: bool,
     pub has_selection: bool,
+    pub repeat_effect: bool,
     pub any_dirty: bool,
     pub pixel_grid: bool,
     pub rulers: bool,
@@ -921,6 +963,7 @@ pub struct CommandState {
 
 /// Commands whose availability depends on the document (see `actions.rs`).
 const DOCUMENT_COMMANDS: &[Command] = &[
+    Command::FeatherSelection,
     Command::Undo,
     Command::Redo,
     Command::AddNewLayer,
@@ -972,6 +1015,7 @@ impl CommandState {
             | Command::ToggleRulers => self.has_doc,
             Command::SaveAll => self.any_dirty,
             Command::SelectAll | Command::InvertSelection => self.has_doc,
+            Command::RepeatEffect => self.repeat_effect,
             Command::Deselect
             | Command::EraseSelection
             | Command::FillSelection
@@ -994,6 +1038,42 @@ impl CommandState {
             }
             _ => false,
         }
+    }
+}
+
+impl PaintNotNetApp {
+    /// The toolbar's feather fields edit the current selection live (one history step when
+    /// the edit ends) and show the feather of whatever is selected.
+    fn toolbar_feather(&mut self) {
+        let (changed, committed) = (
+            std::mem::take(&mut self.row2.feather_changed),
+            std::mem::take(&mut self.row2.feather_committed),
+        );
+        let feather = self.settings.feather;
+        let Some(tab) = self.workspace.active_mut() else {
+            return;
+        };
+        if tab.doc.selection().is_empty() {
+            return;
+        }
+        if changed && tab.doc.selection().feather() != feather {
+            let sel = tab.doc.selection().clone().with_feather(feather);
+            tab.doc.set_selection(sel);
+        }
+        if committed
+            && tab.history.entries()[tab.history.current()]
+                .document()
+                .selection()
+                .feather()
+                != feather
+        {
+            tab.commit("Feather Selection", Icon::Selection);
+        }
+        let rev = tab.doc.selection_revision();
+        if !changed && rev != self.synced_selection {
+            self.settings.feather = tab.doc.selection().feather();
+        }
+        self.synced_selection = tab.doc.selection_revision();
     }
 }
 
@@ -1083,6 +1163,7 @@ impl eframe::App for PaintNotNetApp {
                 Some(Row2Action::Finish) | None => {}
             }
         });
+        self.toolbar_feather();
         let active = self.workspace.active();
         let info = StatusInfo {
             tool: self.tool,
@@ -1127,6 +1208,18 @@ impl eframe::App for PaintNotNetApp {
             _ => None,
         };
         self.canvas.handles = self.move_handles();
+        let preview = self.row2.feather_preview
+            || self
+                .doc_dialog
+                .as_ref()
+                .is_some_and(|d| d.wants_feather_preview());
+        let antialias = self.antialiased_selection();
+        self.canvas.overlay = match self.workspace.active_mut() {
+            Some(tab) if preview => tab
+                .selection_mask(antialias)
+                .map(|m| (tab.doc.selection_revision() * 2 + u64::from(antialias), m)),
+            _ => None,
+        };
         let gpu = frame.wgpu_render_state();
         self.canvas.rulers = self.rulers.then(|| {
             (

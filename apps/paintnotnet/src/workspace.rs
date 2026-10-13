@@ -31,6 +31,10 @@ pub struct DocumentTab {
     pub layer_thumbs: LayerThumbs,
     /// Rasterised selection: (selection revision, antialiased, mask).
     pub mask_cache: Option<(u64, bool, std::sync::Arc<pnn_core::Mask>)>,
+    /// Selection distance field (survives feather radius changes).
+    pub feather_field: Option<std::sync::Arc<pnn_core::selection::FeatherField>>,
+    /// Marching-ant outlines: (selection revision, contours).
+    pub ants_cache: Option<crate::selection_tools::AntsCache>,
     /// Undo history; the History window lists its steps.
     pub history: History<Icon>,
     pub thumbnail: Option<egui::TextureHandle>,
@@ -151,6 +155,8 @@ impl Workspace {
             gpu: GpuSync::default(),
             layer_thumbs: LayerThumbs::default(),
             mask_cache: None,
+            feather_field: None,
+            ants_cache: None,
             thumbnail: None,
             thumbnail_revision: 0,
             thumbnail_updated: None,

@@ -195,12 +195,14 @@ impl Modal {
 
 fn buttons(ui: &mut egui::Ui, choices: &[(&str, ModalResult)]) -> Option<ModalResult> {
     let mut picked = None;
-    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        for (label, result) in choices.iter().rev() {
-            if ui.button(*label).clicked() {
-                picked = Some(result.clone());
+    ui.horizontal(|ui| {
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            for (label, result) in choices.iter().rev() {
+                if ui.button(*label).clicked() {
+                    picked = Some(result.clone());
+                }
             }
-        }
+        });
     });
     // Enter accepts the first choice, as the default button does.
     if picked.is_none() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {

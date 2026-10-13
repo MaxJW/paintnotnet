@@ -96,6 +96,11 @@ pub fn row1(
 /// Row 2 state that isn't part of the tool settings.
 #[derive(Default)]
 pub struct Row2State {
+    /// The feather controls changed this frame / finished changing (commit to history).
+    pub feather_changed: bool,
+    pub feather_committed: bool,
+    /// Show the feather preview overlay (quick-mask style tint outside the selection).
+    pub feather_preview: bool,
     /// Alt+T: open the tool dropdown on the next frame.
     pub open_tool_dropdown: bool,
 }
@@ -147,7 +152,7 @@ pub fn row2(
             egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&response));
         }
         sep(ui);
-        options(ui, tool, s, icons, palette);
+        options(ui, state, tool, s, icons, palette);
         if matches!(
             tool,
             ToolKind::Text
@@ -179,6 +184,7 @@ fn sep(ui: &mut egui::Ui) {
 
 fn options(
     ui: &mut egui::Ui,
+    state: &mut Row2State,
     tool: ToolKind,
     s: &mut ToolSettings,
     icons: &Icons,
@@ -193,7 +199,7 @@ fn options(
                 selection_draw_mode(ui, s, icons);
             }
             sep(ui);
-            feather(ui, s);
+            feather(ui, s, state);
             sep(ui);
             selection_quality(ui, s);
         }
@@ -207,7 +213,7 @@ fn options(
             sep(ui);
             sampling(ui, s);
             sep(ui);
-            feather(ui, s);
+            feather(ui, s, state);
             sep(ui);
             selection_quality(ui, s);
         }
@@ -524,16 +530,55 @@ fn selection_draw_mode(ui: &mut egui::Ui, s: &mut ToolSettings, icons: &Icons) {
     }
 }
 
-/// paintnotnet's live feather radius for new selections.
-fn feather(ui: &mut egui::Ui, s: &mut ToolSettings) {
+/// paintnotnet's feather: radius, profile and position for new selections and, while a
+/// selection exists, for that selection (live).
+fn feather(ui: &mut egui::Ui, s: &mut ToolSettings, state: &mut Row2State) {
+    use pnn_core::selection::{FeatherPosition, FeatherProfile};
     ui.label("Feather:");
-    ui.add(
-        egui::DragValue::new(&mut s.feather)
-            .range(0.0..=500.0)
-            .speed(0.25)
-            .suffix(" px"),
-    )
-    .on_hover_text("Soften selection edges (Edit > Feather Selection, Shift+F6)");
+    let r = ui
+        .add(
+            egui::DragValue::new(&mut s.feather.radius)
+                .range(0.0..=500.0)
+                .speed(0.25)
+                .suffix(" px"),
+        )
+        .on_hover_text("Soften selection edges (Edit > Feather Selection, Shift+F6)");
+    state.feather_changed |= r.changed();
+    state.feather_committed |= r.drag_stopped() || r.lost_focus();
+    egui::ComboBox::from_id_salt("feather_profile")
+        .selected_text(s.feather.profile.name())
+        .width(70.0)
+        .show_ui(ui, |ui| {
+            for p in FeatherProfile::ALL {
+                if ui
+                    .selectable_value(&mut s.feather.profile, p, p.name())
+                    .changed()
+                {
+                    state.feather_changed = true;
+                    state.feather_committed = true;
+                }
+            }
+        })
+        .response
+        .on_hover_text("Feather profile");
+    egui::ComboBox::from_id_salt("feather_position")
+        .selected_text(s.feather.position.name())
+        .width(70.0)
+        .show_ui(ui, |ui| {
+            for p in FeatherPosition::ALL {
+                if ui
+                    .selectable_value(&mut s.feather.position, p, p.name())
+                    .changed()
+                {
+                    state.feather_changed = true;
+                    state.feather_committed = true;
+                }
+            }
+        })
+        .response
+        .on_hover_text("Where the soft edge sits: inside, centred on, or outside the outline");
+    ui.toggle_value(&mut state.feather_preview, "Preview")
+        .on_hover_text("Tint everything outside the selection");
 }
 
 fn selection_quality(ui: &mut egui::Ui, s: &mut ToolSettings) {

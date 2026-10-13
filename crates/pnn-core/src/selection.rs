@@ -9,6 +9,7 @@ use i_overlay::float::single::SingleFloatOverlay;
 use tiny_skia::{FillRule, PathBuilder, Transform};
 
 use crate::{Mask, Rect, TILE_SIZE, TileCoord};
+pub use pnn_sdf::{Feather, Position as FeatherPosition, Profile as FeatherProfile, SignedField};
 
 pub type Contour = Vec<[f64; 2]>;
 
@@ -23,10 +24,39 @@ pub enum CombineMode {
     Xor,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub struct Selection {
     /// Even-odd polygon set in image pixel coordinates. Empty = nothing selected.
     contours: Vec<Contour>,
+    /// Soft edge (paintnotnet's live feather). Kept through moves and combines.
+    feather: Feather,
+    /// Identity of the geometry (not the feather), so caches of its distance field survive
+    /// feather changes.
+    geometry_id: u64,
+}
+
+impl PartialEq for Selection {
+    fn eq(&self, other: &Self) -> bool {
+        self.contours == other.contours && self.feather == other.feather
+    }
+}
+
+fn next_geometry_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// A selection's signed distance field over the region it can affect.
+#[derive(Clone, Debug)]
+pub struct FeatherField {
+    pub region: Rect,
+    pub field: SignedField,
+    pub geometry_id: u64,
+    pub antialias: bool,
+    /// Per canvas tile overlapping the region: (min, max) signed distance, so reshaping can
+    /// settle tiles that are wholly inside or outside the soft band without visiting pixels.
+    tile_ranges: Vec<(TileCoord, f32, f32, bool)>,
 }
 
 impl Selection {
@@ -45,6 +75,8 @@ impl Selection {
     pub fn from_contours(contours: Vec<Contour>) -> Self {
         let mut s = Self {
             contours: contours.into_iter().filter(|c| c.len() >= 3).collect(),
+            feather: Feather::NONE,
+            geometry_id: next_geometry_id(),
         };
         if s.area() < 1e-9 {
             s.contours.clear();
@@ -122,7 +154,7 @@ impl Selection {
         let shapes = self
             .contours
             .overlay(&other.contours, rule, OverlayFill::EvenOdd);
-        Selection::from_contours(shapes.into_iter().flatten().collect())
+        Selection::from_contours(shapes.into_iter().flatten().collect()).with_feather(other.feather)
     }
 
     /// paint.net's Invert Selection: xor with the whole canvas.
@@ -199,7 +231,25 @@ impl Selection {
                     .collect()
             })
             .collect();
-        Selection { contours }
+        Selection {
+            contours,
+            feather: self.feather,
+            geometry_id: next_geometry_id(),
+        }
+    }
+
+    pub fn feather(&self) -> Feather {
+        self.feather
+    }
+
+    /// Same geometry with a different soft edge.
+    pub fn with_feather(mut self, feather: Feather) -> Selection {
+        self.feather = feather;
+        self
+    }
+
+    pub fn geometry_id(&self) -> u64 {
+        self.geometry_id
     }
 
     pub fn translate(&self, dx: f64, dy: f64) -> Selection {
@@ -208,12 +258,32 @@ impl Selection {
 
     /// Coverage mask (0..=255) for a `width` × `height` canvas. `antialias` = paint.net's
     /// "Antialiased selection quality"; otherwise pixels are in or out by their centre.
-    /// An empty selection gives an empty mask (callers treat "no selection" as everything).
+    /// The feather (if any) softens the edge. An empty selection gives an empty mask
+    /// (callers treat "no selection" as everything).
     pub fn rasterize(&self, width: u32, height: u32, antialias: bool) -> Mask {
+        if self.feather.is_none() {
+            return self.rasterize_hard(width, height, antialias);
+        }
+        match self.distance_field(width, height, antialias) {
+            Some(field) => self.shape_field(&field, width, height),
+            None => Mask::new(width, height, 0),
+        }
+    }
+
+    /// The outline's coverage without feathering.
+    pub fn rasterize_hard(&self, width: u32, height: u32, antialias: bool) -> Mask {
         let mut mask = Mask::new(width, height, 0);
         let Some(r) = self.pixel_bounds(width, height) else {
             return mask;
         };
+        let data = self.raster_region(r, antialias);
+        write_region(&mut mask, r, &data);
+        mask.compact();
+        mask
+    }
+
+    /// Hard coverage inside `r` (row-major, r.width × r.height).
+    fn raster_region(&self, r: Rect, antialias: bool) -> Vec<u8> {
         let mut pb = PathBuilder::new();
         for c in &self.contours {
             let mut first = true;
@@ -228,33 +298,153 @@ impl Selection {
             }
             pb.close();
         }
-        let Some(path) = pb.finish() else { return mask };
+        let size = (r.width * r.height) as usize;
+        let Some(path) = pb.finish() else {
+            return vec![0; size];
+        };
         let Some(mut m) = tiny_skia::Mask::new(r.width, r.height) else {
-            return mask;
+            return vec![0; size];
         };
         m.fill_path(&path, FillRule::EvenOdd, antialias, Transform::identity());
-        let data = m.data();
-        // Copy the bounding-box raster into the tiled mask.
-        for ty in r.y / TILE_SIZE..=(r.y + r.height - 1) / TILE_SIZE {
-            for tx in r.x / TILE_SIZE..=(r.x + r.width - 1) / TILE_SIZE {
-                let tile = mask.tile_mut(TileCoord { tx, ty });
+        m.data().to_vec()
+    }
+
+    /// Signed distance field over the region the feathered selection can affect. It depends
+    /// on the geometry, quality and how far the feather reaches outward, not otherwise on the
+    /// radius, so callers can cache it while the radius changes.
+    pub fn distance_field(&self, width: u32, height: u32, antialias: bool) -> Option<FeatherField> {
+        let [x0, y0, x1, y1] = self.bounds()?;
+        let grow = self.feather.outward_extent().ceil() as f64 + 2.0;
+        let rx0 = (x0 - grow).floor().max(0.0) as u32;
+        let ry0 = (y0 - grow).floor().max(0.0) as u32;
+        let rx1 = ((x1 + grow).ceil().max(0.0) as u32).min(width);
+        let ry1 = ((y1 + grow).ceil().max(0.0) as u32).min(height);
+        if rx1 <= rx0 || ry1 <= ry0 {
+            return None;
+        }
+        let region = Rect {
+            x: rx0,
+            y: ry0,
+            width: rx1 - rx0,
+            height: ry1 - ry0,
+        };
+        let coverage = self.raster_region(region, antialias);
+        // The canvas edge is not an edge of the selection.
+        let field = SignedField::from_coverage(
+            &coverage,
+            region.width as usize,
+            region.height as usize,
+            false,
+        );
+        let tile_ranges = tile_ranges(&field, region);
+        Some(FeatherField {
+            region,
+            field,
+            geometry_id: self.geometry_id,
+            antialias,
+            tile_ranges,
+        })
+    }
+
+    /// Whether a cached field still serves this selection.
+    pub fn field_matches(&self, f: &FeatherField, antialias: bool) -> bool {
+        if f.geometry_id != self.geometry_id || f.antialias != antialias {
+            return false;
+        }
+        let Some([x0, y0, x1, y1]) = self.bounds() else {
+            return false;
+        };
+        let reach = self.feather.outward_extent() as f64 + 1.0;
+        let r = f.region;
+        let left = x0 - reach >= r.x as f64 || r.x == 0;
+        let top = y0 - reach >= r.y as f64 || r.y == 0;
+        let right = x1 + reach <= (r.x + r.width) as f64;
+        let bottom = y1 + reach <= (r.y + r.height) as f64;
+        left && top && right && bottom
+    }
+
+    /// Coverage mask from a (possibly cached) distance field.
+    pub fn shape_field(&self, f: &FeatherField, width: u32, height: u32) -> Mask {
+        use rayon::prelude::*;
+        use std::sync::Arc;
+        let mut mask = Mask::new(width, height, 0);
+        let r = f.region;
+        let feather = self.feather;
+        let sd = &f.field.sd;
+        let rw = r.width as usize;
+        // One shared full tile for all masks, so unchanged interior tiles keep their identity
+        // across reshapes (GPU uploads skip them).
+        static FULL: std::sync::OnceLock<Arc<crate::Tile<u8>>> = std::sync::OnceLock::new();
+        let full = FULL.get_or_init(|| Arc::new(crate::Tile::filled(255u8)));
+        // Shape straight into tiles, in parallel; empty tiles stay absent and full ones share
+        // a single tile.
+        // Distances beyond which coverage is exactly full / zero for this feather.
+        let empty_above = feather.outward_extent();
+        let full_below = empty_above - feather.radius;
+        let tiles: Vec<(TileCoord, Option<Arc<crate::Tile<u8>>>)> = f
+            .tile_ranges
+            .par_iter()
+            .map(|&(c, min, max, covers_tile)| {
+                if min >= empty_above {
+                    return (c, None);
+                }
+                if covers_tile && max <= full_below {
+                    return (c, Some(full.clone()));
+                }
+                let mut tile = crate::Tile::filled(0u8);
+                let (mut any, mut all) = (false, true);
                 for py in 0..TILE_SIZE {
-                    let y = ty * TILE_SIZE + py;
+                    let y = c.ty * TILE_SIZE + py;
+                    let row = tile.row_mut(py);
                     if y < r.y || y >= r.y + r.height {
+                        all = false;
                         continue;
                     }
-                    let row = tile.row_mut(py);
+                    let srow = &sd[(y - r.y) as usize * rw..(y - r.y + 1) as usize * rw];
                     for (px, v) in row.iter_mut().enumerate() {
-                        let x = tx * TILE_SIZE + px as u32;
-                        if x >= r.x && x < r.x + r.width {
-                            *v = data[((y - r.y) * r.width + (x - r.x)) as usize];
+                        let x = c.tx * TILE_SIZE + px as u32;
+                        if x < r.x || x >= r.x + r.width {
+                            all = false;
+                            continue;
                         }
+                        let k = (feather.coverage(srow[(x - r.x) as usize]) * 255.0 + 0.5) as u8;
+                        *v = k;
+                        any |= k != 0;
+                        all &= k == 255;
                     }
                 }
-            }
+                let t = if all {
+                    Some(full.clone())
+                } else if any {
+                    Some(Arc::new(tile))
+                } else {
+                    None
+                };
+                (c, t)
+            })
+            .collect();
+        for (c, t) in tiles {
+            mask.set_tile(c, t);
         }
-        mask.compact();
         mask
+    }
+
+    /// Outlines for the marching ants: the polygon edges, moved to the feather's 50%
+    /// contour when feathered.
+    pub fn ant_contours(&self) -> Vec<Contour> {
+        let offset = self.feather.half_contour_offset() as f64;
+        if self.feather.is_none() || offset.abs() < 0.25 {
+            return self.contours.clone();
+        }
+        use i_overlay::mesh::float::outline::offset::OutlineOffset;
+        use i_overlay::mesh::float::style::{LineJoin, OutlineStyle};
+        // Normalise orientation (outer counter-clockwise, holes clockwise) before offsetting.
+        let empty: Vec<Contour> = Vec::new();
+        let shapes = self
+            .contours
+            .overlay(&empty, OverlayRule::Subject, OverlayFill::EvenOdd);
+        let style = OutlineStyle::new(offset).line_join(LineJoin::Round(0.25));
+        shapes.outline(&style).into_iter().flatten().collect()
     }
 
     /// Trace a pixel stencil (Magic Wand result) into pixel-edge polygons.
@@ -304,6 +494,58 @@ impl Selection {
             contours.push(pts);
         }
         Some(Selection::from_contours(contours))
+    }
+}
+
+/// (tile, min sd, max sd, whether the region covers the whole tile) for every canvas tile the
+/// field's region overlaps.
+fn tile_ranges(field: &SignedField, r: Rect) -> Vec<(TileCoord, f32, f32, bool)> {
+    use rayon::prelude::*;
+    let coords: Vec<TileCoord> = (r.y / TILE_SIZE..=(r.y + r.height - 1) / TILE_SIZE)
+        .flat_map(|ty| {
+            (r.x / TILE_SIZE..=(r.x + r.width - 1) / TILE_SIZE).map(move |tx| TileCoord { tx, ty })
+        })
+        .collect();
+    let rw = r.width as usize;
+    coords
+        .par_iter()
+        .map(|&c| {
+            let (tx0, ty0) = (c.tx * TILE_SIZE, c.ty * TILE_SIZE);
+            let (x0, x1) = (tx0.max(r.x), (tx0 + TILE_SIZE).min(r.x + r.width));
+            let (y0, y1) = (ty0.max(r.y), (ty0 + TILE_SIZE).min(r.y + r.height));
+            let (mut min, mut max) = (f32::INFINITY, f32::NEG_INFINITY);
+            for y in y0..y1 {
+                let row = &field.sd[(y - r.y) as usize * rw..];
+                for &v in &row[(x0 - r.x) as usize..(x1 - r.x) as usize] {
+                    min = min.min(v);
+                    max = max.max(v);
+                }
+            }
+            let covers = x0 == tx0 && y0 == ty0 && x1 == tx0 + TILE_SIZE && y1 == ty0 + TILE_SIZE;
+            (c, min, max, covers)
+        })
+        .collect()
+}
+
+/// Copy a row-major `r`-sized buffer into the tiled mask.
+fn write_region(mask: &mut Mask, r: Rect, data: &[u8]) {
+    for ty in r.y / TILE_SIZE..=(r.y + r.height - 1) / TILE_SIZE {
+        for tx in r.x / TILE_SIZE..=(r.x + r.width - 1) / TILE_SIZE {
+            let tile = mask.tile_mut(TileCoord { tx, ty });
+            for py in 0..TILE_SIZE {
+                let y = ty * TILE_SIZE + py;
+                if y < r.y || y >= r.y + r.height {
+                    continue;
+                }
+                let row = tile.row_mut(py);
+                for (px, v) in row.iter_mut().enumerate() {
+                    let x = tx * TILE_SIZE + px as u32;
+                    if x >= r.x && x < r.x + r.width {
+                        *v = data[((y - r.y) * r.width + (x - r.x)) as usize];
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -541,6 +783,115 @@ mod tests {
     }
 
     #[test]
+    fn feather_zero_is_pixel_identical() {
+        let s = Selection::ellipse(3.0, 4.0, 41.0, 30.0);
+        let f = s.clone().with_feather(Feather {
+            radius: 0.0,
+            ..Feather::NONE
+        });
+        assert_eq!(
+            s.rasterize(50, 40, true).to_pixels(),
+            f.rasterize(50, 40, true).to_pixels()
+        );
+    }
+
+    #[test]
+    fn tile_skipping_matches_per_pixel_shaping() {
+        // Large enough that whole tiles fall inside, outside and across the soft band.
+        let (w, h) = (1100, 800);
+        let base = Selection::ellipse(40.0, 30.0, 1000.0, 720.0);
+        let field = base.distance_field(w, h, true).unwrap();
+        for profile in [
+            FeatherProfile::Linear,
+            FeatherProfile::Smooth,
+            FeatherProfile::Gaussian,
+        ] {
+            for position in [
+                FeatherPosition::Inside,
+                FeatherPosition::Centered,
+                FeatherPosition::Outside,
+            ] {
+                for radius in [1.0, 7.5, 64.0] {
+                    let feather = Feather {
+                        radius,
+                        profile,
+                        position,
+                    };
+                    let s = base.clone().with_feather(feather);
+                    let mask = s.shape_field(&field, w, h);
+                    let r = field.region;
+                    for y in 0..h {
+                        for x in 0..w {
+                            let inside =
+                                x >= r.x && y >= r.y && x < r.x + r.width && y < r.y + r.height;
+                            let expect = if inside {
+                                let sd = field.field.sd[((y - r.y) * r.width + (x - r.x)) as usize];
+                                (feather.coverage(sd) * 255.0 + 0.5) as u8
+                            } else {
+                                0
+                            };
+                            assert_eq!(mask.get(x, y), expect, "{feather:?} at ({x},{y})");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn feathered_rect_ramps_inward() {
+        let feather = Feather {
+            radius: 8.0,
+            profile: FeatherProfile::Linear,
+            position: FeatherPosition::Inside,
+        };
+        let s = Selection::rect(10.0, 10.0, 60.0, 60.0).with_feather(feather);
+        let m = s.rasterize(70, 70, true);
+        assert_eq!(m.get(35, 9), 0);
+        assert_eq!(m.get(35, 10), ((0.5 / 8.0) * 255.0 + 0.5) as u8);
+        assert_eq!(m.get(35, 13), ((3.5 / 8.0) * 255.0 + 0.5) as u8);
+        assert_eq!(m.get(35, 35), 255);
+        // A feather change keeps the geometry, so a cached field stays valid.
+        let f = s.distance_field(70, 70, true).unwrap();
+        let wider = s.clone().with_feather(Feather {
+            radius: 16.0,
+            ..feather
+        });
+        assert!(wider.field_matches(&f, true));
+        assert_eq!(
+            wider.shape_field(&f, 70, 70).to_pixels(),
+            wider.rasterize(70, 70, true).to_pixels()
+        );
+    }
+
+    #[test]
+    fn ants_move_to_the_half_contour() {
+        let feather = Feather {
+            radius: 8.0,
+            profile: FeatherProfile::Smooth,
+            position: FeatherPosition::Inside,
+        };
+        let s = Selection::rect(0.0, 0.0, 40.0, 40.0).with_feather(feather);
+        let ants = Selection::from_contours(s.ant_contours());
+        let [x0, y0, x1, y1] = ants.bounds().unwrap();
+        assert!(
+            (x0 - 4.0).abs() < 0.1
+                && (y0 - 4.0).abs() < 0.1
+                && (x1 - 36.0).abs() < 0.1
+                && (y1 - 36.0).abs() < 0.1,
+            "{x0} {y0} {x1} {y1}"
+        );
+        let out = s.clone().with_feather(Feather {
+            position: FeatherPosition::Outside,
+            ..feather
+        });
+        let b = Selection::from_contours(out.ant_contours())
+            .bounds()
+            .unwrap();
+        assert!((b[0] + 4.0).abs() < 0.2, "outset by r/2: {b:?}");
+    }
+
+    #[test]
     fn contains_respects_holes() {
         let ring = Selection::rect(0.0, 0.0, 10.0, 10.0)
             .combine(&Selection::rect(3.0, 3.0, 7.0, 7.0), CombineMode::Exclude);
@@ -627,5 +978,59 @@ mod tests {
         assert_eq!(c.iter().filter(|&&b| b).count(), 6);
         let g = flood_stencil(&px, w, h, (0, 0), 0, true, false);
         assert_eq!(g.iter().filter(|&&b| b).count(), 12);
+    }
+}
+
+#[cfg(test)]
+mod perf {
+    use super::*;
+
+    /// Feather slider cost on a 4K canvas: reshaping a cached distance field.
+    /// Run with `cargo test --release -p pnn-core feather_slider_4k -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn feather_slider_4k() {
+        let (w, h) = (3840, 2160);
+        let s = Selection::ellipse(200.0, 150.0, 3600.0, 2000.0).with_feather(Feather {
+            radius: 16.0,
+            ..Feather::NONE
+        });
+        let t0 = std::time::Instant::now();
+        let field = s.distance_field(w, h, true).unwrap();
+        let field_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        let mut times = Vec::new();
+        for r in [8.0f32, 12.0, 20.0, 32.0, 48.0] {
+            let s2 = s.clone().with_feather(Feather {
+                radius: r,
+                ..Feather::NONE
+            });
+            let t = std::time::Instant::now();
+            let m = s2.shape_field(&field, w, h);
+            times.push(t.elapsed().as_secs_f64() * 1000.0);
+            std::hint::black_box(m);
+        }
+        println!(
+            "distance field (once per shape): {field_ms:.1} ms; reshape per slider step: {times:.1?} ms"
+        );
+        let t = std::time::Instant::now();
+        let ants = s.ant_contours();
+        println!(
+            "ant contour offset: {:.1} ms ({} points)",
+            t.elapsed().as_secs_f64() * 1000.0,
+            ants.iter().map(|c| c.len()).sum::<usize>()
+        );
+        let t = std::time::Instant::now();
+        let s3 = s.clone().with_feather(Feather {
+            radius: 30.0,
+            ..Feather::NONE
+        });
+        assert!(
+            s3.field_matches(&field, true),
+            "field cache must survive radius changes"
+        );
+        println!(
+            "field_matches: {:.3} ms",
+            t.elapsed().as_secs_f64() * 1000.0
+        );
     }
 }

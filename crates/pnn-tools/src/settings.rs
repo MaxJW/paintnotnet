@@ -251,8 +251,9 @@ pub struct ToolSettings {
     pub selection_mode: SelectionMode,
     pub selection_draw: SelectionDrawMode,
     pub selection_quality: SelectionQuality,
-    /// Feather radius in px applied to new selections (paintnotnet addition; 0 = off).
-    pub feather: f32,
+    /// Soft edge for new selections, and the current one's while it's edited
+    /// (paintnotnet addition; radius 0 = off).
+    pub feather: pnn_core::selection::Feather,
     pub flood_mode: FloodMode,
     /// 0..=100 %.
     pub tolerance: u8,
@@ -294,7 +295,7 @@ impl Default for ToolSettings {
             selection_mode: SelectionMode::Replace,
             selection_draw: SelectionDrawMode::Normal,
             selection_quality: SelectionQuality::Antialiased,
-            feather: 0.0,
+            feather: pnn_core::selection::Feather::NONE,
             flood_mode: FloodMode::Contiguous,
             tolerance: 50,
             tolerance_alpha: ToleranceAlphaMode::Premultiplied,

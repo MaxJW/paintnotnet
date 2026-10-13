@@ -261,3 +261,28 @@ fn marching_ants_render() {
         image.save(format!("{dir}/shell-ants.png")).unwrap();
     }
 }
+
+#[test]
+fn feather_preview_render() {
+    let mut h = harness();
+    {
+        let tab = h.state_mut().workspace_mut().active_mut().unwrap();
+        let feather = pnn_core::selection::Feather {
+            radius: 60.0,
+            ..pnn_core::selection::Feather::NONE
+        };
+        let sel = pnn_core::Selection::ellipse(150.0, 100.0, 650.0, 500.0).with_feather(feather);
+        tab.doc.set_selection(sel);
+    }
+    h.state_mut().set_feather_preview(true);
+    for _ in 0..3 {
+        h.step();
+    }
+    if let Ok(dir) = std::env::var("PNN_RENDER_DUMP")
+        && let Ok(image) = h.render()
+    {
+        image
+            .save(format!("{dir}/shell-feather-preview.png"))
+            .unwrap();
+    }
+}

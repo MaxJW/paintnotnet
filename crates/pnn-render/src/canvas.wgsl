@@ -15,7 +15,8 @@ struct View {
     image_size: vec2<f32>,
     grid: f32,              // 1.0 = pixel grid enabled
     srgb_target: f32,       // 1.0 = framebuffer is sRGB, so output linear values
-    _pad: vec2<f32>,
+    overlay: f32,           // 1.0 = tint outside the selection (feather preview)
+    _pad: f32,
 };
 
 struct Chunk {
@@ -28,6 +29,7 @@ struct Chunk {
 @group(0) @binding(2) var linear_sampler: sampler;
 @group(1) @binding(0) var<uniform> chunk: Chunk;
 @group(1) @binding(1) var chunk_tex: texture_2d<f32>;
+@group(1) @binding(2) var overlay_tex: texture_2d<f32>;
 
 struct VsOut {
     @builtin(position) position: vec4<f32>,
@@ -65,6 +67,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let near = textureSample(chunk_tex, nearest_sampler, in.uv);
     let lin = textureSample(chunk_tex, linear_sampler, in.uv);
     let c = select(lin, near, view.zoom >= 1.0);
+    let coverage = textureSample(overlay_tex, linear_sampler, in.uv).r;
 
     // Screen pixel relative to the image origin.
     let scr = vec2<i32>(floor(in.img * view.zoom));
@@ -79,6 +82,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         if (on_h || on_v) {
             rgb = vec3(0.0);
         }
+    }
+
+    if (view.overlay > 0.5) {
+        // Quick-mask style: unselected areas tinted red, fading with the feather.
+        let tint = vec3(0.85, 0.12, 0.12);
+        rgb = mix(rgb, tint, (1.0 - coverage) * 0.5);
     }
 
     if (view.srgb_target > 0.5) {

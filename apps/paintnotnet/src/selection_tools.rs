@@ -18,6 +18,19 @@ use crate::commands::Command;
 use crate::icons::Icon;
 use crate::workspace::DocumentTab;
 
+/// Cached marching-ant outlines.
+pub struct AntsCache {
+    revision: u64,
+    geometry: u64,
+    computed: std::time::Instant,
+    contours: Arc<Vec<pnn_core::selection::Contour>>,
+    /// Outline being offset on a worker thread while the feather slider moves:
+    /// (selection revision, result once done).
+    pending: Option<(u64, AntsSlot)>,
+}
+
+type AntsSlot = Arc<std::sync::Mutex<Option<Arc<Vec<pnn_core::selection::Contour>>>>>;
+
 /// A selection being drawn.
 pub struct SelectDrag {
     key: u64,
@@ -72,13 +85,81 @@ impl DocumentTab {
         {
             return Some(m.clone());
         }
-        let m = Arc::new(self.doc.selection().rasterize(
-            self.doc.width(),
-            self.doc.height(),
-            antialias,
-        ));
+        let (w, h) = (self.doc.width(), self.doc.height());
+        let sel = self.doc.selection();
+        let m = if sel.feather().is_none() {
+            sel.rasterize_hard(w, h, antialias)
+        } else {
+            // The distance field depends only on the geometry: reuse it while the feather
+            // radius changes (live slider).
+            let field = match &self.feather_field {
+                Some(f) if sel.field_matches(f, antialias) => f.clone(),
+                _ => {
+                    let f = Arc::new(sel.distance_field(w, h, antialias)?);
+                    self.feather_field = Some(f.clone());
+                    f
+                }
+            };
+            sel.shape_field(&field, w, h)
+        };
+        let m = Arc::new(m);
         self.mask_cache = Some((rev, antialias, m.clone()));
         Some(m)
+    }
+}
+
+impl DocumentTab {
+    /// Marching-ant outlines (the feather's 50% contour), cached per selection.
+    ///
+    /// Offsetting the outline costs milliseconds on large selections, so while only the
+    /// feather is changing (live slider) it runs on a worker thread and the previous ants
+    /// stay up until it finishes.
+    pub fn ant_contours(
+        &mut self,
+        ctx: &eframe::egui::Context,
+    ) -> Arc<Vec<pnn_core::selection::Contour>> {
+        let rev = self.doc.selection_revision();
+        let geometry = self.doc.selection().geometry_id();
+        let now = std::time::Instant::now();
+        if let Some(cache) = &mut self.ants_cache {
+            if let Some((job_rev, slot)) = &cache.pending {
+                let done = slot.lock().ok().and_then(|mut s| s.take());
+                if let Some(c) = done {
+                    cache.revision = *job_rev;
+                    cache.computed = now;
+                    cache.contours = c;
+                    cache.pending = None;
+                }
+            }
+            if cache.revision == rev {
+                return cache.contours.clone();
+            }
+            let live = now.duration_since(cache.computed) < std::time::Duration::from_millis(250);
+            if cache.geometry == geometry && live {
+                if cache.pending.is_none() {
+                    let slot = AntsSlot::default();
+                    let (sel, out, ctx) = (self.doc.selection().clone(), slot.clone(), ctx.clone());
+                    rayon::spawn(move || {
+                        let c = Arc::new(sel.ant_contours());
+                        if let Ok(mut s) = out.lock() {
+                            *s = Some(c);
+                        }
+                        ctx.request_repaint();
+                    });
+                    cache.pending = Some((rev, slot));
+                }
+                return cache.contours.clone();
+            }
+        }
+        let c = Arc::new(self.doc.selection().ant_contours());
+        self.ants_cache = Some(AntsCache {
+            revision: rev,
+            geometry,
+            computed: now,
+            contours: c.clone(),
+            pending: None,
+        });
+        c
     }
 }
 
@@ -154,7 +235,9 @@ impl PaintNotNetApp {
                 drag.points.push(pos);
                 if drag.moved {
                     let shift = self.modifiers.shift;
-                    let shape = self.drag_shape(&drag, pos, shift);
+                    let shape = self
+                        .drag_shape(&drag, pos, shift)
+                        .with_feather(self.settings.feather);
                     let combined = drag.base.combine(&shape, drag.mode);
                     if let Some(tab) = self.workspace.tab_mut(drag.key) {
                         tab.doc.set_selection(combined);
@@ -182,6 +265,7 @@ impl PaintNotNetApp {
     }
 
     fn magic_wand(&mut self, key: u64, pos: [f64; 2], mode: CombineMode, contiguous: bool) {
+        let feather = self.settings.feather;
         let (tolerance, premultiplied, sampling) = (
             self.settings.tolerance,
             self.settings.tolerance_alpha == ToleranceAlphaMode::Premultiplied,
@@ -207,7 +291,7 @@ impl PaintNotNetApp {
             premultiplied,
             contiguous,
         );
-        let shape = Selection::from_stencil(&stencil, w, h);
+        let shape = Selection::from_stencil(&stencil, w, h).with_feather(feather);
         let combined = tab.doc.selection().combine(&shape, mode);
         tab.doc.set_selection(combined);
         tab.commit("Magic Wand", Icon::MagicWand);

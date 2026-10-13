@@ -2886,6 +2886,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "i_overlay",
+ "pnn-sdf",
  "rayon",
  "tiny-skia",
 ]
@@ -2926,6 +2927,9 @@ dependencies = [
 [[package]]
 name = "pnn-sdf"
 version = "0.1.0"
+dependencies = [
+ "rayon",
+]
 
 [[package]]
 name = "pnn-tools"
