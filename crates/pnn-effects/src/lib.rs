@@ -65,11 +65,7 @@ impl Adjustment {
     pub fn has_dialog(self) -> bool {
         !matches!(
             self,
-            Self::AutoLevel
-                | Self::BlackAndWhite
-                | Self::InvertAlpha
-                | Self::InvertColors
-                | Self::Sepia
+            Self::AutoLevel | Self::BlackAndWhite | Self::InvertAlpha | Self::InvertColors
         )
     }
 }

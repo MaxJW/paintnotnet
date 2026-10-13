@@ -589,3 +589,51 @@ fn text_render() {
         image.save(format!("{dir}/shell-text.png")).unwrap();
     }
 }
+
+/// An adjustment dialog (Hue / Saturation) over a live preview.
+#[test]
+fn adjustment_dialog_render() {
+    let mut h = harness();
+    {
+        let tab = h.state_mut().workspace_mut().active_mut().unwrap();
+        let (w, hh) = (tab.doc.width(), tab.doc.height());
+        let a = tab.doc.active_index();
+        tab.doc.modify_layer(a, None, |l| {
+            for y in 0..hh {
+                for x in 0..w {
+                    let c = pnn_core::ColorBgra::from_rgba(
+                        (x * 255 / w) as u8,
+                        (y * 255 / hh) as u8,
+                        160,
+                        255,
+                    );
+                    l.surface.set(x, y, c);
+                }
+            }
+        });
+    }
+    let ctx = h.ctx.clone();
+    h.state_mut().execute(
+        &ctx,
+        Triggered::once(Command::Adjustment(pnn_effects::Adjustment::HueSaturation)),
+    );
+    {
+        let e = h.state_mut().effect_mut().unwrap();
+        e.set_values(
+            &ctx,
+            vec![
+                pnn_effects::framework::Value::Int(120),
+                pnn_effects::framework::Value::Int(100),
+                pnn_effects::framework::Value::Int(0),
+            ],
+        );
+    }
+    for _ in 0..6 {
+        h.step();
+    }
+    if let Ok(dir) = std::env::var("PNN_RENDER_DUMP")
+        && let Ok(image) = h.render()
+    {
+        image.save(format!("{dir}/shell-adjustment.png")).unwrap();
+    }
+}

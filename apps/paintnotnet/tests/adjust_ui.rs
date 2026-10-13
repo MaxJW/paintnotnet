@@ -112,3 +112,23 @@ fn cancel_restores_the_layer() {
     press(&mut h, Modifiers::NONE, Key::Enter);
     assert_eq!(history_names(&h).last().unwrap(), "Posterize");
 }
+
+#[test]
+fn hue_saturation_dialog_and_auto_level() {
+    let mut h = harness_with(ramp());
+    press(&mut h, ctrl_shift(), Key::U);
+    {
+        let e = h.state_mut().effect_mut().expect("Hue / Saturation dialog");
+        e.values = vec![Value::Int(0), Value::Int(100), Value::Int(-100)];
+    }
+    h.get_by_label("OK").click();
+    settle(&mut h);
+    assert_eq!(history_names(&h).last().unwrap(), "Hue / Saturation");
+    assert!(
+        doc(&h).layer(0).surface.get(99, 40).r < 5,
+        "lightness −100 → black"
+    );
+    // Auto-Level on a black image changes nothing visible but records a step.
+    press(&mut h, ctrl_shift(), Key::L);
+    assert_eq!(history_names(&h).last().unwrap(), "Auto-Level");
+}

@@ -5,8 +5,8 @@ where you try it. A phase is only ticked off once its acceptance checks have bee
 shown passing.
 
 **Current state (2026-10-13):** Phases 0–7 are complete, verified and committed (Phase 5
-still awaits your sign-off on the feel). Phase 7 (Line/Curve, Shapes, Text) is done. Phase 8a (effect framework) is done. **Next: Phase 8b
-(simple adjustments)**, then 8c (Curves, Levels). After all phases, compare against the paint.net 5.1.12 release files the user provided
+still awaits your sign-off on the feel). Phase 7 (Line/Curve, Shapes, Text) is done. Phases 8a (effect framework) and 8b (simple adjustments) are done.
+**Next: Phase 8c (Curves, Levels).** After all phases, compare against the paint.net 5.1.12 release files the user provided
 (`~/Downloads/paint.net.5.1.12.portable.x64`; the user states the owners gave permission).
 Functionality first: the user wants every feature working
 before the visual refresh (Phase 12).
@@ -175,8 +175,11 @@ Guessed or approximated (paint.net doesn't document them):
 - [x] First adjustments on it: Invert Colors, Invert Alpha, Black and White, Sepia (3.36 Desaturate + `Level` γ 1.2/1.0/0.8), Posterize (3.36 tables, linked R/G/B)
 - **Verified 2026-10-13:** 3 engine tests (pixel results, Posterize tables, `Level` formula) and 4 UI tests (Ctrl+Shift+I + Ctrl+F, selection clip, Posterize live preview then OK with changed values, Cancel/Esc/Enter). Real display, Posterize levels changing every frame (`PNN_SMOKE_EFFECT=1`): 1080p 164.8 fps, 4K 123 fps (p99 22 ms). CI passes (246 tests).
 - Not done: paint.net 5's split/before-after preview (no doc detail found); the gradient (6b) still renders on the UI thread and could move to this tile pipeline.
-### 8b Simple adjustments
-- [ ] Auto-Level, Brightness/Contrast, Exposure, Highlights/Shadows, Hue/Saturation, Temperature/Tint
+### 8b ✅ Simple adjustments
+- [x] Ported from 3.36: Auto-Level (`HistogramRgb.MakeLevelsAuto`: 0.5%/99.5% percentiles and mean → `Level.AutoFromLoMdHi`), Brightness / Contrast (the 65536-entry intensity × channel table, contrast 100 thresholds), Hue / Saturation (3.36 algorithm incl. the 101–200 → 103–400 saturation mapping and `BlendConstant` lightness)
+- [x] From the 5.x docs (maths guessed): Sepia's Intensity control (5.x gives Sepia a dialog), Exposure (±5 EV gain in linear light), Highlights / Shadows (luminance tone curve), Temperature and Tint (linear-light channel gains)
+- **Verified 2026-10-13:** 7 more engine tests (Brightness/Contrast against 3.36 values, Hue/Sat rotation/desaturate/lightness, Auto-Level stretch, photo adjustments identity at defaults and direction) and 1 UI test (Hue/Sat dialog OK, Auto-Level). Dialog with live preview checked in a render. CI passes (252 tests).
+- Differences: Hue / Saturation doesn't round HSV to whole percents as 3.36 did (that banded photos); the 5.x docs' description of Saturation "starting at zero" conflicts with their own example, so 3.36's 0–200 (default 100) is kept; Auto-Level's histogram covers the selection's bounding box, not just selected pixels; the 5.x-only adjustments have no shortcuts (none documented).
 ### 8c Curves and Levels
 - [ ] Curves (luminosity / RGB, editable points), Levels (histograms, in/out, gamma, per channel)
 

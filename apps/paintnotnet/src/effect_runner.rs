@@ -176,6 +176,12 @@ impl EffectSession {
             .collect()
     }
 
+    /// Set the settings and restart the preview (tests, scripted use).
+    pub fn set_values(&mut self, ctx: &egui::Context, values: Vec<Value>) {
+        self.values = values;
+        self.spawn(ctx);
+    }
+
     /// Smoke test: set every integer property and re-render if it changed.
     pub fn set_all_ints(&mut self, ctx: &egui::Context, v: i32) {
         let new: Vec<Value> = self
