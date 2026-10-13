@@ -209,6 +209,9 @@ pub struct DocDialog {
     pub key: u64,
     pub original: Document,
     pub kind: Kind,
+    /// Whether the canvas shows this dialog's settings yet (effects preview their defaults
+    /// as soon as they open, as paint.net does).
+    pub previewed: bool,
 }
 
 impl DocDialog {
@@ -218,6 +221,7 @@ impl DocDialog {
         Self {
             key,
             original: doc.clone(),
+            previewed: false,
             kind: Kind::LayerProperties(LayerProperties {
                 index,
                 name: l.name.clone(),
@@ -233,6 +237,7 @@ impl DocDialog {
         Self {
             key,
             original: doc.clone(),
+            previewed: false,
             kind: Kind::Resize(Resize {
                 fields,
                 resampling: Resampling::Bicubic,
@@ -246,6 +251,7 @@ impl DocDialog {
         Self {
             key,
             original: doc.clone(),
+            previewed: false,
             kind: Kind::CanvasSize(CanvasSize {
                 fields,
                 anchor: Anchor::Center,
@@ -262,6 +268,7 @@ impl DocDialog {
         Self {
             key,
             original: doc.clone(),
+            previewed: false,
             kind: Kind::FeatherSelection(f),
         }
     }
@@ -270,6 +277,7 @@ impl DocDialog {
         Self {
             key,
             original: doc.clone(),
+            previewed: false,
             kind: Kind::FeatherObject(FeatherObject::default()),
         }
     }
@@ -283,6 +291,7 @@ impl DocDialog {
         Self {
             key,
             original: doc.clone(),
+            previewed: false,
             kind: Kind::BlurSelectionEdge(f),
         }
     }
@@ -291,6 +300,7 @@ impl DocDialog {
         Self {
             key,
             original: doc.clone(),
+            previewed: false,
             kind: Kind::RotateZoom(RotateZoom::default()),
         }
     }
@@ -322,13 +332,15 @@ impl DocDialog {
         let mut outcome = None;
         let dpi = self.original.dpi;
         let title = self.title();
-        // A window rather than a modal so the canvas preview stays visible beside it.
+        // A movable window rather than a modal so the live canvas preview can be watched
+        // behind or beside it; opens centred, then stays where it was dragged.
         egui::Window::new(title)
-            .id(egui::Id::new("doc_dialog"))
+            .id(egui::Id::new(("doc_dialog", title)))
             .collapsible(false)
             .resizable(false)
             .auto_sized()
-            .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(ctx.content_rect().center())
             .show(ctx, |ui| {
                 ui.set_min_width(300.0);
                 ui.set_max_width(420.0);

@@ -9,6 +9,8 @@ publish.workspace = true
 [dependencies]
 pnn-core.workspace = true
 image.workspace = true
+webp.workspace = true
+libwebp-sys.workspace = true
 thiserror.workspace = true
 bytemuck.workspace = true
 

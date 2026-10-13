@@ -272,7 +272,10 @@ impl PaintNotNetApp {
         let antialias = self.settings.selection_quality == pnn_tools::SelectionQuality::Antialiased;
         let key = dialog.key;
         match outcome {
-            Outcome::Pending { changed: true } if dialog.live_preview() => {
+            Outcome::Pending { changed }
+                if dialog.live_preview() && (changed || !dialog.previewed) =>
+            {
+                dialog.previewed = true;
                 let preview = dialog.apply(primary, secondary, antialias);
                 if let Some(tab) = self.workspace.tab_mut(key) {
                     tab.doc = preview;

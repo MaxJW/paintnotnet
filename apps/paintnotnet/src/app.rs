@@ -502,9 +502,9 @@ impl PaintNotNetApp {
         if tab.doc.layers().len() > 1 && !target.flattened {
             self.modal = Some(Modal::FlattenForSave { key, then: target });
         } else if target.format.has_options() {
-            self.modal = Some(Modal::JpegQuality {
+            self.modal = Some(Modal::SaveConfig {
                 key,
-                quality: tab.save_options.jpeg_quality,
+                options: tab.save_options,
                 then: target,
             });
         } else {
@@ -651,9 +651,9 @@ impl PaintNotNetApp {
                 self.allow_close = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
-            ModalResult::JpegConfirmed { key, quality, then } => {
+            ModalResult::SaveConfigured { key, options, then } => {
                 if let Some(tab) = self.workspace.tab_mut(key) {
-                    tab.save_options.jpeg_quality = quality;
+                    tab.save_options = options;
                 }
                 self.write(key, then);
             }

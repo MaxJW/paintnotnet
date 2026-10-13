@@ -90,7 +90,7 @@ impl FileFormat {
 
     /// Whether saving asks for settings first (paint.net's Save Configuration dialog).
     pub fn has_options(self) -> bool {
-        matches!(self, Self::Jpeg)
+        matches!(self, Self::Jpeg | Self::WebP)
     }
 
     fn image_format(self) -> ImageFormat {
@@ -112,15 +112,60 @@ pub const OPEN_EXTENSIONS: &[&str] = &[
     "qoi", "pnm", "pbm", "pgm", "ppm", "dds", "hdr", "exr", "avif",
 ];
 
+/// libwebp's encoder presets, as pdn-webp offers them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WebPPreset {
+    Default,
+    Picture,
+    Photo,
+    Drawing,
+    Icon,
+    Text,
+}
+
+impl WebPPreset {
+    pub const ALL: [WebPPreset; 6] = [
+        Self::Default,
+        Self::Picture,
+        Self::Photo,
+        Self::Drawing,
+        Self::Icon,
+        Self::Text,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Default => "Default",
+            Self::Picture => "Picture",
+            Self::Photo => "Photo",
+            Self::Drawing => "Drawing",
+            Self::Icon => "Icon",
+            Self::Text => "Text",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SaveOptions {
     /// JPEG quality, 0..=100.
     pub jpeg_quality: u8,
+    /// WebP save settings: pdn-webp's (bundled with paint.net 5) names and defaults.
+    pub webp_preset: WebPPreset,
+    /// 0..=100; ignored when lossless.
+    pub webp_quality: u8,
+    /// 0..=9 (speed/size trade-off).
+    pub webp_effort: u8,
+    pub webp_lossless: bool,
 }
 
 impl Default for SaveOptions {
     fn default() -> Self {
-        Self { jpeg_quality: 95 }
+        Self {
+            jpeg_quality: 95,
+            webp_preset: WebPPreset::Photo,
+            webp_quality: 95,
+            webp_effort: 7,
+            webp_lossless: false,
+        }
     }
 }
 
@@ -196,6 +241,7 @@ fn encode(
     match format {
         FileFormat::Jpeg => JpegEncoder::new_with_quality(&mut out, options.jpeg_quality.min(100))
             .write_image(&rgb(), width, height, ExtendedColorType::Rgb8)?,
+        FileFormat::WebP => return encode_webp(pixels, width, height, options),
         FileFormat::Bmp => image::RgbImage::from_raw(width, height, rgb())
             .expect("buffer size matches")
             .write_to(&mut out, format.image_format())?,
@@ -207,6 +253,87 @@ fn encode(
         }
     }
     Ok(out.into_inner())
+}
+
+/// WebP through libwebp, configured as pdn-webp 2.x does (`src/WebP/WebPEncoder.cpp`, MIT,
+/// see NOTICE): the preset at the chosen quality; lossless uses libwebp's lossless preset at
+/// the effort level, keeps transparent pixels' colour (`exact`) and hints the content type;
+/// lossy maps effort 0–6 to `method`, and 7–9 add sharp YUV, auto-filter and best alpha
+/// filtering.
+fn encode_webp(
+    pixels: &[ColorBgra],
+    width: u32,
+    height: u32,
+    o: SaveOptions,
+) -> Result<Vec<u8>, image::ImageError> {
+    use libwebp_sys as w;
+    let fail = |msg: String| {
+        image::ImageError::Encoding(image::error::EncodingError::new(
+            image::error::ImageFormatHint::Exact(ImageFormat::WebP),
+            msg,
+        ))
+    };
+    let preset = match o.webp_preset {
+        WebPPreset::Default => w::WebPPreset::WEBP_PRESET_DEFAULT,
+        WebPPreset::Picture => w::WebPPreset::WEBP_PRESET_PICTURE,
+        WebPPreset::Photo => w::WebPPreset::WEBP_PRESET_PHOTO,
+        WebPPreset::Drawing => w::WebPPreset::WEBP_PRESET_DRAWING,
+        WebPPreset::Icon => w::WebPPreset::WEBP_PRESET_ICON,
+        WebPPreset::Text => w::WebPPreset::WEBP_PRESET_TEXT,
+    };
+    let mut config = w::WebPConfig::new_with_preset(preset, o.webp_quality.min(100) as f32)
+        .map_err(|_| fail("libwebp version mismatch".into()))?;
+    config.thread_level = 1;
+    let effort = o.webp_effort.min(9) as i32;
+    if o.webp_lossless {
+        // libwebp's `WebPConfigLosslessPreset` (src/enc/config_enc.c), done here so no
+        // `unsafe` FFI call is needed: (method, quality) per level.
+        const LOSSLESS: [(i32, f32); 10] = [
+            (0, 0.0),
+            (1, 20.0),
+            (2, 25.0),
+            (3, 30.0),
+            (3, 50.0),
+            (4, 50.0),
+            (4, 75.0),
+            (4, 90.0),
+            (5, 90.0),
+            (6, 100.0),
+        ];
+        let (method, quality) = LOSSLESS[effort as usize];
+        config.lossless = 1;
+        config.method = method;
+        config.quality = quality;
+        config.exact = 1;
+        config.image_hint = match o.webp_preset {
+            WebPPreset::Photo => w::WebPImageHint::WEBP_HINT_PHOTO,
+            WebPPreset::Picture => w::WebPImageHint::WEBP_HINT_PICTURE,
+            WebPPreset::Drawing => w::WebPImageHint::WEBP_HINT_GRAPH,
+            _ => config.image_hint,
+        };
+    } else {
+        config.method = effort.min(6);
+        if effort >= 7 {
+            config.use_sharp_yuv = 1;
+        }
+        if effort >= 8 {
+            config.autofilter = 1;
+        }
+        if effort >= 9 {
+            config.alpha_filtering = 2;
+        }
+    }
+    let opaque = pixels.iter().all(|p| p.a == 255);
+    let mem = if opaque {
+        // pdn-webp imports opaque images without alpha.
+        let rgb: Vec<u8> = pixels.iter().flat_map(|p| [p.r, p.g, p.b]).collect();
+        webp::Encoder::from_rgb(&rgb, width, height).encode_advanced(&config)
+    } else {
+        let rgba: Vec<u8> = pixels.iter().flat_map(|p| p.to_rgba_array()).collect();
+        webp::Encoder::from_rgba(&rgba, width, height).encode_advanced(&config)
+    }
+    .map_err(|e| fail(format!("{e:?}")))?;
+    Ok(mem.to_vec())
 }
 
 /// Write to a temporary file next to `path`, then rename over it, so a failed save never
@@ -245,6 +372,65 @@ mod tests {
         s.set(0, 0, ColorBgra::from_rgba(255, 0, 0, 255));
         s.set(299, 199, ColorBgra::from_rgba(0, 0, 255, 128));
         Document::from_layers(300, 200, vec![Layer::new("Background", s)])
+    }
+
+    #[test]
+    fn webp_lossy_and_lossless_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        // A smooth gradient with a transparent corner.
+        let mut s = Surface::new_transparent(64, 48);
+        for y in 0..48 {
+            for x in 0..64 {
+                let a = if x < 8 && y < 8 { 0 } else { 255 };
+                s.set(
+                    x,
+                    y,
+                    ColorBgra::from_rgba((x * 4) as u8, (y * 5) as u8, 128, a),
+                );
+            }
+        }
+        let doc = Document::from_layers(64, 48, vec![Layer::new("Background", s)]);
+        let lossless = dir.path().join("l.webp");
+        let opts = SaveOptions {
+            webp_lossless: true,
+            ..SaveOptions::default()
+        };
+        save(&doc, &lossless, FileFormat::WebP, opts).unwrap();
+        let back = load(&lossless).unwrap();
+        let (a, b) = (&doc.layer(0).surface, &back.layer(0).surface);
+        assert_eq!(a.to_pixels(), b.to_pixels(), "lossless is exact");
+        let lossy = dir.path().join("q.webp");
+        let small = SaveOptions {
+            webp_quality: 50,
+            ..SaveOptions::default()
+        };
+        save(&doc, &lossy, FileFormat::WebP, small).unwrap();
+        let back = load(&lossy).unwrap();
+        let p = back.layer(0).surface.get(40, 30);
+        let q = doc.layer(0).surface.get(40, 30);
+        assert!((p.r as i32 - q.r as i32).abs() < 12, "{p:?} vs {q:?}");
+        assert_eq!(back.layer(0).surface.get(2, 2).a, 0, "alpha kept");
+        // On photo-like noise, lossy is much smaller than lossless.
+        let mut n = Surface::new_transparent(128, 128);
+        let mut seed = 12345u32;
+        for y in 0..128 {
+            for x in 0..128 {
+                seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+                let v = (seed >> 16) as u8;
+                n.set(x, y, ColorBgra::from_rgba(v, v / 2, 255 - v, 255));
+            }
+        }
+        let noisy = Document::from_layers(128, 128, vec![Layer::new("Background", n)]);
+        let (nl, nq) = (dir.path().join("nl.webp"), dir.path().join("nq.webp"));
+        save(&noisy, &nl, FileFormat::WebP, opts).unwrap();
+        save(&noisy, &nq, FileFormat::WebP, small).unwrap();
+        let size = |p: &std::path::Path| std::fs::metadata(p).unwrap().len();
+        assert!(
+            size(&nq) < size(&nl),
+            "lossy {} vs lossless {}",
+            size(&nq),
+            size(&nl)
+        );
     }
 
     #[test]

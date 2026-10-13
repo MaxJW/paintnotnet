@@ -307,10 +307,14 @@ impl PaintNotNetApp {
         let mut changed = false;
         let def = &s.def;
         let values = &mut s.values;
+        // Movable, so the live preview behind it can be watched; opens centred, then stays
+        // where it was dragged (egui remembers the position per effect).
         egui::Window::new(def.name)
+            .id(egui::Id::new(("effect_dialog", def.name)))
             .collapsible(false)
             .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(ctx.content_rect().center())
             .show(ctx, |ui| {
                 ui.set_min_width(300.0);
                 for (i, p) in def.props.iter().enumerate() {

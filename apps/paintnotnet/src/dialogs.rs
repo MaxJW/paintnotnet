@@ -24,9 +24,10 @@ pub enum Modal {
     UnsavedOnExit {
         count: usize,
     },
-    JpegQuality {
+    /// paint.net's Save Configuration dialog for formats with settings (JPEG, WebP).
+    SaveConfig {
         key: u64,
-        quality: u8,
+        options: pnn_io::SaveOptions,
         then: SaveTarget,
     },
     Error {
@@ -59,9 +60,9 @@ pub enum ModalResult {
     },
     SaveAllAndExit,
     ExitWithoutSaving,
-    JpegConfirmed {
+    SaveConfigured {
         key: u64,
-        quality: u8,
+        options: pnn_io::SaveOptions,
         then: SaveTarget,
     },
     PasteExpand {
@@ -132,16 +133,45 @@ impl Modal {
                         ],
                     )
                 }
-                Modal::JpegQuality { key, quality, then } => {
+                Modal::SaveConfig { key, options, then } => {
                     ui.heading("Save Configuration");
-                    ui.horizontal(|ui| {
-                        ui.label("Quality:");
-                        ui.add(egui::Slider::new(quality, 0..=100));
-                    });
+                    match then.format {
+                        pnn_io::FileFormat::WebP => {
+                            // pdn-webp's controls (bundled with paint.net 5).
+                            ui.horizontal(|ui| {
+                                ui.label("Preset:");
+                                egui::ComboBox::from_id_salt("webp_preset")
+                                    .selected_text(options.webp_preset.name())
+                                    .show_ui(ui, |ui| {
+                                        for p in pnn_io::WebPPreset::ALL {
+                                            ui.selectable_value(&mut options.webp_preset, p, p.name());
+                                        }
+                                    });
+                            });
+                            ui.add_enabled_ui(!options.webp_lossless, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label("Quality:");
+                                    ui.add(egui::Slider::new(&mut options.webp_quality, 0..=100));
+                                });
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Effort:");
+                                ui.add(egui::Slider::new(&mut options.webp_effort, 0..=9))
+                                    .on_hover_text("Higher is slower and smaller");
+                            });
+                            ui.checkbox(&mut options.webp_lossless, "Lossless");
+                        }
+                        _ => {
+                            ui.horizontal(|ui| {
+                                ui.label("Quality:");
+                                ui.add(egui::Slider::new(&mut options.jpeg_quality, 0..=100));
+                            });
+                        }
+                    }
                     ui.add_space(8.0);
-                    let ok = ModalResult::JpegConfirmed {
+                    let ok = ModalResult::SaveConfigured {
                         key: *key,
-                        quality: *quality,
+                        options: *options,
                         then: then.clone(),
                     };
                     buttons(ui, &[("OK", ok), ("Cancel", ModalResult::Cancelled)])

@@ -184,6 +184,12 @@ Guessed or approximated (paint.net doesn't document them):
 - [ ] Curves (luminosity / RGB, editable points), Levels (histograms, in/out, gamma, per channel)
 - Notes for starting 8c (read 2026-10-13, nothing written yet): 3.36 `Effects/CurvesEffectConfigToken.cs` builds tables with `Core/SplineInterpolator.cs` (Numerical Recipes natural cubic spline) through integer control points, default (0,0),(255,255); Luminosity mode = `UnaryPixelOps.LuminosityCurve` (shift RGB by curve[intensity] − intensity), RGB mode = `ChannelCurve` with R/G/B checkboxes. Levels = `UnaryPixelOps.Level` (already ported as `adjustments::level_curve`) + `Effects/LevelsEffectConfigDialog.cs`; Auto button = `auto_level`. 5.x docs saved in `reference/pdn5-docs/Curves.html`, `Levels.html` (left-click adds/drags points, right-click removes; Levels input black/white, output black/grey/white, R/G/B checkboxes, histograms).
 
+### Requested along the way (2026-10-13) ✅
+- [x] Effect and document dialogs (Feather Selection/Object, Blur Selection Edge, adjustments, Rotate/Zoom, Layer Properties…) are movable windows: they open centred, can be dragged aside, and remember where they were left. The canvas behind them previews live, from the moment they open (defaults shown at once, as paint.net does) and on every change; Cancel/Esc restores the layer.
+- [x] WebP: open (any WebP, via `image`) and save through a Save Configuration dialog with pdn-webp's settings (Preset, Quality, Effort 0–9, Lossless; paint.net 5 bundles pdn-webp, MIT, attributed in NOTICE) configuring libwebp as pdn-webp does. JPEG's quality dialog became the same Save Configuration dialog.
+- **Verified:** dialog drag test (moves with the title bar, still usable), Feather Object previews on open, changes live, Cancel reverts with no history step; WebP engine test (lossless exact incl. alpha, lossy close and smaller) and a UI test (Ctrl+S on a .webp → settings → Lossless → OK → file loads back pixel-exact). CI passes (256 tests).
+- Not done: WebP metadata (EXIF/ICC/XMP) and animation, which pdn-webp keeps; document-dialog effects (Feather Object etc.) still render on the UI thread, so very large images preview slower than the adjustments do.
+
 ## Phase 9: Stock effects
 - [ ] Artistic, Blurs, Color, Distort, Noise, Object (Drop Shadow), Photo, Render, Stylize (full list in the inventory)
 
