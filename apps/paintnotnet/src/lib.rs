@@ -2,6 +2,7 @@
 
 pub mod actions;
 pub mod app;
+pub mod autosave;
 pub mod canvas;
 pub mod clipboard;
 pub mod commands;

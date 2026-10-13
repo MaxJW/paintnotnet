@@ -11,6 +11,8 @@ pnn-core.workspace = true
 image.workspace = true
 webp.workspace = true
 libwebp-sys.workspace = true
+zip.workspace = true
+quick-xml.workspace = true
 thiserror.workspace = true
 bytemuck.workspace = true
 

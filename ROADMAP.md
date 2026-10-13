@@ -6,8 +6,9 @@ shown passing.
 
 **Current state (2026-10-13):** Phases 0–9 and the first batch of 10 are complete, verified and committed (Phase 5
 still awaits your sign-off on the feel). Phase 9 (stock effects) is done except Sketch Blur, and Phase 10's first batch of
-BoltBait-class effects is in. **Next: Phase 11 (files and polish)**, then more of the BoltBait
-pack in whatever order you rank it. After all phases, compare against the paint.net 5.1.12 release files the user provided
+BoltBait-class effects is in. Phase 11a (OpenRaster, autosave, crash recovery) is done. **Next: Phase 11b (settings,
+rebindable keys, command palette)**, then 11c (packaging), then more of the BoltBait pack in
+whatever order you rank it. After all phases, compare against the paint.net 5.1.12 release files the user provided
 (`~/Downloads/paint.net.5.1.12.portable.x64`; the user states the owners gave permission).
 Functionality first: the user wants every feature working
 before the visual refresh (Phase 12).
@@ -219,7 +220,11 @@ Guessed or approximated (paint.net doesn't document them):
 - [ ] Still to do from the pack: Apply Alpha Mask (needs the clipboard image), Paste Alpha, Black and White+, Combined Adjustments, Hue/Sat+, Dream, Oil Paint+, Pastel, Gaussian Blur+, Photo Adjustments, Vignette+, Remove Dust, Level Horizon, Meme Maker, Calendar/Chart/Grid/Polygon renders, Text Fun Factory, and the rest of the 44 (inventory has the list)
 
 ## Phase 11: Files and polish
-- [ ] ORA native format (with paint.net blend-mode attributes), autosave and crash recovery
+### 11a ✅ OpenRaster, autosave, crash recovery
+- [x] OpenRaster (`.ora`) as the layered format (first in Save As): OpenRaster 0.0.6 layout (uncompressed `mimetype` first, `stack.xml` top-first, layer PNGs, `mergedimage.png`, 256 px thumbnail); name, opacity, visibility, blend mode (SVG composite-ops, `pdn:reflect/glow/negation/xor` for paint.net-only modes), active layer, DPI; reads other programs' files including offset/cropped layers and nested stacks; Open detects it by content; layered saves skip the flatten prompt
+- [x] Autosave every 60 s of changed documents to `~/.local/state/paintnotnet/recovery/<pid>/` (ORA, written atomically on a worker thread); saving/closing removes a document's file, a clean exit removes the folder; at startup a dead session's images are offered back (Recover opens them unsaved, with their original paths; Discard deletes them)
+- **Verified 2026-10-13:** ORA round trip (layers, names with XML specials, opacity, hidden, Glow, active layer, DPI, mimetype first), every blend mode maps both ways; **Krita** opened our file and exported a composite within 1 level of ours (Multiply at 78%), and our reader loaded Krita's re-saved ORA (cropped layer at offset 16,12, Multiply, opacity); UI tests: Ctrl+S on a layered .ora saves without flattening and reloads; autosave writes a changed document; a crashed session's image is offered back and recovered unsaved under its original name. CI passes (290 tests).
+- Not checked: a real crash on the display (the dead session is simulated in tests). Autosave interval isn't configurable yet (Settings, 11b).
 - [ ] Settings dialog, rebindable keymap UI, command palette (Ctrl+K)
 - [ ] Packaging: PKGBUILD for CachyOS/Arch, .desktop file, MIME associations, icon
 - [ ] Optional: pop-out panels, tablet pressure

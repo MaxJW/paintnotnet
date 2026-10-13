@@ -34,6 +34,10 @@ pub enum Modal {
         title: String,
         message: String,
     },
+    /// Images autosaved by a session that didn't exit cleanly.
+    Recover {
+        items: Vec<crate::autosave::Recovered>,
+    },
 }
 
 /// Where a save goes once its settings are confirmed.
@@ -60,6 +64,8 @@ pub enum ModalResult {
     },
     SaveAllAndExit,
     ExitWithoutSaving,
+    Recover,
+    DiscardRecovered,
     SaveConfigured {
         key: u64,
         options: pnn_io::SaveOptions,
@@ -196,6 +202,27 @@ impl Modal {
                             ("Expand canvas", ModalResult::PasteExpand { new_layer: n, expand: true }),
                             ("Keep canvas size", ModalResult::PasteExpand { new_layer: n, expand: false }),
                             ("Cancel", ModalResult::Cancelled),
+                        ],
+                    )
+                }
+                Modal::Recover { items } => {
+                    ui.heading("Recover images");
+                    ui.label("paintnotnet didn't close properly last time. These images had unsaved changes:");
+                    ui.add_space(4.0);
+                    for r in items.iter() {
+                        let from = r
+                            .original
+                            .as_ref()
+                            .map(|p| format!(" ({})", p.display()))
+                            .unwrap_or_default();
+                        ui.label(format!("• {}{from}", r.title));
+                    }
+                    ui.add_space(8.0);
+                    buttons(
+                        ui,
+                        &[
+                            ("Recover", ModalResult::Recover),
+                            ("Discard", ModalResult::DiscardRecovered),
                         ],
                     )
                 }

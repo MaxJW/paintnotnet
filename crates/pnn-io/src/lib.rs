@@ -12,6 +12,8 @@ use image::codecs::jpeg::JpegEncoder;
 use image::{ExtendedColorType, ImageEncoder, ImageFormat, ImageReader};
 use pnn_core::{BlendMode, ColorBgra, Document, Layer, Surface, flatten};
 
+pub mod ora;
+
 #[derive(Debug, thiserror::Error)]
 pub enum IoError {
     #[error("{path}: {source}")]
@@ -31,6 +33,8 @@ pub enum IoError {
 /// File types paintnotnet can save, in the order shown in the Save As dialog.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FileFormat {
+    /// OpenRaster: layers, blend modes and opacity kept (paintnotnet's native format).
+    Ora,
     Png,
     Jpeg,
     Bmp,
@@ -41,7 +45,8 @@ pub enum FileFormat {
 }
 
 impl FileFormat {
-    pub const ALL: [FileFormat; 7] = [
+    pub const ALL: [FileFormat; 8] = [
+        Self::Ora,
         Self::Png,
         Self::Jpeg,
         Self::Bmp,
@@ -53,6 +58,7 @@ impl FileFormat {
 
     pub fn name(self) -> &'static str {
         match self {
+            Self::Ora => "OpenRaster",
             Self::Png => "PNG",
             Self::Jpeg => "JPEG",
             Self::Bmp => "BMP",
@@ -66,6 +72,7 @@ impl FileFormat {
     /// Extensions, the first being the default when saving.
     pub fn extensions(self) -> &'static [&'static str] {
         match self {
+            Self::Ora => &["ora"],
             Self::Png => &["png"],
             Self::Jpeg => &["jpg", "jpeg", "jpe", "jfif"],
             Self::Bmp => &["bmp", "dib"],
@@ -88,6 +95,11 @@ impl FileFormat {
         !matches!(self, Self::Jpeg | Self::Bmp)
     }
 
+    /// Whether the format keeps layers (no flatten on save).
+    pub fn layered(self) -> bool {
+        self == Self::Ora
+    }
+
     /// Whether saving asks for settings first (paint.net's Save Configuration dialog).
     pub fn has_options(self) -> bool {
         matches!(self, Self::Jpeg | Self::WebP)
@@ -95,7 +107,7 @@ impl FileFormat {
 
     fn image_format(self) -> ImageFormat {
         match self {
-            Self::Png => ImageFormat::Png,
+            Self::Png | Self::Ora => ImageFormat::Png,
             Self::Jpeg => ImageFormat::Jpeg,
             Self::Bmp => ImageFormat::Bmp,
             Self::Gif => ImageFormat::Gif,
@@ -108,8 +120,8 @@ impl FileFormat {
 
 /// Extensions accepted by Open (everything the decoder understands, not just save formats).
 pub const OPEN_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "jpe", "jfif", "bmp", "dib", "gif", "tif", "tiff", "tga", "webp", "ico",
-    "qoi", "pnm", "pbm", "pgm", "ppm", "dds", "hdr", "exr", "avif",
+    "ora", "png", "jpg", "jpeg", "jpe", "jfif", "bmp", "dib", "gif", "tif", "tiff", "tga", "webp",
+    "ico", "qoi", "pnm", "pbm", "pgm", "ppm", "dds", "hdr", "exr", "avif",
 ];
 
 /// libwebp's encoder presets, as pdn-webp offers them.
@@ -171,6 +183,14 @@ impl Default for SaveOptions {
 
 /// Open an image file as a single-layer document named "Background", as paint.net does.
 pub fn load(path: &Path) -> Result<Document, IoError> {
+    let bytes = fs::read(path).map_err(|source| IoError::Io {
+        path: path.to_owned(),
+        source,
+    })?;
+    // OpenRaster: a zip starting with an uncompressed "mimetype" entry.
+    if bytes.starts_with(b"PK") && bytes.get(30..38) == Some(b"mimetype") {
+        return ora::decode(&bytes, path);
+    }
     let image_err = |source| IoError::Image {
         path: path.to_owned(),
         source,
@@ -209,6 +229,13 @@ pub fn save(
     format: FileFormat,
     options: SaveOptions,
 ) -> Result<(), IoError> {
+    if format == FileFormat::Ora {
+        let bytes = ora::encode(doc).map_err(|msg| IoError::Io {
+            path: path.to_owned(),
+            source: std::io::Error::other(msg),
+        })?;
+        return write_atomically(path, &bytes);
+    }
     let mut pixels = flatten(doc).to_pixels();
     if !format.has_alpha() {
         for p in &mut pixels {

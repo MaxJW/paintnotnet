@@ -42,7 +42,15 @@ fn main() -> ExitCode {
     let result = eframe::run_native(
         "paintnotnet",
         options,
-        Box::new(move |cc| Ok(Box::new(PaintNotNetApp::new(cc, smoke, files)))),
+        Box::new(move |cc| {
+            let smoke_run = smoke.is_some();
+            let mut app = PaintNotNetApp::new(cc, smoke, files);
+            // Autosave every minute for crash recovery (not in smoke tests).
+            if !smoke_run && let Some(dir) = paintnotnet::autosave::default_state_dir() {
+                app.enable_autosave(dir, std::time::Duration::from_secs(60));
+            }
+            Ok(Box::new(app))
+        }),
     );
     match result {
         Ok(()) => ExitCode::SUCCESS,

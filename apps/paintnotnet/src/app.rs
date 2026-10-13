@@ -96,6 +96,8 @@ pub struct PaintNotNetApp {
     pub(crate) pending_paste: Option<crate::clipboard::ClipImage>,
     /// Last effect run (Effects > Repeat, Ctrl+F).
     pub(crate) last_effect: Option<pnn_effects::EffectId>,
+    /// Autosave for crash recovery (enabled by `main`, so tests don't touch the real folder).
+    pub(crate) autosave: Option<crate::autosave::Autosave>,
     /// The adjustment/effect dialog in progress.
     pub(crate) effect: Option<crate::effect_runner::EffectSession>,
     /// Last applied effect and its settings, for Repeat (Ctrl+F).
@@ -168,6 +170,7 @@ impl PaintNotNetApp {
             clipboard: Box::new(crate::clipboard::SystemClipboard::new()),
             pending_paste: None,
             last_effect: None,
+            autosave: None,
             effect: None,
             last_applied: None,
             synced_selection: 0,
@@ -469,8 +472,75 @@ impl PaintNotNetApp {
     }
 
     fn discard_tab(&mut self, key: u64) {
+        if let Some(a) = self.autosave.as_mut() {
+            a.forget(key);
+        }
         if self.workspace.remove(key).is_some() {
             self.released.push(key);
+        }
+    }
+
+    /// Turn on autosave into `state_dir`, offering to recover images a crashed session left.
+    pub fn enable_autosave(
+        &mut self,
+        state_dir: std::path::PathBuf,
+        interval: std::time::Duration,
+    ) {
+        let a = crate::autosave::Autosave::new(&state_dir, interval);
+        let items = a.recoverable();
+        self.autosave = Some(a);
+        if !items.is_empty() && self.modal.is_none() {
+            self.modal = Some(Modal::Recover { items });
+        }
+    }
+
+    fn run_autosave(&mut self, now: Instant) {
+        let Some(a) = self.autosave.as_mut() else {
+            return;
+        };
+        if !a.due(now) {
+            return;
+        }
+        let docs = self
+            .workspace
+            .tabs()
+            .iter()
+            .map(|t| {
+                (
+                    t.key,
+                    t.doc.clone(),
+                    t.is_dirty(),
+                    t.title(),
+                    t.path.clone(),
+                )
+            })
+            .collect();
+        a.tick(now, docs);
+    }
+
+    /// Open the crashed session's images as unsaved documents (with their original paths, so
+    /// Save puts them back).
+    fn recover(&mut self) {
+        let Some(a) = self.autosave.as_ref() else {
+            return;
+        };
+        for r in a.recoverable() {
+            match pnn_io::load(&r.file) {
+                Ok(doc) => {
+                    let format = r
+                        .original
+                        .as_deref()
+                        .and_then(pnn_io::FileFormat::from_path);
+                    let key = self.workspace.add(doc, r.original.clone(), format);
+                    if let Some(tab) = self.workspace.tab_mut(key) {
+                        tab.mark_saved(0);
+                    }
+                }
+                Err(e) => log::warn!("recovery: {e}"),
+            }
+        }
+        if let Some(a) = self.autosave.as_ref() {
+            a.clear_recoverable();
         }
     }
 
@@ -503,7 +573,7 @@ impl PaintNotNetApp {
         let Some(tab) = self.workspace.tab_mut(key) else {
             return;
         };
-        if tab.doc.layers().len() > 1 && !target.flattened {
+        if tab.doc.layers().len() > 1 && !target.flattened && !target.format.layered() {
             self.modal = Some(Modal::FlattenForSave { key, then: target });
         } else if target.format.has_options() {
             self.modal = Some(Modal::SaveConfig {
@@ -622,6 +692,9 @@ impl PaintNotNetApp {
                             tab.format = Some(format);
                             tab.mark_saved(revision);
                         }
+                        if let Some(a) = self.autosave.as_mut() {
+                            a.forget(key);
+                        }
                         self.last_dir = path.parent().map(|p| p.to_owned());
                         if self.close_after_save.remove(&key) {
                             self.discard_tab(key);
@@ -654,6 +727,12 @@ impl PaintNotNetApp {
             ModalResult::ExitWithoutSaving => {
                 self.allow_close = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            ModalResult::Recover => self.recover(),
+            ModalResult::DiscardRecovered => {
+                if let Some(a) = self.autosave.as_ref() {
+                    a.clear_recoverable();
+                }
             }
             ModalResult::SaveConfigured { key, options, then } => {
                 if let Some(tab) = self.workspace.tab_mut(key) {
@@ -1273,9 +1352,17 @@ fn open_url(url: &str) {
 }
 
 impl eframe::App for PaintNotNetApp {
+    fn on_exit(&mut self) {
+        // A clean exit leaves nothing to recover.
+        if let Some(a) = self.autosave.as_mut() {
+            a.finish();
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let now = Instant::now();
         let ctx = ui.ctx().clone();
+        self.run_autosave(now);
         self.modifiers = ctx.input(|i| i.modifiers);
         self.handle_file_events();
 
