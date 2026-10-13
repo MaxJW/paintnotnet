@@ -1,5 +1,5 @@
 //! The editing window: draws the active document on the GPU and handles view input
-//! (wheel scroll, Ctrl+wheel zoom, Space/middle-drag pan, scrollbars).
+//! (wheel zoom or scroll, Space/middle-drag pan, scrollbars).
 
 use eframe::egui::{self, PointerButton, Rect, Sense, Vec2, pos2, vec2};
 use eframe::egui_wgpu;
@@ -71,6 +71,8 @@ pub struct CanvasState {
     pub viewport: [f64; 2],
     /// Where the canvas was last laid out, in points (tests, overlays).
     pub rect: Option<Rect>,
+    /// What the wheel does (Settings).
+    pub wheel: crate::config::MouseWheel,
     zoom_wheel: f32,
 }
 
@@ -153,8 +155,9 @@ pub fn show(
         ui.ctx().set_cursor_icon(cursor);
     }
 
-    // Wheel: scroll (Shift = horizontal, handled by egui); Ctrl = step through zoom presets
-    // about the pointer.
+    // Wheel. Zoom mode: a mouse wheel steps through the zoom presets about the pointer;
+    // Shift+wheel and touchpad (pixel) scrolling scroll. Scroll mode (paint.net): the wheel
+    // scrolls (Shift = horizontal, handled by egui) and Ctrl+wheel zooms.
     if response.hovered() {
         let (scroll, wheel): (Vec2, Vec<(egui::MouseWheelUnit, Vec2, egui::Modifiers)>) =
             ui.input(|i| {
@@ -180,24 +183,37 @@ pub fn show(
             ((pointer.x - canvas_rect.min.x) as f64) * ppp,
             ((pointer.y - canvas_rect.min.y) as f64) * ppp,
         ];
+        let zoom_mode = state.wheel == crate::config::MouseWheel::Zoom;
+        let line_px = ui.ctx().options(|o| o.input_options.line_scroll_speed);
+        let mut zoom_steps = 0.0;
+        let mut raw_scroll = Vec2::ZERO;
         for (unit, delta, modifiers) in wheel {
-            if !modifiers.ctrl {
-                continue;
-            }
-            state.zoom_wheel += match unit {
-                egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page => delta.y,
-                egui::MouseWheelUnit::Point => delta.y / 50.0,
-            };
-            while state.zoom_wheel >= 1.0 {
-                state.zoom_wheel -= 1.0;
-                view.zoom_about(view::next_zoom_in(view.zoom), anchor, img, vp);
-            }
-            while state.zoom_wheel <= -1.0 {
-                state.zoom_wheel += 1.0;
-                view.zoom_about(view::next_zoom_out(view.zoom), anchor, img, vp);
+            let mouse_wheel = unit != egui::MouseWheelUnit::Point;
+            if modifiers.ctrl || (zoom_mode && mouse_wheel && !modifiers.shift) {
+                zoom_steps += match unit {
+                    egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page => delta.y,
+                    egui::MouseWheelUnit::Point => delta.y / 50.0,
+                };
+            } else if zoom_mode {
+                let mut d = if mouse_wheel { delta * line_px } else { delta };
+                if modifiers.shift && d.x == 0.0 {
+                    d = vec2(d.y, 0.0);
+                }
+                raw_scroll += d;
             }
         }
-        if scroll != Vec2::ZERO && !ui.input(|i| i.modifiers.ctrl) {
+        state.zoom_wheel += zoom_steps;
+        while state.zoom_wheel >= 1.0 {
+            state.zoom_wheel -= 1.0;
+            view.zoom_about(view::next_zoom_in(view.zoom), anchor, img, vp);
+        }
+        while state.zoom_wheel <= -1.0 {
+            state.zoom_wheel += 1.0;
+            view.zoom_about(view::next_zoom_out(view.zoom), anchor, img, vp);
+        }
+        // egui's smoothed delta already leaves out Ctrl+wheel (its zoom modifier).
+        let scroll = if zoom_mode { raw_scroll } else { scroll };
+        if scroll != Vec2::ZERO {
             view.scroll_by(
                 [-(scroll.x as f64) * ppp, -(scroll.y as f64) * ppp],
                 img,
@@ -593,8 +609,8 @@ fn scrollbars(ui: &mut egui::Ui, full: Rect, canvas: Rect, tab: &mut DocumentTab
             ui.id().with(("scrollbar", axis)),
             Sense::click_and_drag(),
         );
-        let content = img[axis] * view.zoom;
-        let px_per_track_pt = (content - vp[axis]) / (track_len - thumb_len).max(1.0);
+        let total = view.scroll_length(axis, img, vp).unwrap_or(vp[axis]);
+        let px_per_track_pt = (total - vp[axis]) / (track_len - thumb_len).max(1.0);
         if response.dragged() {
             let d = if axis == 0 {
                 response.drag_delta().x

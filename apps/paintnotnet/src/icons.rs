@@ -14,7 +14,7 @@ macro_rules! icons {
         impl Icon {
             pub const ALL: &'static [Icon] = &[$(Icon::$name),*];
 
-            fn png(self) -> &'static [u8] {
+            pub(crate) fn png(self) -> &'static [u8] {
                 match self {
                     $(Icon::$name => include_bytes!(concat!(
                         env!("CARGO_MANIFEST_DIR"), "/../../assets/icons/pdn336/", $file, ".png"

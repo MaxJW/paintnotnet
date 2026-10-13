@@ -55,6 +55,7 @@ fn main() -> ExitCode {
                     let config = paintnotnet::config::Config::load(&path);
                     app.set_config(&cc.egui_ctx, config, Some(path));
                 }
+                app.set_global_menu(paintnotnet::global_menu::GlobalMenu::new(cc));
             }
             Ok(Box::new(app))
         }),

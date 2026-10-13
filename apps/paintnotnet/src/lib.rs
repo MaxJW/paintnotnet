@@ -13,6 +13,7 @@ pub mod doc_dialogs;
 pub mod effect_runner;
 pub mod file_ops;
 pub mod fill_tools;
+pub mod global_menu;
 pub mod icons;
 pub mod menus;
 pub mod move_tools;

@@ -31,6 +31,12 @@ egui-wgpu = "=0.36.2"
 egui_kittest = "=0.36.2"
 wgpu = "=30.0.1"
 raw-window-handle = "0.6"
+# KDE global menu: dbusmenu on the session bus, linked to the window over Wayland.
+zbus = { version = "5.19", default-features = false, features = ["async-io", "blocking-api"] }
+zvariant = "5.15"
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-protocols-plasma = { version = "0.3", features = ["client"] }
 
 rayon = "1.12.0"
 bytemuck = { version = "1.25.2", features = ["derive"] }

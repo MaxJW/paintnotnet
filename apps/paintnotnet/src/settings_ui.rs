@@ -7,7 +7,7 @@ use eframe::egui;
 
 use crate::app::PaintNotNetApp;
 use crate::commands::{Chord, Command, Triggered};
-use crate::config::Appearance;
+use crate::config::{Appearance, MouseWheel};
 use crate::menus::{all_commands, command_label};
 
 #[derive(Default)]
@@ -51,6 +51,7 @@ impl PaintNotNetApp {
             Appearance::Light => egui::ThemePreference::Light,
         });
         crate::commands::set_overrides(self.config.overrides());
+        self.canvas.wheel = self.config.mouse_wheel;
         if let Some(a) = self.autosave.as_mut() {
             a.set_interval(self.config.autosave_minutes);
         }
@@ -138,6 +139,29 @@ impl PaintNotNetApp {
                                 .changed();
                         }
                     });
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new("Mouse wheel over the image").strong());
+                    ui.horizontal(|ui| {
+                        for (w, name) in [
+                            (MouseWheel::Zoom, "Zoom (Shift+wheel scrolls)"),
+                            (
+                                MouseWheel::Scroll,
+                                "Scroll (Ctrl+wheel zooms, as paint.net)",
+                            ),
+                        ] {
+                            changed |= ui
+                                .radio_value(&mut self.config.mouse_wheel, w, name)
+                                .changed();
+                        }
+                    });
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new("Menus").strong());
+                    changed |= ui
+                        .checkbox(
+                            &mut self.config.global_menu,
+                            "Show the menus in the desktop's global menu (KDE Plasma)",
+                        )
+                        .changed();
                     ui.add_space(8.0);
                     ui.label(egui::RichText::new("Crash recovery").strong());
                     ui.horizontal(|ui| {

@@ -178,3 +178,37 @@ fn pixel_grid_toggles_from_view_menu() {
     h.step();
     assert!(h.state().pixel_grid());
 }
+
+#[test]
+fn hovering_another_menu_title_switches_menus() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness();
+    add_docs(&mut h, &[(10, 10)]);
+    h.get_by_label("File").click();
+    h.step();
+    h.step();
+    assert!(h.query_by_label_contains("New...").is_some());
+    // Only moving the pointer, no click.
+    let edit = h.get_by_label("Edit").rect().center();
+    h.event(eframe::egui::Event::PointerMoved(edit));
+    h.step();
+    h.step();
+    h.step();
+    assert!(
+        h.query_by_label_contains("Undo").is_some(),
+        "Edit menu didn't open"
+    );
+    assert!(
+        h.query_by_label_contains("New...").is_none(),
+        "File menu still open"
+    );
+    // With no menu open, hovering a title does nothing.
+    h.key_press(eframe::egui::Key::Escape);
+    h.step();
+    h.step();
+    let view = h.get_by_label("View").rect().center();
+    h.event(eframe::egui::Event::PointerMoved(view));
+    h.step();
+    h.step();
+    assert!(h.query_by_label("Pixel Grid").is_none());
+}

@@ -385,6 +385,10 @@ pub struct MenuBarState {
     pub open: bool,
     /// Frames to keep keyboard mode while a requested menu is still opening.
     grace: u8,
+    /// Which top-level menu is open this frame, and which was last frame (hovering another
+    /// title while one is open switches to it, as in Windows menu bars).
+    open_menu: Option<MenuId>,
+    was_open: Option<MenuId>,
 }
 
 pub fn request_open(state: &mut MenuBarState, id: MenuId) {
@@ -410,6 +414,7 @@ pub fn menu_button(
     let (response, inner) = egui::containers::menu::MenuButton::from_button(button).ui(ui, |ui| {
         ui.set_min_width(220.0);
         state.open = true;
+        state.open_menu = Some(menu.id);
         let underline = state.keyboard || ui.input(|i| i.modifiers.alt);
         picked = entries_ui(
             ui,
@@ -443,6 +448,10 @@ pub fn menu_button(
     if state.open_request == Some(menu.id) {
         Popup::open_id(ui.ctx(), Popup::default_response_id(&response));
         state.open_request = None;
+    } else if inner.is_none() && state.was_open.is_some_and(|m| m != menu.id) && response.hovered()
+    {
+        Popup::open_id(ui.ctx(), Popup::default_response_id(&response));
+        state.was_open = Some(menu.id);
     }
     if inner.is_none() && response.clicked() {
         state.keyboard = false;
@@ -574,6 +583,7 @@ pub fn menu_bar(
     icons: &Icons,
 ) -> Option<Command> {
     state.open = false;
+    state.was_open = state.open_menu.take();
     let all_menus = menus();
     let order: Vec<MenuId> = all_menus.iter().map(|m| m.id).collect();
     let alt = ui.input(|i| i.modifiers.alt);

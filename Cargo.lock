@@ -2811,6 +2811,11 @@ dependencies = [
  "serde",
  "tempfile",
  "toml",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols-plasma",
+ "zbus",
+ "zvariant",
 ]
 
 [[package]]

@@ -101,6 +101,8 @@ pub struct PaintNotNetApp {
     pub(crate) config: crate::config::Config,
     /// Where settings are saved (set by `main`; tests keep settings in memory).
     pub(crate) config_path: Option<std::path::PathBuf>,
+    /// KDE Plasma global menu export (`None` off Plasma Wayland and in tests).
+    pub(crate) global_menu: Option<crate::global_menu::GlobalMenu>,
     pub(crate) settings_open: Option<crate::settings_ui::SettingsState>,
     pub(crate) palette: Option<crate::settings_ui::PaletteState>,
     /// The adjustment/effect dialog in progress.
@@ -178,6 +180,7 @@ impl PaintNotNetApp {
             autosave: None,
             config: crate::config::Config::default(),
             config_path: None,
+            global_menu: None,
             settings_open: None,
             palette: None,
             effect: None,
@@ -407,6 +410,8 @@ impl PaintNotNetApp {
             Command::ToggleDiagnostics => self.diagnostics.set_visible(!self.diagnostics.visible()),
             Command::ToggleWindow(p) => self.panels.toggle(p),
             Command::ResetWindow(p) => self.panels.reset(p),
+            // With the menus in the desktop's global menu there's no in-window bar to open.
+            Command::OpenMenu(_) if self.global_menu_active() => {}
             Command::OpenMenu(id) => menus::request_open(&mut self.menu, id),
             Command::HelpTopics => open_url("https://paint.net/doc/latest/"),
             Command::About => self.modal = Some(Modal::About),
@@ -492,6 +497,42 @@ impl PaintNotNetApp {
         }
         if self.workspace.remove(key).is_some() {
             self.released.push(key);
+        }
+    }
+
+    /// Export the menus to KDE Plasma's global menu (made by `main` from the window).
+    pub fn set_global_menu(&mut self, menu: Option<crate::global_menu::GlobalMenu>) {
+        self.global_menu = menu;
+    }
+
+    /// Whether the menus are showing in the desktop's global menu instead of the window.
+    pub fn global_menu_active(&self) -> bool {
+        self.global_menu.as_ref().is_some_and(|g| g.active())
+    }
+
+    /// Keep the global menu's state current and run what was picked from it. While a dialog
+    /// is open everything shows disabled and clicks are ignored, as the in-window bar would be
+    /// unreachable.
+    fn sync_global_menu(&mut self, ctx: &egui::Context, modal_open: bool) {
+        let Some(mut global) = self.global_menu.take() else {
+            return;
+        };
+        let state = self.command_state();
+        let enabled = |c: Command| !modal_open && state.enabled(c);
+        let checked = |c: Command| state.checked(c);
+        let cx = MenuContext {
+            enabled: &enabled,
+            checked: &checked,
+            last_effect: self.last_effect_name(),
+        };
+        let picked = global.update(self.config.global_menu, &menus::menus(), &cx);
+        self.global_menu = Some(global);
+        if !modal_open {
+            for c in picked {
+                if self.availability(c) {
+                    self.execute(ctx, Triggered::once(c));
+                }
+            }
         }
     }
 
@@ -1014,6 +1055,7 @@ impl PaintNotNetApp {
         // The two sides of the band run one after the other; share state through cells.
         let picked: std::cell::Cell<Option<Command>> = std::cell::Cell::new(None);
         let menu = std::cell::RefCell::new(std::mem::take(&mut self.menu));
+        let global_menu = self.global_menu_active();
         let mut list_actions = Vec::new();
         egui::Panel::top("top_band").show(ui, |ui| {
             let state = self.command_state();
@@ -1035,10 +1077,18 @@ impl PaintNotNetApp {
                             egui::Layout::top_down(egui::Align::Min),
                             |ui| {
                                 ui.set_max_width(MENU_COLUMN_WIDTH);
-                                if let Some(c) =
-                                    menus::menu_bar(ui, &mut menu.borrow_mut(), &cx, &self.icons)
+                                if !global_menu
+                                    && let Some(c) = menus::menu_bar(
+                                        ui,
+                                        &mut menu.borrow_mut(),
+                                        &cx,
+                                        &self.icons,
+                                    )
                                 {
                                     picked.set(Some(c));
+                                }
+                                if global_menu {
+                                    menu.borrow_mut().open = false;
                                 }
                                 if let Some(c) =
                                     toolbar::row1(ui, &self.icons, &availability, &checked)
@@ -1423,6 +1473,7 @@ impl eframe::App for PaintNotNetApp {
             }
         }
 
+        self.sync_global_menu(&ctx, modal_open && !self.menu.open);
         self.top_band(ui, &ctx);
         egui::Panel::top("tool_options").show(ui, |ui| {
             // The toolbar's Finish commits pending tool work, as Enter does.

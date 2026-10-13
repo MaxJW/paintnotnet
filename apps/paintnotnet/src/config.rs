@@ -18,10 +18,23 @@ pub enum Appearance {
     Light,
 }
 
+/// What the mouse wheel does over the canvas.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MouseWheel {
+    /// Zoom about the pointer; Shift+wheel and touchpad scrolling still scroll.
+    #[default]
+    Zoom,
+    /// paint.net's behaviour: scroll, Ctrl+wheel zooms.
+    Scroll,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub appearance: Appearance,
+    pub mouse_wheel: MouseWheel,
+    /// Show the menus in KDE Plasma's global menu when one is running.
+    pub global_menu: bool,
     /// Minutes between autosaves for crash recovery; 0 turns it off.
     pub autosave_minutes: u32,
     /// Rebound shortcuts: command id → chords ("Ctrl+Shift+K"); empty = unbound.
@@ -32,6 +45,8 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             appearance: Appearance::System,
+            mouse_wheel: MouseWheel::Zoom,
+            global_menu: true,
             autosave_minutes: 1,
             shortcuts: BTreeMap::new(),
         }

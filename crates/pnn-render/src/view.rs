@@ -84,14 +84,15 @@ impl View {
         }
     }
 
-    /// Centre axes where the image fits; otherwise keep the viewport inside the image.
+    /// Centre axes where the image fits. Otherwise the image may be scrolled until its edge
+    /// reaches the middle of the viewport (paint.net stops at the edge; the user asked for
+    /// room to work near the edges), so the view centre stays inside the image.
     pub fn clamp(&mut self, image: [f64; 2], viewport: [f64; 2]) {
         for axis in 0..2 {
-            let half = viewport[axis] / 2.0 / self.zoom;
             self.center[axis] = if image[axis] * self.zoom <= viewport[axis] {
                 image[axis] / 2.0
             } else {
-                self.center[axis].clamp(half, image[axis] - half)
+                self.center[axis].clamp(0.0, image[axis])
             };
         }
     }
@@ -127,15 +128,18 @@ impl View {
         self.clamp(image, viewport);
     }
 
-    /// Scroll so image point `p` is at the top-left (`Home ×2`) or bottom-right (`End ×2`).
+    /// Scroll so the image's top-left (`Home ×2`) or bottom-right (`End ×2`) corner meets the
+    /// same corner of the viewport.
     pub fn scroll_to_corner(&mut self, bottom_right: bool, image: [f64; 2], viewport: [f64; 2]) {
         self.fit_to_window = false;
-        let far = if bottom_right {
-            f64::INFINITY
-        } else {
-            f64::NEG_INFINITY
-        };
-        self.center = [far, far];
+        for axis in 0..2 {
+            let half = viewport[axis] / 2.0 / self.zoom;
+            self.center[axis] = if bottom_right {
+                image[axis] - half
+            } else {
+                half
+            };
+        }
         self.clamp(image, viewport);
     }
 
@@ -145,7 +149,14 @@ impl View {
         self.center = p;
     }
 
-    /// Visible part of the content along one axis as (start, length) fractions of the total,
+    /// Scrollable length along one axis in screen px: the image plus half a viewport of
+    /// overscroll at each end. `None` when the image fits on that axis.
+    pub fn scroll_length(&self, axis: usize, image: [f64; 2], viewport: [f64; 2]) -> Option<f64> {
+        let content = image[axis] * self.zoom;
+        (content > viewport[axis]).then_some(content + viewport[axis])
+    }
+
+    /// Visible part of the scrollable length along one axis as (start, length) fractions,
     /// for drawing scrollbars. `None` when the image fits on that axis.
     pub fn scrollbar(
         &self,
@@ -153,12 +164,9 @@ impl View {
         image: [f64; 2],
         viewport: [f64; 2],
     ) -> Option<(f64, f64)> {
-        let content = image[axis] * self.zoom;
-        if content <= viewport[axis] {
-            return None;
-        }
-        let visible = viewport[axis] / content;
-        let start = (self.center[axis] * self.zoom - viewport[axis] / 2.0) / content;
+        let total = self.scroll_length(axis, image, viewport)?;
+        let visible = viewport[axis] / total;
+        let start = self.center[axis] * self.zoom / total;
         Some((start.clamp(0.0, 1.0 - visible), visible))
     }
 }
@@ -212,10 +220,15 @@ mod tests {
     }
 
     #[test]
-    fn scrolling_clamps_to_image_edges() {
+    fn scrolling_stops_with_the_edge_mid_viewport() {
         let mut v = View::fitted(IMG, VP);
         v.zoom_centered(1.0, IMG, VP);
         v.scroll_by([-1e9, -1e9], IMG, VP);
+        assert_eq!(v.image_to_screen([0.0, 0.0], VP), [800.0, 500.0]);
+        v.scroll_by([1e9, 1e9], IMG, VP);
+        assert_eq!(v.image_to_screen(IMG, VP), [800.0, 500.0]);
+        // Home ×2 / End ×2 still line the image corner up with the viewport corner.
+        v.scroll_to_corner(false, IMG, VP);
         assert_eq!(v.image_to_screen([0.0, 0.0], VP), [0.0, 0.0]);
         v.scroll_to_corner(true, IMG, VP);
         assert_eq!(v.image_to_screen(IMG, VP), VP);
@@ -236,9 +249,12 @@ mod tests {
         let mut v = View::fitted(IMG, VP);
         assert_eq!(v.scrollbar(0, IMG, VP), None);
         v.zoom_centered(1.0, IMG, VP);
+        // Total = 8000 + 1600 overscroll; the corner position leaves half a viewport before it.
         v.scroll_to_corner(false, IMG, VP);
         let (start, len) = v.scrollbar(0, IMG, VP).unwrap();
-        assert_eq!(start, 0.0);
-        assert!((len - 0.2).abs() < 1e-12);
+        assert!((start - 800.0 / 9600.0).abs() < 1e-12);
+        assert!((len - 1600.0 / 9600.0).abs() < 1e-12);
+        v.scroll_by([-1e9, 0.0], IMG, VP);
+        assert_eq!(v.scrollbar(0, IMG, VP).unwrap().0, 0.0);
     }
 }

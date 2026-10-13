@@ -231,6 +231,14 @@ Guessed or approximated (paint.net doesn't document them):
 - [x] Command palette (Ctrl+K): type to filter every menu and shortcut command, Up/Down/Enter to run, Esc to close
 - **Verified 2026-10-13:** UI tests rebind Invert Colors to Ctrl+J through the real dialog (then Ctrl+J inverts and Ctrl+Shift+I does nothing), switch appearance to Light, and run Gaussian Blur from the palette; renders of Settings › Keyboard and the palette checked by eye. CI passes (295 tests).
 - The shortcut editor and the palette are paintnotnet additions (paint.net 5.x has neither); paint.net's Settings has more pages (tools, updates, plugins) that aren't copied.
+### Requested tweaks (2026-10-13) ✅
+- [x] Panning past the image edge: when the image is bigger than the window, it can be scrolled until its edge reaches the middle of the canvas (paint.net stops at the edge); scrollbars cover the extra room; Home×2/End×2 still line the corner up with the window corner
+- [x] Mouse wheel zooms about the pointer by default (Shift+wheel and touchpad scrolling still scroll, Ctrl+wheel still zooms); Settings › General › "Mouse wheel over the image" switches back to paint.net's scroll behaviour
+- [x] Menu bar: with one menu open, hovering another title switches to it without a click
+- [x] KDE Plasma global menu: the menus are exported as `com.canonical.dbusmenu` (labels, mnemonics, icons, shortcuts, check marks, live enabled state, Repeat label) and linked to the window with KWin's `org_kde_kwin_appmenu` Wayland protocol; used only while Plasma's menu registrar runs, and the in-window bar hides meanwhile. Settings › General › Menus turns it off. While a dialog is open the whole menu is greyed out.
+- **Verified 2026-10-13:** UI tests for wheel zoom about the pointer, Shift+wheel, the Scroll setting, middle-drag past the edge (stops with the corner mid-canvas and stays), and hover-switching File → Edit (fails without the change); global-menu unit tests (labels, tree, shortcuts, `(ia{sv}av)` layout, depth). **On the real Plasma 6.7.5 Wayland desktop:** the panel's global menu showed File … Help with the in-window bar hidden; a D-Bus `clicked` event on File › New… opened the New Image dialog; with the setting off the bar came back and the panel showed nothing. CI passes (303 tests).
+- Not checked: opening the dropdowns with the mouse and how Plasma draws our shortcuts and icons in them (no way to click the panel from here); toggling the setting while running; X11 sessions (unsupported: the window keeps its own menu bar there). Two `unsafe` calls (joining winit's Wayland connection) live in `global_menu/wayland.rs`, the only unsafe code in the project.
+### 11c Packaging (next)
 - [ ] Packaging: PKGBUILD for CachyOS/Arch, .desktop file, MIME associations, icon
 - [ ] Optional: pop-out panels, tablet pressure
 
