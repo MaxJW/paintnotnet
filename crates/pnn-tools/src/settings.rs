@@ -197,6 +197,189 @@ pub enum ShapeDrawType {
     Both,
 }
 
+/// Line/Curve interpolation through its four nubs (5.x docs: `LineCurveTool.html`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CurveType {
+    Straight,
+    #[default]
+    Spline,
+    Bezier,
+}
+
+/// 3.36 `LineCap2`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LineCap {
+    #[default]
+    Flat,
+    Arrow,
+    ArrowFilled,
+    Rounded,
+}
+
+impl LineCap {
+    pub const ALL: [LineCap; 4] = [Self::Flat, Self::Arrow, Self::ArrowFilled, Self::Rounded];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Flat => "Flat",
+            Self::Arrow => "Arrow",
+            Self::ArrowFilled => "Arrow (Filled)",
+            Self::Rounded => "Rounded",
+        }
+    }
+}
+
+/// GDI+ `DashStyle` (3.36 `PenInfo.DashStyle`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DashStyle {
+    #[default]
+    Solid,
+    Dash,
+    Dot,
+    DashDot,
+    DashDotDot,
+}
+
+impl DashStyle {
+    pub const ALL: [DashStyle; 5] = [
+        Self::Solid,
+        Self::Dash,
+        Self::Dot,
+        Self::DashDot,
+        Self::DashDotDot,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Solid => "Solid",
+            Self::Dash => "Dash",
+            Self::Dot => "Dot",
+            Self::DashDot => "Dash Dot",
+            Self::DashDotDot => "Dash Dot Dot",
+        }
+    }
+    /// On/off lengths in multiples of the pen width (GDI+'s patterns).
+    pub fn pattern(self) -> &'static [f32] {
+        match self {
+            Self::Solid => &[],
+            Self::Dash => &[3.0, 1.0],
+            Self::Dot => &[1.0, 1.0],
+            Self::DashDot => &[3.0, 1.0, 1.0, 1.0],
+            Self::DashDotDot => &[3.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+        }
+    }
+}
+
+/// The Shapes tool's 29 presets, in the 5.x docs' order (`ShapeTools.html`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ShapeType {
+    #[default]
+    Rectangle,
+    RoundedRectangle,
+    Ellipse,
+    Diamond,
+    Trapezoid,
+    Parallelogram,
+    Triangle,
+    RightTriangle,
+    Pentagon,
+    Hexagon,
+    Heptagon,
+    Octagon,
+    Star3,
+    Star4,
+    Star5,
+    Star6,
+    Arrow,
+    NotchedArrow,
+    PentagonArrow,
+    ChevronArrow,
+    RectangularCallout,
+    RoundedRectangleCallout,
+    EllipseCallout,
+    CloudCallout,
+    LightningBolt,
+    CheckMark,
+    Multiply,
+    Gear,
+    Heart,
+}
+
+impl ShapeType {
+    pub const ALL: [ShapeType; 29] = [
+        Self::Rectangle,
+        Self::RoundedRectangle,
+        Self::Ellipse,
+        Self::Diamond,
+        Self::Trapezoid,
+        Self::Parallelogram,
+        Self::Triangle,
+        Self::RightTriangle,
+        Self::Pentagon,
+        Self::Hexagon,
+        Self::Heptagon,
+        Self::Octagon,
+        Self::Star3,
+        Self::Star4,
+        Self::Star5,
+        Self::Star6,
+        Self::Arrow,
+        Self::NotchedArrow,
+        Self::PentagonArrow,
+        Self::ChevronArrow,
+        Self::RectangularCallout,
+        Self::RoundedRectangleCallout,
+        Self::EllipseCallout,
+        Self::CloudCallout,
+        Self::LightningBolt,
+        Self::CheckMark,
+        Self::Multiply,
+        Self::Gear,
+        Self::Heart,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Rectangle => "Rectangle",
+            Self::RoundedRectangle => "Rounded Rectangle",
+            Self::Ellipse => "Ellipse",
+            Self::Diamond => "Diamond",
+            Self::Trapezoid => "Trapezoid",
+            Self::Parallelogram => "Parallelogram",
+            Self::Triangle => "Triangle",
+            Self::RightTriangle => "Right Triangle",
+            Self::Pentagon => "Pentagon",
+            Self::Hexagon => "Hexagon",
+            Self::Heptagon => "Heptagon",
+            Self::Octagon => "Octagon",
+            Self::Star3 => "Three-point Star",
+            Self::Star4 => "Four-point Star",
+            Self::Star5 => "Five-point Star",
+            Self::Star6 => "Six-point Star",
+            Self::Arrow => "Arrow",
+            Self::NotchedArrow => "Notched Arrow",
+            Self::PentagonArrow => "Pentagon Arrow",
+            Self::ChevronArrow => "Chevron Arrow",
+            Self::RectangularCallout => "Rectangular Callout",
+            Self::RoundedRectangleCallout => "Rounded Rectangle Callout",
+            Self::EllipseCallout => "Ellipse Callout",
+            Self::CloudCallout => "Cloud Callout",
+            Self::LightningBolt => "Lightning Bolt",
+            Self::CheckMark => "Check Mark",
+            Self::Multiply => "Multiply",
+            Self::Gear => "Gear",
+            Self::Heart => "Heart",
+        }
+    }
+    /// `A` / `Shift+A`.
+    pub fn cycle(self, forward: bool) -> Self {
+        let i = Self::ALL.iter().position(|&s| s == self).unwrap_or(0);
+        let n = Self::ALL.len();
+        Self::ALL[if forward {
+            (i + 1) % n
+        } else {
+            (i + n - 1) % n
+        }]
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TextAlignment {
     #[default]
@@ -265,6 +448,13 @@ pub struct ToolSettings {
     pub gradient_type: GradientType,
     pub gradient_color_mode: GradientColorMode,
     pub gradient_repeat: GradientRepeat,
+    pub curve_type: CurveType,
+    pub start_cap: LineCap,
+    pub end_cap: LineCap,
+    pub dash: DashStyle,
+    pub shape: ShapeType,
+    /// Rounded Rectangle corner radius, px.
+    pub corner_radius: f32,
     pub font_family: String,
     pub font_size: f32,
     pub bold: bool,
@@ -306,6 +496,12 @@ impl Default for ToolSettings {
             gradient_type: GradientType::Linear,
             gradient_color_mode: GradientColorMode::Color,
             gradient_repeat: GradientRepeat::NoRepeat,
+            curve_type: CurveType::Spline,
+            start_cap: LineCap::Flat,
+            end_cap: LineCap::Flat,
+            dash: DashStyle::Solid,
+            shape: ShapeType::Rectangle,
+            corner_radius: 20.0,
             font_family: "Arial".into(),
             font_size: 12.0,
             bold: false,

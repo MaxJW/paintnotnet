@@ -52,6 +52,8 @@ pub struct CanvasState {
     pub overlay: Option<(u64, std::sync::Arc<pnn_core::Mask>)>,
     /// Clone Stamp source marker (image coordinates).
     pub clone_source: Option<[f64; 2]>,
+    /// Line/Curve nubs and move icon (image coordinates).
+    pub vector_handles: Option<([[f64; 2]; 4], [f64; 2])>,
     /// Gradient start/end nubs (image coordinates).
     pub gradient_nubs: Option<[[f64; 2]; 2]>,
     /// Brush outline diameter (image px) to draw around the pointer.
@@ -376,6 +378,40 @@ pub fn show(
             r,
             egui::Stroke::new(1.0, egui::Color32::from_black_alpha(alpha)),
         );
+        ui.ctx().request_repaint();
+    }
+    if let Some((nubs, icon)) = state.vector_handles {
+        // Pulsing nubs (paint.net 5 pulses them so they stand out) and the move icon.
+        let painter = ui.painter().with_clip_rect(canvas_rect);
+        let to_screen = |p: [f64; 2]| {
+            let sp = view.image_to_screen(p, vp);
+            egui::pos2(
+                canvas_rect.min.x + (sp[0] / ppp) as f32,
+                canvas_rect.min.y + (sp[1] / ppp) as f32,
+            )
+        };
+        let t = ui.input(|i| i.time);
+        let a = (((t * std::f64::consts::TAU / 2.0).sin() + 1.0) / 2.0 * 160.0 + 95.0) as u8;
+        for p in nubs {
+            painter.circle(
+                to_screen(p),
+                4.5,
+                egui::Color32::from_white_alpha(a),
+                egui::Stroke::new(1.0, egui::Color32::from_black_alpha(a)),
+            );
+        }
+        let c = to_screen(icon);
+        let r = Rect::from_center_size(c, vec2(13.0, 13.0));
+        painter.rect(
+            r,
+            1.0,
+            egui::Color32::from_white_alpha(a),
+            egui::Stroke::new(1.0, egui::Color32::from_black_alpha(a)),
+            egui::StrokeKind::Inside,
+        );
+        let s = egui::Stroke::new(1.0, egui::Color32::BLACK);
+        painter.line_segment([c - vec2(4.0, 0.0), c + vec2(4.0, 0.0)], s);
+        painter.line_segment([c - vec2(0.0, 4.0), c + vec2(0.0, 4.0)], s);
         ui.ctx().request_repaint();
     }
     // The brush outline around the pointer (paint.net's `BrushPreviewRenderer`).

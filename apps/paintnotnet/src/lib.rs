@@ -21,5 +21,6 @@ pub mod shell;
 pub mod status;
 pub mod theme;
 pub mod toolbar;
+pub mod vector_tools;
 pub mod windows;
 pub mod workspace;

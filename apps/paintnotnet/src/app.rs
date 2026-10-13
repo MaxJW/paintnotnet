@@ -6,7 +6,7 @@ use eframe::egui;
 use pnn_core::Document;
 use pnn_render::{CanvasRenderer, View, view};
 
-use pnn_tools::{ToolKind, ToolSettings, tool_for_shortcut};
+use pnn_tools::{DashStyle, LineCap, ToolKind, ToolSettings, tool_for_shortcut};
 
 use crate::canvas::{self, ARROW_PAN_STEP, CanvasState};
 use crate::commands::{Command, MultiTap, Panel, Triggered, Units, take_commands};
@@ -76,6 +76,7 @@ pub struct PaintNotNetApp {
     pub(crate) stroke: Option<crate::actions::PencilStroke>,
     pub(crate) brush: Option<crate::paint_tools::BrushStroke>,
     pub(crate) gradient: Option<crate::fill_tools::GradientSession>,
+    pub(crate) vector: Option<crate::vector_tools::VectorSession>,
     pub(crate) clone_source: Option<crate::paint_tools::CloneSource>,
     /// Recolor Ctrl/Shift picking in progress: (button, adjust).
     pub(crate) recolor_picking: Option<(crate::canvas::ToolButton, bool)>,
@@ -144,6 +145,7 @@ impl PaintNotNetApp {
             stroke: None,
             brush: None,
             gradient: None,
+            vector: None,
             clone_source: None,
             recolor_picking: None,
             picker: None,
@@ -225,6 +227,7 @@ impl PaintNotNetApp {
             self.finish_move();
             self.finish_brush_stroke();
             self.commit_gradient();
+            self.commit_vector();
             self.previous_tool = self.tool;
             self.tool = tool;
         }
@@ -275,8 +278,9 @@ impl PaintNotNetApp {
         if t.command == Command::Finish {
             // Enter / Esc commits floating pixels or a live gradient (paint.net 5 commits on
             // Esc too; 3.36 cancelled the gradient); with nothing pending it deselects.
-            if self.gradient.is_some() {
+            if self.gradient.is_some() || self.vector.is_some() {
                 self.commit_gradient();
+                self.commit_vector();
             } else if self.move_session.is_some() {
                 self.finish_move();
             } else if self.select_drag.is_none() {
@@ -284,7 +288,7 @@ impl PaintNotNetApp {
             }
             return;
         }
-        if t.command == Command::Undo && self.cancel_gradient() {
+        if t.command == Command::Undo && (self.cancel_gradient() | self.cancel_vector()) {
             // Undo takes back the live gradient first, as if it had been committed.
             return;
         }
@@ -295,6 +299,7 @@ impl PaintNotNetApp {
         }
         if !keeps_move_session(t.command) {
             self.commit_gradient();
+            self.commit_vector();
         }
         if self.clipboard_command(t.command)
             || self.selection_command(t.command)
@@ -350,6 +355,16 @@ impl PaintNotNetApp {
             }
             Command::OpenToolDropdown => self.row2.open_tool_dropdown = true,
             Command::BrushWidth(d) => self.settings.nudge_brush_width(d as f32),
+            Command::LineStartCap => {
+                self.settings.start_cap = next(&LineCap::ALL, self.settings.start_cap)
+            }
+            Command::LineEndCap => {
+                self.settings.end_cap = next(&LineCap::ALL, self.settings.end_cap)
+            }
+            Command::LineStyle => self.settings.dash = next(&DashStyle::ALL, self.settings.dash),
+            Command::CycleShape { forward } => {
+                self.settings.shape = self.settings.shape.cycle(forward)
+            }
             Command::SwapColors => self.settings.swap_colors(),
             Command::SwitchActiveColor => self.settings.switch_active_color(),
             c if !c.implemented() => {}
@@ -675,6 +690,10 @@ impl PaintNotNetApp {
             if moving {
                 for d in dirs {
                     self.nudge(d[0] * step, d[1] * step);
+                }
+            } else {
+                for d in dirs {
+                    self.nudge_vector(d[0] * step, d[1] * step);
                 }
             }
             return;
@@ -1175,6 +1194,10 @@ fn keeps_move_session(c: Command) -> bool {
             | Command::CenterTopLeft
             | Command::CenterBottomRight
             | Command::BrushWidth(_)
+            | Command::LineStartCap
+            | Command::LineStyle
+            | Command::LineEndCap
+            | Command::CycleShape { .. }
             | Command::SwapColors
             | Command::SwitchActiveColor
             | Command::OpenToolDropdown
@@ -1220,7 +1243,8 @@ impl eframe::App for PaintNotNetApp {
         self.top_band(ui, &ctx);
         egui::Panel::top("tool_options").show(ui, |ui| {
             // The toolbar's Finish commits pending tool work, as Enter does.
-            let finish_enabled = self.gradient.is_some() || self.move_session.is_some();
+            let finish_enabled =
+                self.gradient.is_some() || self.vector.is_some() || self.move_session.is_some();
             let palette = theme::palette(&ctx);
             match toolbar::row2(
                 ui,
@@ -1234,6 +1258,7 @@ impl eframe::App for PaintNotNetApp {
                 Some(Row2Action::SelectTool(tool)) => self.set_tool(tool),
                 Some(Row2Action::Finish) => {
                     self.commit_gradient();
+                    self.commit_vector();
                     self.finish_move();
                 }
                 None => {}
@@ -1276,6 +1301,8 @@ impl eframe::App for PaintNotNetApp {
 
         self.canvas.tool_cursor = match self.tool {
             ToolKind::Paintbrush
+            | ToolKind::LineCurve
+            | ToolKind::Shapes
             | ToolKind::Eraser
             | ToolKind::PaintBucket
             | ToolKind::Gradient
@@ -1291,6 +1318,8 @@ impl eframe::App for PaintNotNetApp {
             _ => None,
         };
         self.refresh_gradient();
+        self.refresh_vector();
+        self.canvas.vector_handles = self.vector_handles();
         self.canvas.handles = self.move_handles();
         self.canvas.gradient_nubs = self.gradient_nubs();
         self.canvas.brush_outline = matches!(
@@ -1381,4 +1410,10 @@ impl eframe::App for PaintNotNetApp {
         self.diagnostics.show(&ctx);
         self.run_smoke_test(&ctx, now);
     }
+}
+
+/// The item after `v` in `all`, wrapping (`,` `.` `/` cycle the line caps and style).
+fn next<T: Copy + PartialEq>(all: &[T], v: T) -> T {
+    let i = all.iter().position(|&x| x == v).unwrap_or(0);
+    all[(i + 1) % all.len()]
 }

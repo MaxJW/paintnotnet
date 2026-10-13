@@ -5,7 +5,8 @@ where you try it. A phase is only ticked off once its acceptance checks have bee
 shown passing.
 
 **Current state (2026-10-13):** Phases 0–6 are complete, verified and committed (Phase 5
-still awaits your sign-off on the feel). Phase 6 is done too. **Next: Phase 7 (Text, Line/Curve, Shapes).**
+still awaits your sign-off on the feel). Phase 7a (Line/Curve) is done. **Next: Phase 7b
+(Shapes)**, then 7c (Text).
 Functionality first: the user wants every feature working
 before the visual refresh (Phase 12).
 
@@ -150,9 +151,15 @@ Guessed or approximated (paint.net doesn't document them):
 - Differences: 3.36's Clone Stamp scaled opacity by the primary colour's alpha⁴ (not done; 5.x unknown); Recolor and Clone Stamp use the brush engine (soft dabs, no build-up) instead of 3.36's per-dab blending.
 
 ## Phase 7: Text, Line/Curve, Shapes
-- [ ] Text tool: font, size, style, alignment; editable until Finish/Esc
-- [ ] Line/Curve: nubs, caps (`,` `.` `/`), Alt for centre, right-drag rotate
-- [ ] Shapes: full shape list, A / Shift+A to cycle, rounded-rect corner, Shift/Alt nub behaviours
+### 7a ✅ Line/Curve and the editable-drawing engine
+- [x] `pnn-tools::vector`: Straight / Cubic Spline (GDI+ `DrawCurve` cardinal spline, tension 0.5) / Bézier through four nubs; caps Flat, Arrow, Arrow (Filled), Rounded (3.36 `LineCap2`; arrows are GDI+ `AdjustableArrowCap(5, 5)` in pen widths); GDI+ dash styles; fill styles; tiny-skia antialiasing; parts composed into a shape layer and blended once (blend modes, Overwrite), clipped to the soft selection
+- [x] Line/Curve tool: drag (left primary, right secondary; Shift 15°, Alt from centre); live afterwards: drag nubs (either button), move icon, right-drag rotate (Shift 15°), arrows 1 px / Ctrl 10 px; `,` `.` `/` cycle start cap / dash / end cap and restyle the live line; toolbar curve type, style and fill; commits on Enter/Esc/Finish/new line/tool change/other commands; Undo takes back a live line
+- **Verified 2026-10-13:** 5 engine tests (curve types through ends, spline through nubs vs Bézier, width/flat ends, round and arrow caps, dashes, Overwrite vs blend) and 5 UI tests (live until Enter, nub bend + move icon + arrow nudges, Shift snap + new line commits, right-drag rotation, `.` restyle + Undo). Render checked. CI passes (222 tests).
+- Guessed: default curve type (Spline), move-icon placement (16 screen px past the end nub), the tangent used for arrow heads. Antialiasing is analytic, not paint.net 5's 2×/4× supersampling.
+### 7b Shapes
+- [ ] Shapes: the 29 presets, A / Shift+A to cycle, draw modes (outline / filled / both), rounded-rect corner size, nubs with Shift/Alt, move, rotate about a movable rotation point
+### 7c Text
+- [ ] Text tool: font, size, style, alignment, antialiasing, blend; editable until Finish/Esc; move nub
 
 ## Phase 8: Adjustments and the effect framework
 - [ ] Property schema → auto dialogs with live and split preview; Ctrl+F repeats the last effect

@@ -418,6 +418,38 @@ fn options(
         LineCurve | Shapes => {
             brush_size(ui, s, icons);
             sep(ui);
+            if tool == LineCurve {
+                for (c, label, hint) in [
+                    (
+                        CurveType::Straight,
+                        "Straight",
+                        "Straight segments between nubs",
+                    ),
+                    (
+                        CurveType::Spline,
+                        "Spline",
+                        "Cubic spline through every nub",
+                    ),
+                    (
+                        CurveType::Bezier,
+                        "Bézier",
+                        "Bézier curve: the middle nubs pull it",
+                    ),
+                ] {
+                    if ui
+                        .add(egui::Button::new(label).selected(s.curve_type == c))
+                        .on_hover_text(hint)
+                        .clicked()
+                    {
+                        s.curve_type = c;
+                    }
+                }
+                sep(ui);
+            }
+            line_style(ui, s, tool == LineCurve);
+            sep(ui);
+            fill_style(ui, s);
+            sep(ui);
             if tool == Shapes {
                 for (d, icon, name) in [
                     (
@@ -642,6 +674,45 @@ fn antialiasing(ui: &mut egui::Ui, s: &mut ToolSettings, icons: &Icons) {
     };
     if icon_button(ui, icons, icon, name, true, false).clicked() {
         s.antialiasing = !s.antialiasing;
+    }
+}
+
+/// Start cap (`,`), dash style (`.`) and end cap (`/`); shapes only have the dash style.
+fn line_style(ui: &mut egui::Ui, s: &mut ToolSettings, caps: bool) {
+    ui.label("Style:");
+    if caps {
+        egui::ComboBox::from_id_salt("start_cap")
+            .width(70.0)
+            .selected_text(s.start_cap.name())
+            .show_ui(ui, |ui| {
+                for c in LineCap::ALL {
+                    ui.selectable_value(&mut s.start_cap, c, c.name());
+                }
+            })
+            .response
+            .on_hover_text("Start cap (,)");
+    }
+    egui::ComboBox::from_id_salt("dash_style")
+        .width(80.0)
+        .selected_text(s.dash.name())
+        .show_ui(ui, |ui| {
+            for d in DashStyle::ALL {
+                ui.selectable_value(&mut s.dash, d, d.name());
+            }
+        })
+        .response
+        .on_hover_text("Line style (.)");
+    if caps {
+        egui::ComboBox::from_id_salt("end_cap")
+            .width(70.0)
+            .selected_text(s.end_cap.name())
+            .show_ui(ui, |ui| {
+                for c in LineCap::ALL {
+                    ui.selectable_value(&mut s.end_cap, c, c.name());
+                }
+            })
+            .response
+            .on_hover_text("End cap (/)");
     }
 }
 
