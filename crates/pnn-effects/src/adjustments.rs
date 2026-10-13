@@ -425,6 +425,7 @@ mod tests {
             primary: ColorBgra::BLACK,
             secondary: ColorBgra::WHITE,
             bounds: all,
+            selection: None,
         };
         let v = values.unwrap_or_else(|| d.defaults());
         let r = (d.build)(&v, &src, &env);
@@ -537,6 +538,7 @@ mod tests {
             primary: ColorBgra::BLACK,
             secondary: ColorBgra::WHITE,
             bounds: all,
+            selection: None,
         };
         let d = def(Adjustment::AutoLevel).unwrap();
         let r = (d.build)(&[], &s, &env);

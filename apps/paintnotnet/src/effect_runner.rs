@@ -323,6 +323,7 @@ impl PaintNotNetApp {
         };
         let bounds = tab.doc.selection().pixel_bounds(w, h).unwrap_or(full);
         let layer = tab.doc.active_index();
+        let selection = tab.selection_mask(antialias);
         Some(EffectSession {
             key: tab.key,
             layer,
@@ -332,11 +333,12 @@ impl PaintNotNetApp {
             custom,
             grab: Vec::new(),
             before: tab.doc.layer(layer).surface.clone(),
-            selection: tab.selection_mask(antialias),
+            selection: selection.clone(),
             env: Env {
                 primary,
                 secondary,
                 bounds,
+                selection,
             },
             job: None,
         })

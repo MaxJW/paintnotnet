@@ -659,6 +659,7 @@ mod tests {
             primary: ColorBgra::BLACK,
             secondary: ColorBgra::WHITE,
             bounds: all,
+            selection: None,
         };
         render_rect((d.build)(&values, src, &env).as_ref(), src, all)
     }

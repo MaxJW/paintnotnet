@@ -708,6 +708,7 @@ mod tests {
             primary: ColorBgra::BLACK,
             secondary: ColorBgra::WHITE,
             bounds: all,
+            selection: None,
         };
         let r = (d.build)(&values, src, &env);
         render_rect(r.as_ref(), src, all)
@@ -852,6 +853,7 @@ mod tests {
             primary: ColorBgra::BLACK,
             secondary: ColorBgra::WHITE,
             bounds: all,
+            selection: None,
         };
         for (name, v) in [
             ("Gaussian Blur", vec![Value::Int(2)]),

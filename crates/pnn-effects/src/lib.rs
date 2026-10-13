@@ -5,6 +5,7 @@
 
 pub mod adjustments;
 pub mod blurs;
+pub mod boltbait;
 pub mod curves;
 pub mod distort;
 pub mod feather;
@@ -87,6 +88,8 @@ pub enum Category {
     Render,
     Selection,
     Stylize,
+    /// BoltBait-style adjustments: listed at the end of the Adjustments menu.
+    Adjustment,
 }
 
 impl Category {
@@ -116,6 +119,7 @@ impl Category {
             Self::Render => "Render",
             Self::Selection => "Selection",
             Self::Stylize => "Stylize",
+            Self::Adjustment => "Adjustments",
         }
     }
 }
@@ -183,6 +187,9 @@ pub static EFFECTS: &[EffectInfo] = &[
     extra("Outline Object", Object),
     extra("Inner Shadow", Object),
     extra("Bevel Object", Object),
+    extra("Drop Shadow Plus", Object),
+    extra("Switch Alpha to Gray", Object),
+    extra("Switch Gray to Alpha", Object),
     stock("Glow", Photo),
     stock("Red Eye Removal", Photo),
     stock("Sharpen", Photo),
@@ -202,6 +209,8 @@ pub static EFFECTS: &[EffectInfo] = &[
     stock("Emboss", Stylize),
     stock("Outline", Stylize),
     stock("Relief", Stylize),
+    extra("Color Balance", Adjustment),
+    extra("Transparency", Adjustment),
 ];
 
 pub fn effect(id: EffectId) -> &'static EffectInfo {
@@ -219,7 +228,15 @@ pub fn effects_in(category: Category) -> impl Iterator<Item = (EffectId, &'stati
 
 /// The framework definition of a menu effect, if implemented.
 pub fn effect_def(id: EffectId) -> Option<framework::EffectDef> {
-    let name = effect(id).name;
+    let info = effect(id);
+    let name = info.name;
+    if matches!(
+        info.category,
+        Category::Object | Category::Selection | Category::Adjustment
+    ) && let Some(d) = boltbait::def(name, info.category)
+    {
+        return Some(d);
+    }
     blurs::def(name)
         .or_else(|| distort::def(name))
         .or_else(|| stylize::def(name))

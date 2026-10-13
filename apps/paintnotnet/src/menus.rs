@@ -288,6 +288,17 @@ fn adjustment_entries() -> Vec<Entry> {
                 icon,
             }
         })
+        .chain(
+            // Plugin-style adjustments (BoltBait's), after a separator as paint.net lists
+            // plugin adjustments.
+            std::iter::once(SEP).chain(effects_in(Category::Adjustment).map(|(id, e)| {
+                Entry::Item {
+                    label: Box::leak(format!("{}...", e.name).into_boxed_str()),
+                    command: Command::Effect(id),
+                    icon: None,
+                }
+            })),
+        )
         .collect()
 }
 

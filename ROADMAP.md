@@ -4,9 +4,10 @@ Design and rationale: [PLAN.md](PLAN.md). Each phase ends with a usable app and 
 where you try it. A phase is only ticked off once its acceptance checks have been run and
 shown passing.
 
-**Current state (2026-10-13):** Phases 0–9 are complete, verified and committed (Phase 5
-still awaits your sign-off on the feel). Phase 9 (stock effects) is done except Sketch Blur. **Next: Phase 10 (BoltBait-class
-built-ins).** After all phases, compare against the paint.net 5.1.12 release files the user provided
+**Current state (2026-10-13):** Phases 0–9 and the first batch of 10 are complete, verified and committed (Phase 5
+still awaits your sign-off on the feel). Phase 9 (stock effects) is done except Sketch Blur, and Phase 10's first batch of
+BoltBait-class effects is in. **Next: Phase 11 (files and polish)**, then more of the BoltBait
+pack in whatever order you rank it. After all phases, compare against the paint.net 5.1.12 release files the user provided
 (`~/Downloads/paint.net.5.1.12.portable.x64`; the user states the owners gave permission).
 Functionality first: the user wants every feature working
 before the visual refresh (Phase 12).
@@ -210,8 +211,12 @@ Guessed or approximated (paint.net doesn't document them):
 - **Verified 2026-10-13:** 4 engine tests (all run; drop shadow falls down-right under the object; Quantize limits colours, Straighten 0° is identity; Clouds seeded and spanning both colours); the UI test opens/cancels every effect (39 now); contact sheet checked. CI passes (279 tests).
 - Differences: Drop Shadow's colour is the primary colour (the framework has no colour property yet); Quantize has no Octree option and dithers with a 4×4 Bayer matrix, not error diffusion; Sharpen fixes the same off-by-one percentile as Median.
 
-## Phase 10: BoltBait-class built-ins
-- [ ] Ask you which ones you actually used, then build in that order. Likely first: Outline Object/Selection, Inner Shadow, Bevel, Drop Shadow Plus, Switch Alpha↔Gray, Apply Alpha Mask, Transparency, Color Balance
+## Phase 10: BoltBait-class built-ins (first batch ✅)
+- [x] Built the roadmap's "likely first" list without waiting for your ranking (tell me which others you used): Outline Object, Outline Selection, Inner Shadow (Object and Selection), Bevel Object, Bevel Selection, Drop Shadow Plus, Switch Alpha to Gray, Switch Gray to Alpha (Effects > Object/Selection), Transparency and Color Balance (end of the Adjustments menu, after a separator, as plugin adjustments appear)
+- [x] Shapes come from exact signed distance fields (the feather engine) of the object (alpha ≥ threshold) or the selection, so widths and softness are true pixels; the framework now passes the selection to effects
+- **Verified 2026-10-13:** 4 engine tests (outline band outside the object; inner shadow and bevel stay inside and light the right rims; selection variants follow the selection; drop shadow plus, alpha↔gray, transparency, colour balance values) and the UI test opens/cancels all of them; an object/selection contact sheet was checked by eye (bevel normals smoothed with a 5×5 stencil after the first render showed striping). CI passes (283 tests).
+- All of these are paintnotnet's own designs: BoltBait's pack isn't open source and its settings aren't published, so settings, defaults and looks are guesses to compare with the real plugins later.
+- [ ] Still to do from the pack: Apply Alpha Mask (needs the clipboard image), Paste Alpha, Black and White+, Combined Adjustments, Hue/Sat+, Dream, Oil Paint+, Pastel, Gaussian Blur+, Photo Adjustments, Vignette+, Remove Dust, Level Horizon, Meme Maker, Calendar/Chart/Grid/Polygon renders, Text Fun Factory, and the rest of the 44 (inventory has the list)
 
 ## Phase 11: Files and polish
 - [ ] ORA native format (with paint.net blend-mode attributes), autosave and crash recovery

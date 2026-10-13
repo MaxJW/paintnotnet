@@ -104,12 +104,14 @@ pub struct Link {
 }
 
 /// What a renderer may need besides the source.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Env {
     pub primary: ColorBgra,
     pub secondary: ColorBgra,
     /// The area being rendered (selection bounds, or the whole layer).
     pub bounds: Rect,
+    /// The selection's coverage, if anything is selected (Selection effects outline it).
+    pub selection: Option<std::sync::Arc<pnn_core::Mask>>,
 }
 
 /// Fills rows of the effect's output.
