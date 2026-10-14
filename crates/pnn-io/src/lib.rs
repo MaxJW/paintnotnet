@@ -13,6 +13,7 @@ use image::{ExtendedColorType, ImageEncoder, ImageFormat, ImageReader};
 use pnn_core::{BlendMode, ColorBgra, Document, Layer, Surface, flatten};
 
 pub mod ora;
+pub mod pdn;
 
 #[derive(Debug, thiserror::Error)]
 pub enum IoError {
@@ -28,6 +29,11 @@ pub enum IoError {
     },
     #[error("{path}: unsupported file type")]
     UnsupportedFormat { path: PathBuf },
+    #[error("{path}: {source}")]
+    Pdn {
+        path: PathBuf,
+        source: pdn::PdnError,
+    },
 }
 
 /// File types paintnotnet can save, in the order shown in the Save As dialog.
@@ -35,6 +41,8 @@ pub enum IoError {
 pub enum FileFormat {
     /// OpenRaster: layers, blend modes and opacity kept (paintnotnet's native format).
     Ora,
+    /// paint.net's own format: layers kept (see `pdn`).
+    Pdn,
     Png,
     Jpeg,
     Bmp,
@@ -45,8 +53,9 @@ pub enum FileFormat {
 }
 
 impl FileFormat {
-    pub const ALL: [FileFormat; 8] = [
+    pub const ALL: [FileFormat; 9] = [
         Self::Ora,
+        Self::Pdn,
         Self::Png,
         Self::Jpeg,
         Self::Bmp,
@@ -59,6 +68,7 @@ impl FileFormat {
     pub fn name(self) -> &'static str {
         match self {
             Self::Ora => "OpenRaster",
+            Self::Pdn => "paint.net image",
             Self::Png => "PNG",
             Self::Jpeg => "JPEG",
             Self::Bmp => "BMP",
@@ -73,6 +83,7 @@ impl FileFormat {
     pub fn extensions(self) -> &'static [&'static str] {
         match self {
             Self::Ora => &["ora"],
+            Self::Pdn => &["pdn"],
             Self::Png => &["png"],
             Self::Jpeg => &["jpg", "jpeg", "jpe", "jfif"],
             Self::Bmp => &["bmp", "dib"],
@@ -97,7 +108,7 @@ impl FileFormat {
 
     /// Whether the format keeps layers (no flatten on save).
     pub fn layered(self) -> bool {
-        self == Self::Ora
+        matches!(self, Self::Ora | Self::Pdn)
     }
 
     /// Whether saving asks for settings first (paint.net's Save Configuration dialog).
@@ -107,7 +118,7 @@ impl FileFormat {
 
     fn image_format(self) -> ImageFormat {
         match self {
-            Self::Png | Self::Ora => ImageFormat::Png,
+            Self::Png | Self::Ora | Self::Pdn => ImageFormat::Png,
             Self::Jpeg => ImageFormat::Jpeg,
             Self::Bmp => ImageFormat::Bmp,
             Self::Gif => ImageFormat::Gif,
@@ -120,8 +131,8 @@ impl FileFormat {
 
 /// Extensions accepted by Open (everything the decoder understands, not just save formats).
 pub const OPEN_EXTENSIONS: &[&str] = &[
-    "ora", "png", "jpg", "jpeg", "jpe", "jfif", "bmp", "dib", "gif", "tif", "tiff", "tga", "webp",
-    "ico", "qoi", "pnm", "pbm", "pgm", "ppm", "dds", "hdr", "exr", "avif",
+    "ora", "pdn", "png", "jpg", "jpeg", "jpe", "jfif", "bmp", "dib", "gif", "tif", "tiff", "tga",
+    "webp", "ico", "qoi", "pnm", "pbm", "pgm", "ppm", "dds", "hdr", "exr", "avif",
 ];
 
 /// libwebp's encoder presets, as pdn-webp offers them.
@@ -191,6 +202,16 @@ pub fn load(path: &Path) -> Result<Document, IoError> {
     if bytes.starts_with(b"PK") && bytes.get(30..38) == Some(b"mimetype") {
         return ora::decode(&bytes, path);
     }
+    // paint.net: by content, or (for 2.0 and earlier, a bare gzip stream) by extension.
+    let pdn_ext = path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("pdn"));
+    if bytes.starts_with(b"PDN3") || (pdn_ext && bytes.starts_with(&[0x1f, 0x8b])) {
+        return pdn::decode(&bytes).map_err(|source| IoError::Pdn {
+            path: path.to_owned(),
+            source,
+        });
+    }
     let image_err = |source| IoError::Image {
         path: path.to_owned(),
         source,
@@ -222,7 +243,8 @@ pub fn load(path: &Path) -> Result<Document, IoError> {
     ))
 }
 
-/// Flatten and save. The format comes from `format`, not the path's extension.
+/// Save (flattened, except in the layered formats). The format comes from `format`, not
+/// the path's extension.
 pub fn save(
     doc: &Document,
     path: &Path,
@@ -233,6 +255,13 @@ pub fn save(
         let bytes = ora::encode(doc).map_err(|msg| IoError::Io {
             path: path.to_owned(),
             source: std::io::Error::other(msg),
+        })?;
+        return write_atomically(path, &bytes);
+    }
+    if format == FileFormat::Pdn {
+        let bytes = pdn::encode(doc).map_err(|source| IoError::Io {
+            path: path.to_owned(),
+            source,
         })?;
         return write_atomically(path, &bytes);
     }

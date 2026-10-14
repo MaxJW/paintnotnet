@@ -17,6 +17,7 @@ mod keymap_conformance;
 mod line_ui;
 mod ora_ui;
 mod paint_ui;
+mod pdn_ui;
 mod phase1_ui;
 mod phase3_ui;
 mod phase4_ui;

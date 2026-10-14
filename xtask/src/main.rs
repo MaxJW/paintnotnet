@@ -88,8 +88,8 @@ fn low_priority(cargo: &str) -> Command {
     cmd
 }
 
-/// Where `install-desktop` puts things: (desktop file, icon).
-fn desktop_targets() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+/// Where `install-desktop` puts things: (desktop file, icon, MIME type for .pdn).
+fn desktop_targets() -> Option<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf)> {
     let data = std::env::var_os("XDG_DATA_HOME")
         .filter(|d| !d.is_empty())
         .map(std::path::PathBuf::from)
@@ -99,12 +99,13 @@ fn desktop_targets() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
     Some((
         data.join("applications/paintnotnet.desktop"),
         data.join("icons/hicolor/scalable/apps/paintnotnet.svg"),
+        data.join("mime/packages/paintnotnet.xml"),
     ))
 }
 
 fn install_desktop(force: bool) -> ExitCode {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-    let Some((desktop, icon)) = desktop_targets() else {
+    let Some((desktop, icon, mime)) = desktop_targets() else {
         eprintln!("no HOME or XDG_DATA_HOME");
         return ExitCode::FAILURE;
     };
@@ -132,7 +133,18 @@ fn install_desktop(force: bool) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    for (path, contents) in [(&desktop, entry.into_bytes()), (&icon, svg)] {
+    let mime_xml = match std::fs::read(root.join("packaging/paintnotnet-mime.xml")) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("packaging/paintnotnet-mime.xml: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    for (path, contents) in [
+        (&desktop, entry.into_bytes()),
+        (&icon, svg),
+        (&mime, mime_xml),
+    ] {
         if path.exists() && std::fs::read(path).ok().as_deref() != Some(&contents[..]) && !force {
             eprintln!(
                 "{} exists and differs; not overwriting (use --force)",
@@ -152,16 +164,16 @@ fn install_desktop(force: bool) -> ExitCode {
         }
         eprintln!("installed {}", path.display());
     }
-    refresh_desktop_caches(&desktop);
+    refresh_desktop_caches(&desktop, &mime);
     eprintln!("Exec points at {}", binary.display());
     ExitCode::SUCCESS
 }
 
 fn uninstall_desktop() -> ExitCode {
-    let Some((desktop, icon)) = desktop_targets() else {
+    let Some((desktop, icon, mime)) = desktop_targets() else {
         return ExitCode::FAILURE;
     };
-    for path in [&desktop, &icon] {
+    for path in [&desktop, &icon, &mime] {
         match std::fs::remove_file(path) {
             Ok(()) => eprintln!("removed {}", path.display()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -171,14 +183,18 @@ fn uninstall_desktop() -> ExitCode {
             }
         }
     }
-    refresh_desktop_caches(&desktop);
+    refresh_desktop_caches(&desktop, &mime);
     ExitCode::SUCCESS
 }
 
-/// Let the desktop notice new or removed entries (both tools are optional).
-fn refresh_desktop_caches(desktop: &std::path::Path) {
+/// Let the desktop notice new or removed entries (the tools are optional).
+fn refresh_desktop_caches(desktop: &std::path::Path, mime: &std::path::Path) {
     if let Some(dir) = desktop.parent() {
         let _ = Command::new("update-desktop-database").arg(dir).status();
+    }
+    // `mime` is <data>/mime/packages/…: the database is <data>/mime.
+    if let Some(dir) = mime.parent().and_then(|p| p.parent()) {
+        let _ = Command::new("update-mime-database").arg(dir).status();
     }
     let _ = Command::new("kbuildsycoca6").status();
 }
