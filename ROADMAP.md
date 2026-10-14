@@ -10,8 +10,8 @@ the git branch `recreation` and tag `recreation-2026-10-13` keep that faithful p
 modernised paint.net, "keeping things vaguely in place" but with docked side panels instead of draggable windows, a
 glassy, great-looking UI, better tool controls (brush size first), super smooth performance, extra features, and better
 maths wherever something we copied (paint.net 3.36, BoltBait) can be done more accurately or faster. Phases 13
-(design system and docked shell) and 14 (tool controls) are done (2026-10-14). **Next:** Phase 15 (better maths,
-accuracy and speed). The recreation backlog (rest of the
+(design system and docked shell), 14 (tool controls) and 15 (better maths, accuracy and speed; CI 344 tests) are
+done (2026-10-14). **Next:** Phase 16 (.pdn files and one window). The recreation backlog (rest of the
 BoltBait pack, Sketch Blur, comparing against the 5.1.12 release files) is parked below and done on the `recreation`
 branch only if wanted.
 
@@ -451,7 +451,7 @@ ours is better, and keep a test showing the difference.
   rescaling a swapped size to 1080 × 608, fixed); the WebP options test updated for the new labels; render of
   New Image checked by eye; all 122 UI tests pass.
 
-## Phase 15: Better maths, accuracy and speed (audit of everything built so far)
+## Phase 15: Better maths, accuracy and speed (audit of everything built so far) ✅
 ### 15a ✅ Audit
 - [x] `pnn-effects` bench example: every adjustment and effect at defaults or at a fraction of each slider's range
       (`BENCH_AT`), rendered as the app renders (256 px tiles in parallel) on a 4K image
