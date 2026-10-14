@@ -65,9 +65,11 @@ Findings that shape the plan:
 4. Tools that stay **editable until Finish/Enter**: shapes, line/curve, text, gradient nubs,
    the magic wand click point and tolerance, and moved pixels. This "pending session" model
    is central to how paint.net feels, so it's a first-class concept in our architecture.
-5. **No `.pdn` support needed.** You said you don't need to open old files, and the format
-   has no public spec (the developer says it is .NET binary serialization,
-   [forum](https://forums.getpaint.net/topic/124516-pdn-file-format/)).
+5. **`.pdn` support** (changed 2026-10-14; first decided as not needed). paintnotnet opens and
+   saves `.pdn`. The format has no public spec (the developer says it is .NET binary
+   serialization, [forum](https://forums.getpaint.net/topic/124516-pdn-file-format/)); the
+   layout is ported from 3.36's `Document.cs` and `MemoryBlock.cs`, and .NET's format from
+   Microsoft's open [MS-NRBF] specification. See ROADMAP Phase 16.
 
 ### Prior art
 
