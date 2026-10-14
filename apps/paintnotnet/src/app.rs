@@ -1833,7 +1833,7 @@ impl eframe::App for PaintNotNetApp {
         {
             self.modal = Some(Modal::Error { title, message });
         }
-        if let Some(result) = self.modal.as_mut().and_then(|m| m.show(&ctx)) {
+        if let Some(result) = self.modal.as_mut().and_then(|m| m.show(&ctx, &self.icons)) {
             self.handle_modal_result(&ctx, result);
         }
 

@@ -212,3 +212,17 @@ fn hovering_another_menu_title_switches_menus() {
     h.step();
     assert!(h.query_by_label("Pixel Grid").is_none());
 }
+
+/// The New Image dialog's presets and orientation swap (Phase 15 restyle).
+#[test]
+fn new_image_preset_and_swap() {
+    let mut h = harness();
+    press(&mut h, ctrl(), Key::N);
+    h.get_by_label("Full HD 1920 × 1080").click();
+    h.step();
+    h.get_by_label("Swap width and height").click();
+    h.step();
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    let tab = h.state().workspace().active().expect("new image");
+    assert_eq!((tab.doc.width(), tab.doc.height()), (1080, 1920));
+}

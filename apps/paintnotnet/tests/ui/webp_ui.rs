@@ -28,7 +28,7 @@ fn ctrl_s_on_a_webp_asks_for_settings_then_saves() {
     h.step();
     press(&mut h, ctrl(), Key::S);
     // pdn-webp's settings.
-    for label in ["Preset:", "Quality:", "Effort:", "Lossless"] {
+    for label in ["Preset", "Quality", "Effort", "Lossless"] {
         h.get_by_label(label);
     }
     h.get_by_label("Lossless").click();

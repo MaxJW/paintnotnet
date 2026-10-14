@@ -236,6 +236,14 @@ fn alt_f_then_n_opens_new_image_dialog() {
         ),
         "N picks New... from the open File menu"
     );
+    for _ in 0..3 {
+        h.step();
+    }
+    if let Ok(dir) = std::env::var("PNN_RENDER_DUMP")
+        && let Ok(image) = h.render()
+    {
+        image.save(format!("{dir}/shell-new-image.png")).unwrap();
+    }
     assert!(!h.state().menu_open());
 }
 

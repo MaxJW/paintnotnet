@@ -225,6 +225,11 @@ icons! {
     Finish => ("check"),
     More => ("ellipsis"),
     ChevronDown => ("chevron-down"),
+    // Dialogs (Phase 15 request)
+    AspectLocked => ("link-2"),
+    AspectFree => ("link-2-off"),
+    SwapOrientation => ("rotate-ccw-square"),
+    Warning => ("triangle-alert"),
 }
 
 impl Icon {

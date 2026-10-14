@@ -439,6 +439,18 @@ ours is better, and keep a test showing the difference.
 
 **Phase 14 done (2026-10-14).**
 
+### Requested: modern dialogs (2026-10-14) ✅
+- [x] The user found the message dialogs dated (they had design A's colours and font but paint.net's layout). All
+      modal dialogs now share one shape: icon and larger title, a muted description, buttons on the right with the
+      main action filled in the accent (Enter picks it, Esc cancels), a soft shadow and a dimmed backdrop
+      (unsaved changes, exit, flatten, oversized paste, JPEG/WebP options, recovery, errors, About)
+- [x] New Image: six presets (800 × 600, HD, Full HD, 4K UHD, square 1080, A4 at 300 dpi) as cards, width and
+      height with a link toggle for the aspect ratio and a swap button, a live preview of the shape, the memory size,
+      Create / Cancel. About now credits Lucide and Geist instead of the 3.36 icons
+- **Verified 2026-10-14:** UI test: Full HD then swap then Enter creates 1080 × 1920 (it caught the aspect lock
+  rescaling a swapped size to 1080 × 608, fixed); the WebP options test updated for the new labels; render of
+  New Image checked by eye; all 122 UI tests pass.
+
 ## Phase 15: Better maths, accuracy and speed (audit of everything built so far)
 - [ ] Audit each tool and effect: what paint.net 3.36 / BoltBait does, known weaknesses, the better method, cost; record
       results here and fix in order of visible benefit
