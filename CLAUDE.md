@@ -1,6 +1,6 @@
 # paintnotnet
 
-A faithful paint.net 5.x remake for Linux in Rust (egui/eframe + wgpu). Design: `PLAN.md`.
+A modernised paint.net for Linux in Rust (egui/eframe + wgpu); the faithful recreation is kept on the `recreation` branch. Design: `PLAN.md`.
 Phase state: `ROADMAP.md`. Re-read both before starting or resuming a phase.
 
 ## Source rules
