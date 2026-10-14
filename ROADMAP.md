@@ -375,8 +375,8 @@ ours is better, and keep a test showing the difference.
 ## Phase 14: Tool controls
 - Decisions (2026-10-14): the on-canvas brush gesture is **Alt + right-drag** (sideways = size, up/down = hardness;
   Photoshop's gesture; free on every tool, and Plasma 6 moves windows with Meta, not Alt). The Colors picker style
-  is being chosen from two interactive mockups (square + hue strip, or hue ring around a square) on the design
-  canvas. "Opacity" in the toolbar is the active colour's alpha, as paint.net treats opacity (no second setting).
+  was chosen from two interactive mockups (square + hue strip, or hue ring around a square) on the design
+  canvas; **the user chose square + hue strip** (2026-10-14). "Opacity" in the toolbar is the active colour's alpha, as paint.net treats opacity (no second setting).
 ### 14a ✅ Brush controls
 - [x] Size (`controls.rs`): a preview square showing the brush's size, hardness and colour; a logarithmic slider
       over 1–2000 px (half way ≈ 45 px, so small sizes get most of the travel); a typed value; presets 2, 5, 10,
@@ -394,9 +394,19 @@ ours is better, and keep a test showing the difference.
   degenerate viewport; UI test: Alt + right-drag 100 pt right and 40 pt up turns 2 px / 75% into 4 px / 95% with
   no history step; the HUD rendered mid-drag (20 px, Hardness 85%) and the cursor hidden; all 119 UI tests pass.
   Not checked on the real desktop (needs a real pointer).
-### 14b Toolbar redesign per tool
-- [ ] Controls grouped so a label never wraps away from its control; segmented buttons instead of dropdowns where
-      there are few choices; live previews of settings; rarely used options behind a "More" popover
+### 14b ✅ Toolbar redesign per tool
+- [x] Every tool's options are groups that wrap as a unit; the tool button shows its icon and name (Alt+T still
+      opens the list); choices with few options are segmented controls instead of dropdowns: selection mode, draw
+      mode (fields only for fixed ratio/size), flood mode, gradient type, colour mode and repeat, resampling,
+      curve type, shape draw type, text alignment, bold/italic/underline and antialiasing toggles
+- [x] Live previews: the Fill dropdown draws each hatch in the current primary and secondary colours; the dash
+      style and both line caps are drawn in their dropdowns and next to the dash control; the brush preview
+      (14a) shows size, hardness and colour
+- [x] Less used options moved into a "⋯ More" popover: Spacing and the hatch fill for brushes; selection edge
+      quality; Layer/Image sampling for the Magic Wand and Paint Bucket; the hatch fill for Line/Curve and
+      Shapes; the Text tool's size units. Finish is a button with a check icon
+- **Verified 2026-10-14:** all 119 UI tests pass (one updated: the Finish button's label); renders of the
+  Paintbrush, Line/Curve and dialog toolbars checked by eye (dash-dot preview and caps drawn, groups wrap whole).
 ### 14c Colour picker
 - [ ] The chosen picker in the Colors panel: hex entry, OKLCH / HSV / RGB sliders, alpha, recent colours, palette
 

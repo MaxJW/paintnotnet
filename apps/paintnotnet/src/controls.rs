@@ -290,3 +290,245 @@ mod tests {
         assert!((40.0..50.0).contains(&t_to_size(0.5)));
     }
 }
+
+/// What a segment shows.
+#[derive(Clone, Copy)]
+pub enum Seg<'a> {
+    Icon(crate::icons::Icon),
+    Text(&'a str),
+}
+
+/// A row of mutually exclusive choices as one rounded segmented control. `items` are
+/// (value, face, name); the name is the tooltip and the accessible label. Returns whether
+/// the value changed.
+pub fn segmented<T: PartialEq + Copy>(
+    ui: &mut egui::Ui,
+    icons: &crate::icons::Icons,
+    value: &mut T,
+    items: &[(T, Seg<'_>, &str)],
+    palette: &Palette,
+) -> bool {
+    let mut changed = false;
+    egui::Frame::new()
+        .fill(palette.list)
+        .corner_radius(theme::radius::CONTROL)
+        .inner_margin(2)
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            for &(v, face, name) in items {
+                let selected = *value == v;
+                if segment(ui, icons, face, name, selected, palette).clicked() && !selected {
+                    *value = v;
+                    changed = true;
+                }
+            }
+        });
+    changed
+}
+
+fn segment(
+    ui: &mut egui::Ui,
+    icons: &crate::icons::Icons,
+    face: Seg<'_>,
+    name: &str,
+    selected: bool,
+    palette: &Palette,
+) -> egui::Response {
+    let galley = match face {
+        Seg::Text(t) => Some(ui.painter().layout_no_wrap(
+            t.to_owned(),
+            egui::FontId::proportional(theme::text::BODY),
+            palette.text,
+        )),
+        Seg::Icon(_) => None,
+    };
+    let width = galley.as_ref().map_or(26.0, |g| g.size().x + 16.0);
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 22.0), Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, name)
+    });
+    let hover = ui.ctx().animate_bool_with_time(
+        response.id.with("hover"),
+        response.hovered(),
+        theme::motion::FAST,
+    );
+    if selected {
+        ui.painter().rect_filled(
+            rect,
+            theme::radius::SMALL,
+            palette.hover.gamma_multiply(2.2),
+        );
+    } else if hover > 0.0 {
+        ui.painter().rect_filled(
+            rect,
+            theme::radius::SMALL,
+            palette.hover.gamma_multiply(hover),
+        );
+    }
+    let color = if selected {
+        palette.text
+    } else {
+        palette.weak_text
+    };
+    match (face, galley) {
+        (Seg::Icon(icon), _) => {
+            ui.painter().image(
+                icons.texture(icon).id(),
+                Rect::from_center_size(rect.center(), vec2(16.0, 16.0)),
+                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                if selected { palette.text } else { palette.icon },
+            );
+        }
+        (Seg::Text(_), Some(g)) => {
+            ui.painter()
+                .galley(rect.center() - g.size() / 2.0, g, color);
+        }
+        _ => {}
+    }
+    response.on_hover_text(name)
+}
+
+/// An on/off setting as an icon button that shows its state.
+pub fn toggle(
+    ui: &mut egui::Ui,
+    icons: &crate::icons::Icons,
+    icon: crate::icons::Icon,
+    name: &str,
+    on: &mut bool,
+    palette: &Palette,
+) -> bool {
+    let response = segment(ui, icons, Seg::Icon(icon), name, *on, palette);
+    if response.clicked() {
+        *on = !*on;
+        return true;
+    }
+    false
+}
+
+/// A labelled dropdown whose closed face shows `preview` (drawn into a 36×16 box) next to
+/// the selected name.
+pub fn preview_combo(
+    ui: &mut egui::Ui,
+    id: &str,
+    label: &str,
+    selected: &str,
+    preview: impl Fn(&egui::Painter, Rect),
+    palette: &Palette,
+    menu: impl FnOnce(&mut egui::Ui),
+) {
+    ui.label(egui::RichText::new(label).color(palette.weak_text));
+    let (rect, _) = ui.allocate_exact_size(vec2(36.0, 22.0), Sense::hover());
+    let swatch = Rect::from_center_size(rect.center(), vec2(36.0, 16.0));
+    preview(ui.painter(), swatch);
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(selected)
+        .show_ui(ui, menu)
+        .response
+        .on_hover_text(label);
+}
+
+/// A fill style swatch: solid primary, or the hatch in primary on secondary.
+pub fn fill_swatch(
+    painter: &egui::Painter,
+    rect: Rect,
+    fill: pnn_tools::FillStyle,
+    primary: Color32,
+    secondary: Color32,
+) {
+    match fill {
+        pnn_tools::FillStyle::Solid => {
+            painter.rect_filled(rect, 3.0, primary);
+        }
+        pnn_tools::FillStyle::Hatch(i) => {
+            painter.rect_filled(rect, 3.0, secondary);
+            let mut mesh = egui::Mesh::default();
+            let (w, h) = (rect.width() as u32, rect.height() as u32);
+            for y in 0..h {
+                for x in 0..w {
+                    if pnn_tools::brush::hatch_on(i, x, y) {
+                        let p = rect.min + vec2(x as f32, y as f32);
+                        mesh.add_colored_rect(Rect::from_min_size(p, vec2(1.0, 1.0)), primary);
+                    }
+                }
+            }
+            painter.add(egui::Shape::mesh(mesh));
+        }
+    }
+    painter.rect_stroke(
+        rect,
+        3.0,
+        Stroke::new(1.0, Color32::from_white_alpha(30)),
+        egui::StrokeKind::Inside,
+    );
+}
+
+/// A dash style sample: a 2 pt line with the style's on/off pattern.
+pub fn dash_sample(
+    painter: &egui::Painter,
+    rect: Rect,
+    dash: pnn_tools::DashStyle,
+    color: Color32,
+) {
+    let y = rect.center().y;
+    let width = 2.0;
+    let pattern = dash.pattern();
+    let stroke = Stroke::new(width, color);
+    if pattern.is_empty() {
+        painter.hline(rect.x_range(), y, stroke);
+        return;
+    }
+    let mut x = rect.min.x;
+    let mut i = 0;
+    while x < rect.max.x {
+        let len = pattern[i % pattern.len()] * width;
+        if i % 2 == 0 {
+            painter.hline(x..=(x + len).min(rect.max.x), y, stroke);
+        }
+        x += len;
+        i += 1;
+    }
+}
+
+/// A line cap sample: a short line ending (at the right) in the cap.
+pub fn cap_sample(painter: &egui::Painter, rect: Rect, cap: pnn_tools::LineCap, color: Color32) {
+    use pnn_tools::LineCap;
+    let y = rect.center().y;
+    let end = pos2(rect.max.x - 4.0, y);
+    let stroke = Stroke::new(2.0, color);
+    painter.line_segment([pos2(rect.min.x + 2.0, y), end], stroke);
+    match cap {
+        LineCap::Flat => {}
+        LineCap::Rounded => {
+            painter.circle_filled(end, 2.5, color);
+        }
+        LineCap::Arrow => {
+            painter.line_segment([end, end + vec2(-6.0, -5.0)], stroke);
+            painter.line_segment([end, end + vec2(-6.0, 5.0)], stroke);
+        }
+        LineCap::ArrowFilled => {
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    end + vec2(2.0, 0.0),
+                    end + vec2(-6.0, -5.0),
+                    end + vec2(-6.0, 5.0),
+                ],
+                color,
+                Stroke::NONE,
+            ));
+        }
+    }
+}
+
+/// "⋯" opening a popover with the tool's less used options.
+pub fn more(ui: &mut egui::Ui, icons: &crate::icons::Icons, add: impl FnOnce(&mut egui::Ui)) {
+    egui::containers::menu::MenuButton::from_button(
+        egui::Button::image(icons.image(crate::icons::Icon::More)).frame_when_inactive(false),
+    )
+    .ui(ui, |ui| {
+        ui.set_min_width(220.0);
+        ui.spacing_mut().item_spacing.y = 8.0;
+        add(ui);
+    })
+    .0
+    .on_hover_text("More options");
+}

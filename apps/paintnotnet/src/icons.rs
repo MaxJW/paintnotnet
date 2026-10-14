@@ -221,6 +221,10 @@ icons! {
     Swatch => ("square"),
     HistoryRewind => ("rewind"),
     HistoryFastForward => ("fast-forward"),
+    // Toolbar (Phase 14)
+    Finish => ("check"),
+    More => ("ellipsis"),
+    ChevronDown => ("chevron-down"),
 }
 
 impl Icon {

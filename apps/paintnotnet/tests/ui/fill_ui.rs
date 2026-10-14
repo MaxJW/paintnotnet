@@ -201,7 +201,7 @@ fn toolbar_finish_commits_the_gradient() {
     press(&mut h, Modifiers::NONE, Key::G);
     let n = history_names(&h).len();
     gradient_drag(&mut h, PointerButton::Primary, (10.0, 40.0), (90.0, 40.0));
-    h.get_by_label("✔ Finish").click();
+    h.get_by_label("Finish").click();
     h.step();
     h.step();
     assert_eq!(history_names(&h).len(), n + 1);
