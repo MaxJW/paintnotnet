@@ -28,6 +28,10 @@ struct Params {
     b: i32,
     c: i32,
     _pad: u32,
+    fa: f32,
+    fb: f32,
+    fc: f32,
+    _pad1: f32,
 }
 
 /// Samples per submission: long renders go in row bands so no single submission runs long
@@ -41,6 +45,8 @@ pub struct GpuEffects {
     motion: wgpu::ComputePipeline,
     zoom: wgpu::ComputePipeline,
     radial: wgpu::ComputePipeline,
+    julia: wgpu::ComputePipeline,
+    mandelbrot: wgpu::ComputePipeline,
 }
 
 impl GpuEffects {
@@ -87,6 +93,8 @@ impl GpuEffects {
             motion: pipeline("motion"),
             zoom: pipeline("zoom"),
             radial: pipeline("radial"),
+            julia: pipeline("julia"),
+            mandelbrot: pipeline("mandelbrot"),
             layout,
         }
     }
@@ -112,6 +120,7 @@ impl GpuEffects {
         if src_bytes > max || out_bytes > max || bounds.width as u64 > workgroups {
             return None;
         }
+        let mut f = [0.0f32; 3];
         let (pipeline, points, n, a, b, c, cost) = match job {
             GpuJob::Motion { points } => (
                 &self.motion,
@@ -132,6 +141,37 @@ impl GpuEffects {
                 *fcy,
                 *n as u64 * 2 + 1,
             ),
+            GpuJob::Julia {
+                factor,
+                zoom,
+                angle,
+                quality,
+            } => {
+                f = [*factor, *zoom, *angle];
+                let count = (quality * quality + 1) as u64;
+                (&self.julia, &[][..], *quality, 0, 0, 0, count * 256)
+            }
+            GpuJob::Mandelbrot {
+                factor,
+                zoom,
+                angle,
+                quality,
+                invert,
+            } => {
+                f = [0.0, *zoom, *angle];
+                let count = (quality * quality + 1) as u64;
+                let iterations = 1024 / (*factor).max(1) as u64;
+                let (q, inv) = (*quality, *invert as i32);
+                (
+                    &self.mandelbrot,
+                    &[][..],
+                    q,
+                    *factor,
+                    inv,
+                    0,
+                    count * iterations,
+                )
+            }
         };
         use wgpu::util::DeviceExt;
         let pixels = src.to_pixels();
@@ -186,6 +226,10 @@ impl GpuEffects {
                 b,
                 c,
                 _pad: 0,
+                fa: f[0],
+                fb: f[1],
+                fc: f[2],
+                _pad1: 0.0,
             };
             let uniform = crate::gpu::create_uniform_buffer(
                 &self.device,
@@ -444,6 +488,140 @@ mod tests {
                 ];
                 check("Radial Blur", v, &src, bounds, &gpu);
             }
+        }
+    }
+
+    /// The fractals run in f32 on the GPU (agreed: they may differ from the CPU's f64 at
+    /// the sets' edges): most pixels must still match.
+    #[test]
+    fn gpu_fractals_close_to_cpu() {
+        let Some(gpu) = gpu() else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let src = test_image(400, 300);
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            width: 400,
+            height: 300,
+        };
+        let cases: [(&str, Vec<Value>); 5] = [
+            ("Julia Fractal", vec![]),
+            (
+                "Julia Fractal",
+                vec![
+                    Value::Float(7.5),
+                    Value::Float(3.0),
+                    Value::Float(40.0),
+                    Value::Int(4),
+                ],
+            ),
+            ("Mandelbrot Fractal", vec![]),
+            (
+                "Mandelbrot Fractal",
+                vec![
+                    Value::Int(3),
+                    Value::Float(60.0),
+                    Value::Float(-20.0),
+                    Value::Int(3),
+                    Value::Bool(true),
+                ],
+            ),
+            (
+                "Mandelbrot Fractal",
+                vec![
+                    Value::Int(1),
+                    Value::Float(0.0),
+                    Value::Float(0.0),
+                    Value::Int(1),
+                ],
+            ),
+        ];
+        for (name, values) in cases {
+            let id = pnn_effects::Category::ALL
+                .into_iter()
+                .flat_map(pnn_effects::effects_in)
+                .find(|(_, e)| e.name == name)
+                .expect("effect exists")
+                .0;
+            let def = pnn_effects::effect_def(id).expect("has a definition");
+            let env = Env {
+                primary: ColorBgra::BLACK,
+                secondary: ColorBgra::WHITE,
+                bounds,
+                selection: None,
+                layers: Vec::new(),
+                active_layer: 0,
+                selection_contours: Arc::new(Vec::new()),
+            };
+            let mut v = def.defaults_in(&env);
+            v[..values.len()].copy_from_slice(&values);
+            let renderer = def.renderer(&v, &src, &env);
+            let job = renderer.gpu(&src).expect("has a GPU job");
+            let want = render_rect(renderer.as_ref(), &src, bounds);
+            let got = gpu.render(&job, &src, bounds).expect("GPU renders");
+            let diff = |a: &ColorBgra, b: &ColorBgra| {
+                [
+                    a.b.abs_diff(b.b),
+                    a.g.abs_diff(b.g),
+                    a.r.abs_diff(b.r),
+                    a.a.abs_diff(b.a),
+                ]
+                .into_iter()
+                .max()
+                .expect("4 channels")
+            };
+            let n = want.len() as f64;
+            let off = want
+                .iter()
+                .zip(&got)
+                .filter(|(a, b)| diff(a, b) > 0)
+                .count();
+            let far = want
+                .iter()
+                .zip(&got)
+                .filter(|(a, b)| diff(a, b) > 8)
+                .count();
+            // PNN_FRACTAL_DUMP=<dir>: CPU above GPU, as a PPM, to compare by eye.
+            if let Ok(dir) = std::env::var("PNN_FRACTAL_DUMP") {
+                let mut ppm = b"P6 400 600 255\n".to_vec();
+                for p in want.iter().chain(&got) {
+                    ppm.extend([p.r, p.g, p.b]);
+                }
+                let file = format!("{dir}/{}-{}.ppm", name.replace(' ', "_"), v.len() + off);
+                std::fs::write(file, ppm).expect("writes");
+            }
+            // What the eye sees: 10 × 10 block averages.
+            let block = |img: &[ColorBgra], bx: usize, by: usize| {
+                let mut sum = [0u32; 4];
+                for y in by * 10..by * 10 + 10 {
+                    for x in bx * 10..bx * 10 + 10 {
+                        let p = img[y * 400 + x];
+                        for (s, c) in sum.iter_mut().zip([p.b, p.g, p.r, p.a]) {
+                            *s += c as u32;
+                        }
+                    }
+                }
+                sum.map(|s| s as f32 / 100.0)
+            };
+            let mut worst_block = 0.0f32;
+            for by in 0..30 {
+                for bx in 0..40 {
+                    let (a, b) = (block(&want, bx, by), block(&got, bx, by));
+                    for k in 0..4 {
+                        worst_block = worst_block.max((a[k] - b[k]).abs());
+                    }
+                }
+            }
+            eprintln!(
+                "{name} {v:?}: {:.2}% differ, {:.3}% by more than 8 levels, worst 10×10 block {worst_block:.1} levels",
+                100.0 * off as f64 / n,
+                100.0 * far as f64 / n
+            );
+            // RTX 3070: up to a third of Mandelbrot's pixels differ (chaotic near the set,
+            // f32 against f64), but no 10 × 10 block's average by more than 12 levels.
+            assert!(worst_block <= 20.0, "{name} {v:?}: looks different");
         }
     }
 }

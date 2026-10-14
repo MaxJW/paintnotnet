@@ -17,7 +17,9 @@ use pnn_core::{BlendMode, ColorBgra, Rect, Surface};
 use crate::adjustments::BrightnessContrast;
 use crate::blurs::{LocalHistogram, Separable};
 use crate::distort::{bilinear_clamped, perlin};
-use crate::framework::{ColorDefault, EffectDef, Env, PropDef, Renderer, Value, intensity};
+use crate::framework::{
+    ColorDefault, EffectDef, Env, GpuJob, PropDef, Renderer, Value, WithGpu, intensity,
+};
 
 fn lerp_c(a: ColorBgra, b: ColorBgra, t: f64) -> ColorBgra {
     let l = |x: u8, y: u8| (x as f64 + (y as f64 - x as f64) * t).clamp(0.0, 255.0) as u8;
@@ -511,7 +513,13 @@ pub fn def(name: &str) -> Option<EffectDef> {
                     v[3].int(),
                 );
                 let (w, h) = (src.width() as f64, src.height() as f64);
-                Box::new(At(move |_: &Surface, x: u32, y: u32| {
+                let job = GpuJob::Julia {
+                    factor: factor as f32,
+                    zoom: zoom as f32,
+                    angle: angle as f32,
+                    quality: q,
+                };
+                let inner = At(move |_: &Surface, x: u32, y: u32| {
                     let count = q * q + 1;
                     let (mut r, mut g, mut b, mut a) = (0i32, 0i32, 0i32, 0i32);
                     for i in 0..count {
@@ -537,7 +545,8 @@ pub fn def(name: &str) -> Option<EffectDef> {
                     }
                     let n = count;
                     ColorBgra::from_bgra((b / n) as u8, (g / n) as u8, (r / n) as u8, (a / n) as u8)
-                }))
+                });
+                Box::new(WithGpu { inner, job })
             },
         ),
         "Mandelbrot Fractal" => d(
@@ -554,7 +563,14 @@ pub fn def(name: &str) -> Option<EffectDef> {
                 let zoom = 1.0 + 20.0 * v[1].float();
                 let (angle, q, invert) = (v[2].float().to_radians(), v[3].int(), v[4].bool());
                 let (w, h) = (src.width() as f64, src.height() as f64);
-                Box::new(At(move |_: &Surface, x: u32, y: u32| {
+                let job = GpuJob::Mandelbrot {
+                    factor,
+                    zoom: zoom as f32,
+                    angle: angle as f32,
+                    quality: q,
+                    invert,
+                };
+                let inner = At(move |_: &Surface, x: u32, y: u32| {
                     let count = q * q + 1;
                     let (mut r, mut g, mut b, mut a) = (0i32, 0i32, 0i32, 0i32);
                     for i in 0..count {
@@ -584,7 +600,8 @@ pub fn def(name: &str) -> Option<EffectDef> {
                     } else {
                         c
                     }
-                }))
+                });
+                Box::new(WithGpu { inner, job })
             },
         ),
         "Drop Shadow" => d(

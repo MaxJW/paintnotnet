@@ -497,7 +497,7 @@ ours is better, and keep a test showing the difference.
       50% reaches through greys as paint.net's does; 100% matches all), "Compare colors: As seen / RGB" under More.
       Test: a dark-blue and a light-yellow step of equal RGB size: RGB treats them alike, OKLab matches the yellows only
 - Gradient UI tests now accept the dither's ±1 level at exact half-way pixels.
-### 15d GPU and frame budget (in progress)
+### 15d ✅ GPU and frame budget
 - Decisions (2026-10-14): fractals may compute in f32 on the GPU (tiny differences at the set's edges from the CPU's
   f64 are accepted); layers are composited on the GPU so whole-image previews (live gradient, effects) reach 165 fps.
 - [x] Measured (release, 4K photo, 165 Hz display, `--smoke-test` modes; `PNN_PROFILE=1` now prints per-stage
@@ -541,9 +541,16 @@ ours is better, and keep a test showing the difference.
       it off; `PNN_SMOKE_EFFECT=<effect name>` smoke-tests any effect's live preview
 - Fixed on the way: a preview still rendering at exit destroyed the GPU device on its worker thread while the
   process exited (NVIDIA driver segfault); `on_exit` now cancels it and waits for the workers to let go.
-- [ ] Still slow at 4K, not yet on the GPU: Mandelbrot (~5.6 s), Julia (2.4 s), Dents (2.6 s), Outline / Median /
-      Reduce Noise (1.5–1.9 s), Bokeh, Morphology, Surface Blur (1.1–1.3 s). Fractals in f32 (decided); the rest
-      exact where the CPU's maths is integer
+- [x] **Fractals on the GPU in f32** (decided 2026-10-14): Julia and Mandelbrot (`WithGpu` pairs the CPU renderer
+      with its GPU job). 4K, RTX 3070: Mandelbrot default 5.40 s → 115 ms (75% sliders 6.88 s → 78 ms), Julia
+      default 555 → 92 ms (75%: 2.67 s → 44 ms). Near the sets' edges f32 and f64 part ways: up to a third of
+      Mandelbrot's default-view pixels differ, but no 10 × 10 block's average by more than 12 levels (test limit 20)
+      and side by side they look the same (checked by eye). The applied result is the GPU's too when there is one
+- Left on the CPU (later, if wanted): Dents (2.6 s at 75%), Outline / Median / Reduce Noise (1.5–1.9 s), Bokeh,
+  Morphology, Surface Blur (1.1–1.3 s). The histogram effects slide a histogram along rows on the CPU; a GPU
+  version needs a different algorithm to be fast, so it is a project of its own. Their previews already stream in
+  tile by tile without blocking the UI.
+
 ## Phase 16: .pdn files and one window — requested 2026-10-14
 Supersedes PLAN.md §5 ("No .pdn support needed"): the user now wants .pdn support.
 - [ ] **Read .pdn.** What is known: a file is `PDN3`, a 24-bit little-endian length, an XML header (`<pdnImage width

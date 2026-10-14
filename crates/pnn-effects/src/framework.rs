@@ -247,6 +247,42 @@ pub enum GpuJob {
         fcx: i32,
         fcy: i32,
     },
+    /// Julia Fractal, in f32 on the GPU (the CPU's f64 can differ at the set's edges; the
+    /// user accepted that, 2026-10-14). Angle in radians.
+    Julia {
+        factor: f32,
+        zoom: f32,
+        angle: f32,
+        quality: i32,
+    },
+    /// Mandelbrot Fractal, in f32 as Julia. `zoom` is the effective zoom (1 + 20 × setting).
+    Mandelbrot {
+        factor: i32,
+        zoom: f32,
+        angle: f32,
+        quality: i32,
+        invert: bool,
+    },
+}
+
+/// A renderer with a GPU version of itself.
+pub(crate) struct WithGpu<R: Renderer> {
+    pub inner: R,
+    pub job: GpuJob,
+}
+
+impl<R: Renderer> Renderer for WithGpu<R> {
+    fn render_row(&self, src: &Surface, x0: u32, y: u32, out: &mut [ColorBgra]) {
+        self.inner.render_row(src, x0, y, out);
+    }
+
+    fn render_rect(&self, src: &Surface, rect: Rect, out: &mut [ColorBgra]) {
+        self.inner.render_rect(src, rect, out);
+    }
+
+    fn gpu(&self, _: &Surface) -> Option<GpuJob> {
+        Some(self.job.clone())
+    }
 }
 
 /// A per-pixel operation (most adjustments).

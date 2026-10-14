@@ -1,5 +1,6 @@
 // Effects on the GPU: exact ports of the CPU renderers in `pnn-effects` (3.36's fixed-point
-// maths), so a GPU preview matches what the CPU would render. Pixels are B, G, R, A bytes
+// maths), so a GPU preview matches what the CPU would render; the fractals are f32 ports of
+// the CPU's f64 (they can differ at the sets' edges, as agreed). Pixels are B, G, R, A bytes
 // packed little-endian in u32s; the output covers the effect's bounds only.
 
 struct Params {
@@ -15,6 +16,10 @@ struct Params {
     b: i32,
     c: i32,
     _pad: u32,
+    fa: f32,         // effect-specific floats
+    fb: f32,
+    fc: f32,
+    _pad1: f32,
 };
 
 @group(0) @binding(0) var<storage, read> src: array<u32>;
@@ -211,4 +216,102 @@ fn radial(@builtin(global_invocation_id) id: vec3<u32>) {
         }
     }
     finish(id, acc, count);
+}
+
+// The fractals' sub-sample `i` of `count` at pixel (x, y), rotated by `angle` (Julia and
+// Mandelbrot in `photo_render.rs`).
+fn fractal_point(id: vec3<u32>, i: i32, count: i32, q: i32) -> vec2<f32> {
+    let w = f32(p.w);
+    let h = f32(p.h);
+    let x = f32(p.bx + id.x);
+    let y = f32(p.by + id.y);
+    let fi = f32(i);
+    let u = (2.0 * x - w + fi / f32(count)) / h;
+    let v = (2.0 * y - h + fract(fi / f32(q))) / h;
+    let rad = sqrt(u * u + v * v);
+    let th = atan2(v, u) + p.fc;
+    return vec2<f32>(rad * cos(th), rad * sin(th));
+}
+
+fn clamp_channel(v: f32) -> i32 {
+    return i32(clamp(v, 0.0, 255.0));
+}
+
+// Julia Fractal: fa = factor, fb = zoom, fc = angle, n = quality.
+@compute @workgroup_size(16, 16)
+fn julia(@builtin(global_invocation_id) id: vec3<u32>) {
+    if (!in_bounds(id)) {
+        return;
+    }
+    let q = p.n;
+    let count = q * q + 1;
+    let aspect = f32(p.h) / f32(p.w);
+    var acc = vec4<i32>(0);
+    for (var i = 0; i < count; i++) {
+        let o = fractal_point(id, i, count, q);
+        var x = (o.x - o.y * aspect) / p.fb;
+        var y = (o.y + o.x * aspect) / p.fb;
+        var c = 0.0;
+        while (c < 256.0 && x * x + y * y < 10000.0) {
+            let t = x;
+            x = x * x - y * y + 0.3125;
+            y = 2.0 * t * y + 0.03;
+            c += 1.0;
+        }
+        let j = c - (2.0 - 2.0 * log(10000.0) / log(x * x + y * y));
+        let v = p.fa * j;
+        acc += vec4<i32>(
+            clamp_channel(v - 768.0),
+            clamp_channel(v - 512.0),
+            clamp_channel(v - 256.0),
+            clamp_channel(v),
+        );
+    }
+    store(id, vec4<u32>(acc / count));
+}
+
+// Mandelbrot Fractal: a = factor, fb = zoom, fc = angle, n = quality, b = invert.
+@compute @workgroup_size(16, 16)
+fn mandelbrot(@builtin(global_invocation_id) id: vec3<u32>) {
+    if (!in_bounds(id)) {
+        return;
+    }
+    let q = p.n;
+    let count = q * q + 1;
+    var acc = vec4<i32>(0);
+    for (var i = 0; i < count; i++) {
+        let o = fractal_point(id, i, count, q);
+        let r = o.x / p.fb - 0.7;
+        let im = o.y / p.fb - 0.29;
+        // Inside the main cardioid or the period-2 bulb: never escapes, every channel 255.
+        let qq = (r - 0.25) * (r - 0.25) + im * im;
+        if (qq * (qq + (r - 0.25)) <= 0.25 * im * im || (r + 1.0) * (r + 1.0) + im * im <= 0.0625) {
+            acc += vec4<i32>(255);
+            continue;
+        }
+        var n = 0;
+        var x = 0.0;
+        var y = 0.0;
+        while (n * p.a < 1024 && x * x + y * y < 100000.0) {
+            let t = x;
+            x = x * x - y * y + r;
+            y = 2.0 * t * y + im;
+            n += 1;
+        }
+        let m = f32(n) - log(y * y + x * x) / log(100000.0);
+        let v = 64.0 + f32(p.a) * m;
+        // (r, g, b, a) here; stored as (b, g, r, a) below.
+        acc += vec4<i32>(
+            clamp_channel(v - 768.0),
+            clamp_channel(v - 512.0),
+            clamp_channel(v - 256.0),
+            clamp_channel(v),
+        );
+    }
+    var c = vec4<u32>(acc / count);
+    c = vec4<u32>(c.z, c.y, c.x, c.w);
+    if (p.b != 0) {
+        c = vec4<u32>(255u - c.x, 255u - c.y, 255u - c.z, c.w);
+    }
+    store(id, c);
 }

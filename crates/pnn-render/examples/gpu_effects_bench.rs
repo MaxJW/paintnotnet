@@ -1,5 +1,5 @@
-//! Times the GPU effects (`effects.wgsl`) on a 4K image at 75% of their sliders, against
-//! the CPU renderer they port. `cargo run --release -p pnn-render --example gpu_effects_bench`.
+//! Times the GPU effects (`effects.wgsl`) on a 4K image at 75% of their sliders (and the
+//! fractals at their defaults too), against the CPU renderer they port. `cargo run --release -p pnn-render --example gpu_effects_bench`.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -42,7 +42,7 @@ fn main() {
         active_layer: 0,
         selection_contours: Arc::new(Vec::new()),
     };
-    let cases: [(&str, Vec<Value>); 3] = [
+    let cases: [(&str, Vec<Value>); 7] = [
         (
             "Motion Blur",
             vec![Value::Float(90.0), Value::Bool(true), Value::Int(150)],
@@ -57,6 +57,26 @@ fn main() {
                 Value::Float(270.0),
                 Value::Float(0.0),
                 Value::Float(0.0),
+                Value::Int(4),
+            ],
+        ),
+        ("Julia Fractal", vec![]),
+        (
+            "Julia Fractal",
+            vec![
+                Value::Float(7.75),
+                Value::Float(37.5),
+                Value::Float(90.0),
+                Value::Int(4),
+            ],
+        ),
+        ("Mandelbrot Fractal", vec![]),
+        (
+            "Mandelbrot Fractal",
+            vec![
+                Value::Int(7),
+                Value::Float(75.0),
+                Value::Float(90.0),
                 Value::Int(4),
             ],
         ),
@@ -82,7 +102,13 @@ fn main() {
         let t = Instant::now();
         let want = render_rect(renderer.as_ref(), &src, bounds);
         let cpu_time = t.elapsed();
-        assert!(got == want, "{name}: GPU and CPU differ");
+        // The fractals are f32 on the GPU (agreed to differ at the sets' edges).
+        let exact = !matches!(
+            job,
+            pnn_effects::framework::GpuJob::Julia { .. }
+                | pnn_effects::framework::GpuJob::Mandelbrot { .. }
+        );
+        assert!(!exact || got == want, "{name}: GPU and CPU differ");
         println!("| {name} | {gpu_time:.2?} | {cpu_time:.2?} |");
     }
 }
