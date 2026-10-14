@@ -1,6 +1,6 @@
 //! Renders the whole shell at the size of paint.net 5's reference screenshot (1202×867) and
-//! checks the layout matches paint.net's: the four utility windows parked in their corners
-//! inside the workspace, not overlapping, Tools as a narrow two-column strip.
+//! checks design A's docked layout: the tool rail top-left, Colors, Layers and History
+//! stacked in the right dock, the canvas fitted between them, nothing overlapping.
 //!
 //! Set `PNN_RENDER_DUMP=<dir>` to write the frame for side-by-side comparison with
 //! `reference/pdn5-docs/images/mainwindow/mainwindow.png`.
@@ -32,7 +32,7 @@ fn harness() -> Harness<'static, PaintNotNetApp> {
 }
 
 #[test]
-fn utility_windows_park_like_paint_net() {
+fn docked_shell_matches_design_a() {
     let mut h = harness();
     if let Ok(dir) = std::env::var("PNN_RENDER_DUMP")
         && let Ok(image) = h.render()
@@ -42,11 +42,13 @@ fn utility_windows_park_like_paint_net() {
     let canvas = h.state().canvas().rect.expect("canvas laid out");
     let panels = h.state().panels();
     let rects: Vec<_> = Panel::ALL.iter().map(|&p| (p, panels.rect(p))).collect();
+    let screen = eframe::egui::Rect::from_min_size(eframe::egui::Pos2::ZERO, vec2(1202.0, 867.0));
     for &(p, r) in &rects {
         assert!(r.is_positive(), "{p:?} not shown");
+        assert!(screen.contains_rect(r), "{p:?} {r:?} off screen");
         assert!(
-            canvas.expand(1.0).contains_rect(r),
-            "{p:?} {r:?} outside workspace {canvas:?}"
+            !r.intersects(canvas),
+            "{p:?} {r:?} covers the free canvas {canvas:?}"
         );
     }
     for (i, &(a, ra)) in rects.iter().enumerate() {
@@ -55,28 +57,94 @@ fn utility_windows_park_like_paint_net() {
         }
     }
     let r = |p| panels.rect(p);
-    let mid = canvas.center();
+    let tools = r(Panel::Tools);
+    assert!(tools.max.x < canvas.min.x, "rail left of the canvas");
+    assert!(tools.width() <= 64.0, "one column, got {}", tools.width());
+    let (colors, layers, history) = (r(Panel::Colors), r(Panel::Layers), r(Panel::History));
+    assert!(colors.min.x > canvas.max.x, "dock right of the canvas");
     assert!(
-        r(Panel::Tools).center().x < mid.x && r(Panel::Tools).center().y < mid.y,
-        "Tools top-left"
+        colors.max.y < layers.min.y && layers.max.y < history.min.y,
+        "stacked in order"
     );
+    assert_eq!(colors.x_range(), history.x_range(), "one column");
     assert!(
-        r(Panel::History).center().x > mid.x && r(Panel::History).center().y < mid.y,
-        "History top-right"
+        (history.max.y - layers.min.y) > 300.0,
+        "Layers and History fill the dock"
     );
+    if let Ok(dir) = std::env::var("PNN_RENDER_DUMP") {
+        // Zoomed in, the image runs on under the panels.
+        let ctx = h.ctx.clone();
+        for _ in 0..3 {
+            h.state_mut()
+                .execute(&ctx, Triggered::once(Command::ZoomIn));
+        }
+        for _ in 0..3 {
+            h.step();
+        }
+        if let Ok(image) = h.render() {
+            image.save(format!("{dir}/shell-zoomed.png")).unwrap();
+        }
+        h.ctx.set_theme(eframe::egui::ThemePreference::Light);
+        for _ in 0..3 {
+            h.step();
+        }
+        if let Ok(image) = h.render() {
+            image.save(format!("{dir}/shell-light.png")).unwrap();
+        }
+    }
+}
+
+#[test]
+fn dock_resizes_collapses_and_remembers() {
+    use eframe::egui::{Event, Modifiers, PointerButton};
+    let mut h = harness();
+    let layers = h.state().panels().rect(Panel::Layers);
+    // Drag the dock's left edge 60 px to the left.
+    let grab = eframe::egui::pos2(layers.min.x - 2.0, layers.center().y);
+    h.event(Event::PointerMoved(grab));
+    h.step();
+    h.event(Event::PointerButton {
+        pos: grab,
+        button: PointerButton::Primary,
+        pressed: true,
+        modifiers: Modifiers::NONE,
+    });
+    h.step();
+    for i in 1..=6 {
+        h.event(Event::PointerMoved(grab - vec2(10.0 * i as f32, 0.0)));
+        h.step();
+    }
+    h.event(Event::PointerButton {
+        pos: grab - vec2(60.0, 0.0),
+        button: PointerButton::Primary,
+        pressed: false,
+        modifiers: Modifiers::NONE,
+    });
+    for _ in 0..3 {
+        h.step();
+    }
+    let wider = h.state().panels().rect(Panel::Layers);
     assert!(
-        r(Panel::Layers).center().x > mid.x && r(Panel::Layers).center().y > mid.y,
-        "Layers bottom-right"
+        (wider.width() - layers.width() - 60.0).abs() < 1.5,
+        "dock widened by the drag: {} → {}",
+        layers.width(),
+        wider.width()
     );
+    // Click the History title to collapse it to its title row.
+    h.get_by_role_and_label(eframe::egui::accesskit::Role::Button, "History")
+        .click();
+    for _ in 0..3 {
+        h.step();
+    }
+    let history = h.state().panels().rect(Panel::History);
+    assert_eq!(history.height(), paintnotnet::panels::HEADER);
+    let dock = &h.state().config().dock;
     assert!(
-        r(Panel::Colors).center().x < mid.x && r(Panel::Colors).center().y > mid.y,
-        "Colors bottom-left"
+        (dock.width - wider.width()).abs() < 0.5,
+        "width saved: {}",
+        dock.width
     );
-    assert!(
-        r(Panel::Tools).width() <= 64.0,
-        "Tools is a narrow strip, got {}",
-        r(Panel::Tools).width()
-    );
+    assert_eq!(dock.collapsed, vec!["History".to_owned()]);
 }
 
 #[test]
@@ -172,49 +240,6 @@ fn tool_letters_cycle_like_paint_net() {
         h.state().settings().primary,
         pnn_core::ColorBgra::WHITE,
         "X swaps colours"
-    );
-}
-
-#[test]
-fn dragging_a_window_near_an_edge_snaps_it() {
-    use eframe::egui::{Event, Modifiers, PointerButton, pos2};
-    let mut h = harness();
-    let canvas = h.state().canvas().rect.unwrap();
-    let tools = h.state().panels().rect(Panel::Tools);
-    // Grab the Tools title bar and drop it 10 px short of the workspace's right edge,
-    // vertically mid-way (away from History and Layers).
-    let grab = pos2(tools.min.x + 12.0, tools.min.y + 8.0);
-    let target_x = canvas.max.x - tools.width() - 10.0 + 12.0;
-    let target = pos2(target_x, canvas.center().y - 100.0);
-    h.event(Event::PointerMoved(grab));
-    h.step();
-    h.event(Event::PointerButton {
-        pos: grab,
-        button: PointerButton::Primary,
-        pressed: true,
-        modifiers: Modifiers::NONE,
-    });
-    h.step();
-    for i in 1..=10 {
-        let t = i as f32 / 10.0;
-        h.event(Event::PointerMoved(grab + (target - grab) * t));
-        h.step();
-    }
-    h.event(Event::PointerButton {
-        pos: target,
-        button: PointerButton::Primary,
-        pressed: false,
-        modifiers: Modifiers::NONE,
-    });
-    for _ in 0..3 {
-        h.step();
-    }
-    let after = h.state().panels().rect(Panel::Tools);
-    assert!(
-        (canvas.max.x - after.max.x - 3.0).abs() < 1.5,
-        "Tools snapped 3 px from the right edge; right edge at {}, workspace right {}",
-        after.max.x,
-        canvas.max.x
     );
 }
 
@@ -774,8 +799,11 @@ fn object_and_selection_dialogs_render() {
         Triggered::once(effect_named("Bevel Object", pnn_effects::Category::Object)),
     );
     h.step();
-    // "Colors" is also the Colors window's title: open the dialog's section header.
-    h.get_by_role_and_label(eframe::egui::accesskit::Role::Button, "Colors")
+    // "Colors" is also the Colors panel's title: open the dialog's section header, which
+    // is drawn after the dock.
+    h.get_all_by_role_and_label(eframe::egui::accesskit::Role::Button, "Colors")
+        .last()
+        .expect("the dialog's Colors section")
         .click();
     for _ in 0..8 {
         h.step();

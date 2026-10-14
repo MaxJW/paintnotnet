@@ -15,7 +15,7 @@ use crate::dialogs::{Modal, ModalResult, NewImage, SaveTarget};
 use crate::file_ops::{FileEvent, FileOps, resolve_save_path};
 use crate::icons::{Icon, Icons};
 use crate::menus::{self, MenuBarState, MenuContext};
-use crate::panels::Panels;
+use crate::panels::{Panels, Part};
 use crate::shell::{self, ImageListAction};
 use crate::status::{self, StatusAction, StatusInfo, StatusState};
 use crate::theme;
@@ -1045,106 +1045,144 @@ impl PaintNotNetApp {
     }
 }
 
-/// Width of the menus + toolbar row 1 column in the top band.
-const MENU_COLUMN_WIDTH: f32 = 345.0;
+/// Height of the title bar and of the status bar.
+const TITLE_BAR_HEIGHT: f32 = 40.0;
+const STATUS_BAR_HEIGHT: f32 = 28.0;
 
 impl PaintNotNetApp {
-    /// paint.net 5's top band: menus and toolbar row 1 on the left, the image list beside
-    /// them, utility window toggles + settings + help on the right.
-    fn top_band(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        // The two sides of the band run one after the other; share state through cells.
+    /// The title bar: menus on the left, the document tabs in the middle, then command
+    /// search, the panel toggles (paint.net's top-right icons), Settings and Help.
+    fn title_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        // The two sides of the bar run one after the other; share state through cells.
         let picked: std::cell::Cell<Option<Command>> = std::cell::Cell::new(None);
         let menu = std::cell::RefCell::new(std::mem::take(&mut self.menu));
         let global_menu = self.global_menu_active();
+        let palette = theme::palette(ctx);
         let mut list_actions = Vec::new();
-        egui::Panel::top("top_band").show(ui, |ui| {
-            let state = self.command_state();
-            let availability = |c: Command| state.enabled(c);
-            let checked = |c: Command| state.checked(c);
-            let cx = MenuContext {
-                enabled: &availability,
-                checked: &checked,
-                last_effect: self.last_effect_name(),
-            };
-            // Left: menus + toolbar row 1 (natural width), then the image list.
-            // Right: utility window toggles, settings, help — always visible.
-            egui::Sides::new().shrink_left().show(
-                ui,
-                |ui| {
-                    ui.horizontal_top(|ui| {
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(MENU_COLUMN_WIDTH, 0.0),
-                            egui::Layout::top_down(egui::Align::Min),
-                            |ui| {
-                                ui.set_max_width(MENU_COLUMN_WIDTH);
-                                if !global_menu
-                                    && let Some(c) = menus::menu_bar(
-                                        ui,
-                                        &mut menu.borrow_mut(),
-                                        &cx,
-                                        &self.icons,
-                                    )
-                                {
+        egui::Panel::top("title_bar")
+            .exact_size(TITLE_BAR_HEIGHT)
+            .frame(
+                egui::Frame::new()
+                    .fill(palette.band)
+                    .inner_margin(egui::Margin::symmetric(12, 0)),
+            )
+            .show(ui, |ui| {
+                let state = self.command_state();
+                let availability = |c: Command| state.enabled(c);
+                let checked = |c: Command| state.checked(c);
+                let cx = MenuContext {
+                    enabled: &availability,
+                    checked: &checked,
+                    last_effect: self.last_effect_name(),
+                };
+                let full = ui.max_rect();
+                let row =
+                    |layout: egui::Layout| egui::UiBuilder::new().max_rect(full).layout(layout);
+                let left = ui
+                    .scope_builder(
+                        row(egui::Layout::left_to_right(egui::Align::Center)),
+                        |ui| {
+                            logo(ui, &palette);
+                            if !global_menu {
+                                let size =
+                                    egui::vec2(menus::menu_bar_width(ui), ui.available_height());
+                                let bar = ui.allocate_ui_with_layout(
+                                    size,
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        menus::menu_bar(
+                                            ui,
+                                            &mut menu.borrow_mut(),
+                                            &cx,
+                                            &self.icons,
+                                        )
+                                    },
+                                );
+                                if let Some(c) = bar.inner {
                                     picked.set(Some(c));
                                 }
-                                if global_menu {
-                                    menu.borrow_mut().open = false;
+                            }
+                            if global_menu {
+                                menu.borrow_mut().open = false;
+                            }
+                        },
+                    )
+                    .response
+                    .rect;
+                let right = ui
+                    .scope_builder(
+                        row(egui::Layout::right_to_left(egui::Align::Center)),
+                        |ui| {
+                            ui.spacing_mut().item_spacing.x = 2.0;
+                            ui.spacing_mut().button_padding = egui::vec2(6.0, 6.0);
+                            if let Some(c) =
+                                menus::help_button(ui, &mut menu.borrow_mut(), &cx, &self.icons)
+                            {
+                                picked.set(Some(c));
+                            }
+                            let tip = format!(
+                                "Settings ({})",
+                                Command::Settings.shortcut_text().unwrap_or_default()
+                            );
+                            let settings = ui
+                                .add_enabled(
+                                    availability(Command::Settings),
+                                    egui::Button::image(self.icons.image(Icon::Settings))
+                                        .frame_when_inactive(false),
+                                )
+                                .on_hover_text(&tip)
+                                .on_disabled_hover_text(&tip);
+                            if settings.clicked() {
+                                picked.set(Some(Command::Settings));
+                            }
+                            ui.separator();
+                            for (panel, icon) in [
+                                (Panel::Colors, Icon::ColorsWindow),
+                                (Panel::Layers, Icon::LayersWindow),
+                                (Panel::History, Icon::HistoryWindow),
+                                (Panel::Tools, Icon::ToolsWindow),
+                            ] {
+                                let command = Command::ToggleWindow(panel);
+                                let tip = format!(
+                                    "{} ({})",
+                                    panel.name(),
+                                    command.shortcut_text().unwrap_or_default()
+                                );
+                                let button = egui::Button::image(self.icons.image(icon))
+                                    .frame_when_inactive(false)
+                                    .selected(self.panels.visible(panel));
+                                if ui.add(button).on_hover_text(tip).clicked() {
+                                    // Ctrl+Shift+click resets the panel, as in paint.net.
+                                    let reset = ui.input(|i| i.modifiers.ctrl && i.modifiers.shift);
+                                    picked.set(Some(if reset {
+                                        Command::ResetWindow(panel)
+                                    } else {
+                                        command
+                                    }));
                                 }
-                                if let Some(c) =
-                                    toolbar::row1(ui, &self.icons, &availability, &checked)
-                                {
-                                    picked.set(Some(c));
-                                }
-                            },
-                        );
-                        ui.add_space(6.0);
-                        list_actions = shell::image_list(ui, &self.workspace);
-                    });
-                },
-                |ui| {
-                    if let Some(c) =
-                        menus::help_button(ui, &mut menu.borrow_mut(), &cx, &self.icons)
-                    {
-                        picked.set(Some(c));
-                    }
-                    let settings = ui
-                        .add_enabled(
-                            availability(Command::Settings),
-                            egui::Button::image(self.icons.image(Icon::Settings)).frame(false),
-                        )
-                        .on_hover_text("Settings (Alt+X)")
-                        .on_disabled_hover_text("Settings (Alt+X)");
-                    if settings.clicked() {
-                        picked.set(Some(Command::Settings));
-                    }
-                    ui.separator();
-                    for (panel, icon) in [
-                        (Panel::Colors, Icon::ColorsWindow),
-                        (Panel::Layers, Icon::LayersWindow),
-                        (Panel::History, Icon::HistoryWindow),
-                        (Panel::Tools, Icon::ToolsWindow),
-                    ] {
-                        let command = Command::ToggleWindow(panel);
-                        let tip = format!(
-                            "{} ({})",
-                            panel.name(),
-                            command.shortcut_text().unwrap_or_default()
-                        );
-                        let button = egui::Button::image(self.icons.image(icon))
-                            .selected(self.panels.visible(panel));
-                        if ui.add(button).on_hover_text(tip).clicked() {
-                            // Ctrl+Shift+click resets the window, as in paint.net.
-                            let reset = ui.input(|i| i.modifiers.ctrl && i.modifiers.shift);
-                            picked.set(Some(if reset {
-                                Command::ResetWindow(panel)
-                            } else {
-                                command
-                            }));
-                        }
-                    }
-                },
-            );
-        });
+                            }
+                            ui.separator();
+                            if search_field(ui, &palette).clicked() {
+                                picked.set(Some(Command::CommandPalette));
+                            }
+                        },
+                    )
+                    .response
+                    .rect;
+                // The tabs, centred in the space between.
+                let middle = egui::Rect::from_min_max(
+                    egui::pos2(left.max.x + 16.0, full.min.y),
+                    egui::pos2(right.min.x - 16.0, full.max.y),
+                );
+                if middle.width() > 60.0 {
+                    ui.scope_builder(
+                        egui::UiBuilder::new()
+                            .max_rect(middle)
+                            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                        |ui| list_actions = shell::image_list(ui, &self.workspace, &palette),
+                    );
+                }
+            });
         for action in list_actions {
             match action {
                 ImageListAction::Activate(i) => self.workspace.activate(i),
@@ -1158,14 +1196,52 @@ impl PaintNotNetApp {
         }
     }
 
-    fn floating_windows(&mut self, ctx: &egui::Context, workspace: egui::Rect, now: Instant) {
+    /// The tool options bar: the quick buttons (New … Rulers), then the tool's options.
+    fn options_bar(&mut self, ctx: &egui::Context, panels: &mut Panels) {
         let palette = theme::palette(ctx);
-        let colors_width = self.colors.width();
-        if (self.panels.size(Panel::Colors).x - colors_width).abs() > 0.5 {
-            let h = self.panels.size(Panel::Colors).y;
-            self.panels
-                .set_size(Panel::Colors, egui::vec2(colors_width, h));
+        // The toolbar's Finish commits pending tool work, as Enter does.
+        let finish_enabled = self.gradient.is_some()
+            || self.vector.is_some()
+            || self.text.is_some()
+            || self.move_session.is_some();
+        let state = self.command_state();
+        let availability = |c: Command| state.enabled(c);
+        let checked = |c: Command| state.checked(c);
+        let mut quick = None;
+        let mut action = None;
+        panels.show_options(ctx, &palette, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                quick = toolbar::row1(ui, &self.icons, &availability, &checked);
+                ui.separator();
+                action = toolbar::row2(
+                    ui,
+                    self.tool,
+                    &mut self.settings,
+                    &mut self.row2,
+                    &self.icons,
+                    &palette,
+                    finish_enabled,
+                );
+            });
+        });
+        match action {
+            Some(Row2Action::SelectTool(tool)) => self.set_tool(tool),
+            Some(Row2Action::Finish) => {
+                self.commit_gradient();
+                self.commit_vector();
+                self.commit_text();
+                self.finish_move();
+            }
+            None => {}
         }
+        if let Some(c) = quick {
+            self.execute(ctx, Triggered::once(c));
+        }
+    }
+
+    /// The tool rail and the right dock (Colors, Layers, History).
+    fn docked_panels(&mut self, ctx: &egui::Context, panels: &mut Panels, now: Instant) {
+        let palette = theme::palette(ctx);
         let mut picked_tool = None;
         let mut layer_actions = Vec::new();
         let mut history_action = None;
@@ -1186,28 +1262,38 @@ impl PaintNotNetApp {
         let enabled = |c: Command| availability.iter().any(|&(k, v)| k == c && v);
         let tool = self.tool;
         let icons = &self.icons;
+        panels.show_rail(ctx, &palette, |ui, max_height| {
+            picked_tool = windows::tools(ui, tool, icons, &palette, max_height)
+        });
         let settings = &mut self.settings;
         let colors = &mut self.colors;
         let workspace_tabs = &mut self.workspace;
-        self.panels
-            .show(ctx, workspace, &palette, |panel, ui| match panel {
-                Panel::Tools => picked_tool = windows::tools(ui, tool, icons, &palette),
-                Panel::History => {
-                    history_action =
-                        windows::history(ui, workspace_tabs.active(), icons, &palette, &enabled)
+        panels.show_dock(ctx, &palette, |panel, part, ui| match (panel, part) {
+            (Panel::Colors, Part::Actions) => colors.actions(ui),
+            (Panel::Colors, Part::Body) => colors.ui(ui, settings, icons),
+            (Panel::Layers, Part::Actions) => {
+                if let Some(c) = windows::layers_actions(ui, icons, &enabled) {
+                    layer_actions.push(LayersAction::Command(c));
                 }
-                Panel::Layers => {
-                    layer_actions = windows::layers(
-                        ui,
-                        workspace_tabs.active_mut(),
-                        icons,
-                        &palette,
-                        &enabled,
-                        now,
-                    )
+            }
+            (Panel::Layers, Part::Body) => layer_actions.extend(windows::layers(
+                ui,
+                workspace_tabs.active_mut(),
+                &palette,
+                now,
+            )),
+            (Panel::History, Part::Actions) => {
+                if let Some(c) = windows::history_actions(ui, icons, &enabled) {
+                    history_action = Some(windows::HistoryAction::Command(c));
                 }
-                Panel::Colors => colors.ui(ui, settings, icons),
-            });
+            }
+            (Panel::History, Part::Body) => {
+                if let Some(a) = windows::history(ui, workspace_tabs.active(), icons, &palette) {
+                    history_action = Some(a);
+                }
+            }
+            (Panel::Tools, _) => {}
+        });
         if let Some(tool) = picked_tool {
             self.set_tool(tool);
         }
@@ -1251,6 +1337,76 @@ impl PaintNotNetApp {
             None => {}
         }
     }
+}
+
+/// The app mark at the left of the title bar.
+fn logo(ui: &mut egui::Ui, palette: &theme::Palette) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::hover());
+    let r = egui::Rect::from_center_size(rect.center(), egui::vec2(18.0, 18.0));
+    ui.painter().rect_filled(r, 5, palette.accent);
+    let p = |x: f32, y: f32| r.min + egui::vec2(x, y) * (18.0 / 24.0) - egui::vec2(3.0, 3.0) * 0.75;
+    ui.painter()
+        .add(egui::epaint::QuadraticBezierShape::from_points_stroke(
+            [p(7.0, 16.0), p(12.0, 14.0), p(17.0, 8.0)],
+            false,
+            egui::Color32::TRANSPARENT,
+            egui::Stroke::new(2.0, palette.on_accent),
+        ));
+    ui.add_space(6.0);
+}
+
+/// The title bar's "Search commands" box; clicking it opens the command palette.
+fn search_field(ui: &mut egui::Ui, palette: &theme::Palette) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(220.0, 28.0), egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Search commands")
+    });
+    let fill = if response.hovered() {
+        palette.hover.gamma_multiply(1.6)
+    } else {
+        palette.hover
+    };
+    ui.painter().rect(
+        rect,
+        theme::radius::CONTROL,
+        fill,
+        egui::Stroke::new(1.0, palette.window_border),
+        egui::StrokeKind::Inside,
+    );
+    // Magnifier.
+    let c = egui::pos2(rect.min.x + 15.0, rect.center().y - 1.0);
+    let stroke = egui::Stroke::new(1.5, palette.faint_text);
+    ui.painter().circle_stroke(c, 4.5, stroke);
+    ui.painter()
+        .line_segment([c + egui::vec2(3.3, 3.3), c + egui::vec2(6.5, 6.5)], stroke);
+    ui.painter().text(
+        egui::pos2(rect.min.x + 28.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        "Search commands",
+        egui::FontId::proportional(theme::text::BODY),
+        palette.faint_text,
+    );
+    let keys = Command::CommandPalette.shortcut_text().unwrap_or_default();
+    let galley = ui.painter().layout_no_wrap(
+        keys,
+        egui::FontId::monospace(theme::text::SMALL),
+        palette.faint_text,
+    );
+    let chip = egui::Rect::from_min_size(
+        egui::pos2(
+            rect.max.x - 8.0 - galley.size().x - 12.0,
+            rect.center().y - 10.0,
+        ),
+        egui::vec2(galley.size().x + 12.0, 20.0),
+    );
+    ui.painter()
+        .rect_filled(chip, theme::radius::SMALL, palette.hover);
+    ui.painter().galley(
+        chip.center() - galley.size() / 2.0,
+        galley,
+        palette.faint_text,
+    );
+    response.on_hover_text("Search commands")
 }
 
 /// What command availability and check marks depend on, copied out of the app so menu
@@ -1474,33 +1630,7 @@ impl eframe::App for PaintNotNetApp {
         }
 
         self.sync_global_menu(&ctx, modal_open && !self.menu.open);
-        self.top_band(ui, &ctx);
-        egui::Panel::top("tool_options").show(ui, |ui| {
-            // The toolbar's Finish commits pending tool work, as Enter does.
-            let finish_enabled = self.gradient.is_some()
-                || self.vector.is_some()
-                || self.text.is_some()
-                || self.move_session.is_some();
-            let palette = theme::palette(&ctx);
-            match toolbar::row2(
-                ui,
-                self.tool,
-                &mut self.settings,
-                &mut self.row2,
-                &self.icons,
-                &palette,
-                finish_enabled,
-            ) {
-                Some(Row2Action::SelectTool(tool)) => self.set_tool(tool),
-                Some(Row2Action::Finish) => {
-                    self.commit_gradient();
-                    self.commit_vector();
-                    self.commit_text();
-                    self.finish_move();
-                }
-                None => {}
-            }
-        });
+        self.title_bar(ui, &ctx);
         self.toolbar_feather();
         let active = self.workspace.active();
         let info = StatusInfo {
@@ -1517,7 +1647,14 @@ impl eframe::App for PaintNotNetApp {
             units: self.units,
             dpi: active.map_or(pnn_core::DEFAULT_DPI, |t| t.doc.dpi),
         };
+        let band = theme::palette(&ctx).band;
         let status_action = egui::Panel::bottom("status")
+            .exact_size(STATUS_BAR_HEIGHT)
+            .frame(
+                egui::Frame::new()
+                    .fill(band)
+                    .inner_margin(egui::Margin::symmetric(12, 0)),
+            )
             .show(ui, |ui| {
                 status::status_bar(ui, &info, &mut self.status, &self.icons)
             })
@@ -1597,22 +1734,28 @@ impl eframe::App for PaintNotNetApp {
                     .map_or(pnn_core::DEFAULT_DPI, |t| t.doc.dpi),
             )
         });
-        let workspace_rect = egui::CentralPanel::default()
+        let mut panels = std::mem::take(&mut self.panels);
+        egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
                 let rect = ui.max_rect();
+                let free = panels.arrange(rect);
                 match self.workspace.active_mut() {
-                    Some(tab) => canvas::show(ui, tab, &mut self.canvas, gpu),
+                    Some(tab) => canvas::show(ui, tab, &mut self.canvas, free, gpu),
                     None => {
                         self.canvas.cursor = None;
                         ui.painter()
                             .rect_filled(rect, 0.0, theme::palette(ui.ctx()).surround);
                     }
                 }
-                rect
-            })
-            .inner;
-        self.floating_windows(&ctx, workspace_rect, now);
+            });
+        self.options_bar(&ctx, &mut panels);
+        self.docked_panels(&ctx, &mut panels, now);
+        if panels.take_changed() {
+            self.config.dock = panels.to_dock();
+            self.save_config();
+        }
+        self.panels = panels;
         let tool_events = std::mem::take(&mut self.canvas.events);
         if self.modal.is_none() && self.doc_dialog.is_none() {
             self.tool_events(tool_events);

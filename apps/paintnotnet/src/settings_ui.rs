@@ -52,6 +52,7 @@ impl PaintNotNetApp {
         });
         crate::commands::set_overrides(self.config.overrides());
         self.canvas.wheel = self.config.mouse_wheel;
+        self.panels.load(&self.config.dock);
         if let Some(a) = self.autosave.as_mut() {
             a.set_interval(self.config.autosave_minutes);
         }
@@ -59,6 +60,11 @@ impl PaintNotNetApp {
 
     fn config_changed(&mut self, ctx: &egui::Context) {
         self.apply_config(ctx);
+        self.save_config();
+    }
+
+    /// Write the settings file (tests have no path and keep settings in memory).
+    pub(crate) fn save_config(&self) {
         if let Some(p) = &self.config_path
             && let Err(e) = self.config.save(p)
         {

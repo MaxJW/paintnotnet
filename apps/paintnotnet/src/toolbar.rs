@@ -1,7 +1,7 @@
 //! Tool bar: row 1 (common commands) and row 2 (tool choice + the active tool's options),
 //! following paint.net 5's `Toolbar.html` and screenshots.
 
-use eframe::egui::{self, Color32, Rect, Sense, Stroke, pos2, vec2};
+use eframe::egui::{self, Rect, Sense, vec2};
 use pnn_core::BlendMode;
 use pnn_tools::*;
 
@@ -17,12 +17,16 @@ fn icon_button(
     enabled: bool,
     selected: bool,
 ) -> egui::Response {
-    ui.add_enabled(
-        enabled,
-        egui::Button::image(icons.image(icon))
-            .frame(selected || enabled)
-            .selected(selected),
-    )
+    ui.scope(|ui| {
+        ui.spacing_mut().button_padding = vec2(5.0, 5.0);
+        ui.add_enabled(
+            enabled,
+            egui::Button::image(icons.image(icon))
+                .frame_when_inactive(selected)
+                .selected(selected),
+        )
+    })
+    .inner
     .on_hover_text(tip)
     .on_disabled_hover_text(tip)
 }
@@ -130,7 +134,8 @@ pub fn row2(
     finish_enabled: bool,
 ) -> Option<Row2Action> {
     let mut action = None;
-    ui.horizontal(|ui| {
+    // Items go straight into the caller's (wrapping) layout so a long row breaks between them.
+    {
         ui.spacing_mut().item_spacing.x = 3.0;
         ui.label("Tool:");
         let response = egui::containers::menu::MenuButton::from_button(
@@ -174,7 +179,7 @@ pub fn row2(
                 action = Some(Row2Action::Finish);
             }
         }
-    });
+    }
     action
 }
 
@@ -911,30 +916,21 @@ fn pct_bar(ui: &mut egui::Ui, value: &mut u8, palette: &Palette) {
     if ui.small_button("−").clicked() {
         *value = value.saturating_sub(1);
     }
-    let (rect, response) = ui.allocate_exact_size(vec2(120.0, 18.0), Sense::click_and_drag());
-    ui.painter().rect_filled(rect, 0.0, palette.list);
+    let (rect, response) = ui.allocate_exact_size(vec2(120.0, 22.0), Sense::click_and_drag());
+    let rounding = crate::theme::radius::SMALL;
+    ui.painter().rect_filled(rect, rounding, palette.list);
     let filled = Rect::from_min_size(
         rect.min,
         vec2(rect.width() * *value as f32 / 100.0, rect.height()),
     );
     ui.painter()
-        .rect_filled(filled, 0.0, Color32::from_rgb(0x00, 0x78, 0xd7));
-    ui.painter().rect_stroke(
-        rect,
-        0.0,
-        Stroke::new(1.0, palette.window_border),
-        egui::StrokeKind::Inside,
-    );
+        .rect_filled(filled, rounding, palette.accent_alpha(0.45));
     ui.painter().text(
-        pos2(rect.min.x + 5.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
         format!("{value}%"),
-        egui::FontId::proportional(12.0),
-        if *value > 15 {
-            Color32::WHITE
-        } else {
-            palette.text
-        },
+        egui::FontId::monospace(crate::theme::text::MONO),
+        palette.text,
     );
     if (response.dragged() || response.clicked())
         && let Some(p) = response.interact_pointer_pos()

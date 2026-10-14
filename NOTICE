@@ -35,3 +35,9 @@ Used under the MIT License (text above).
 libwebp (https://chromium.googlesource.com/webm/libwebp), compiled in through the libwebp-sys
 crate to encode WebP. Copyright (c) 2010, Google Inc. All rights reserved. Used under its
 BSD 3-Clause licence; see the COPYING file in the libwebp-sys crate's vendor directory.
+
+-------------------------------------------------------------------------------
+
+Geist and Geist Mono (https://github.com/vercel/geist-font), the UI typeface, are embedded
+unmodified from release v1.7.2. Copyright 2024 The Geist Project Authors. Licensed under the
+SIL Open Font License, Version 1.1; the full licence is in assets/fonts/geist/OFL.txt.

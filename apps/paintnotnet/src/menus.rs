@@ -352,7 +352,7 @@ pub fn mnemonic_char(label: &str) -> Option<char> {
 
 fn label_job(label: &str, underline: bool, color: Color32) -> LayoutJob {
     let (text, i) = parse_mnemonic(label);
-    let font = FontId::proportional(12.0);
+    let font = FontId::proportional(crate::theme::text::BODY);
     let mut job = LayoutJob::default();
     let normal = egui::TextFormat {
         font_id: font.clone(),
@@ -585,6 +585,19 @@ pub fn help_button(
         .expect("help menu");
     let button = egui::Button::image(icons.image(Icon::Help)).frame_when_inactive(false);
     menu_button(ui, help, button, state, cx, icons, &order)
+}
+
+/// Natural width of the menu bar (egui's `MenuBar` otherwise takes all the width it gets).
+pub fn menu_bar_width(ui: &egui::Ui) -> f32 {
+    let pad = ui.spacing().button_padding.x * 2.0 + ui.spacing().item_spacing.x;
+    menus()
+        .iter()
+        .filter(|m| m.id != MenuId::Help)
+        .map(|m| {
+            let job = label_job(m.title, false, ui.visuals().text_color());
+            ui.painter().layout_job(job).size().x + pad
+        })
+        .sum()
 }
 
 /// Draw the menu bar (File … Effects). Returns the chosen command.

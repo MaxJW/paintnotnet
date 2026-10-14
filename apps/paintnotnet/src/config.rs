@@ -28,6 +28,31 @@ pub enum MouseWheel {
     Scroll,
 }
 
+/// The docked panels' layout, remembered between sessions.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Dock {
+    /// Width of the right-hand dock (Colors, Layers, History), in points.
+    pub width: f32,
+    /// Height of the History section, in points.
+    pub history_height: f32,
+    /// Panels hidden with F5–F8 ("Tools", "History", "Layers", "Colors").
+    pub hidden: Vec<String>,
+    /// Sections collapsed to their title.
+    pub collapsed: Vec<String>,
+}
+
+impl Default for Dock {
+    fn default() -> Self {
+        Self {
+            width: 300.0,
+            history_height: 192.0,
+            hidden: Vec::new(),
+            collapsed: Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -39,6 +64,7 @@ pub struct Config {
     pub autosave_minutes: u32,
     /// Rebound shortcuts: command id → chords ("Ctrl+Shift+K"); empty = unbound.
     pub shortcuts: BTreeMap<String, Vec<String>>,
+    pub dock: Dock,
 }
 
 impl Default for Config {
@@ -49,6 +75,7 @@ impl Default for Config {
             global_menu: true,
             autosave_minutes: 1,
             shortcuts: BTreeMap::new(),
+            dock: Dock::default(),
         }
     }
 }
@@ -115,6 +142,12 @@ mod tests {
         let mut c = Config {
             appearance: Appearance::Light,
             autosave_minutes: 5,
+            dock: Dock {
+                width: 340.0,
+                history_height: 150.0,
+                hidden: vec!["Tools".into()],
+                collapsed: vec!["Colors".into()],
+            },
             ..Config::default()
         };
         let chord = Chord {

@@ -10,7 +10,7 @@ the git branch `recreation` and tag `recreation-2026-10-13` keep that faithful p
 modernised paint.net, "keeping things vaguely in place" but with docked side panels instead of draggable windows, a
 glassy, great-looking UI, better tool controls (brush size first), super smooth performance, extra features, and better
 maths wherever something we copied (paint.net 3.36, BoltBait) can be done more accurately or faster. **Next:** Phase 13
-(design system and docked shell), starting with mockups to agree on the look. The recreation backlog (rest of the
+(design system and docked shell): design A chosen; 13a and 13b done, 13c (glass) next. The recreation backlog (rest of the
 BoltBait pack, Sketch Blur, comparing against the 5.1.12 release files) is parked below and done on the `recreation`
 branch only if wanted.
 
@@ -282,16 +282,59 @@ better (say so when changing one); where we improve on a paint.net or BoltBait a
 ours is better, and keep a test showing the difference.
 
 ## Phase 13: Design system and docked shell
-- [ ] Mockups first (as artifacts) of 2–3 directions to choose from: palette, type, spacing, panel style, glass
-- [ ] Design tokens (colour, radius, spacing, type scale, motion) applied to every egui widget: one look across menus,
-      toolbars, dialogs, effect dialogs, panels; light and dark
-- [ ] Docked side panels instead of floating windows: tools on the left; Colors, Layers, History stacked on the right;
-      resizable, collapsible, remembered; F5–F8 still toggle them
-- [ ] Glass: panels and dialogs over the canvas get a frosted, blurred backdrop (our own wgpu blur of the canvas behind
-      them; plain translucent fallback), plus KDE's window blur protocol for the window background where it helps
-- [ ] New original icon set in one style (replacing the 3.36 icons); a font with good hinting (e.g. Inter, OFL)
-- [ ] Motion: short, consistent animations for panels, menus and dialogs; never in the way of drawing
-- [ ] Custom per-tool cursors (egui can't show cursor images: draw them ourselves over the canvas)
+- [x] Mockups (2026-10-14, https://claude.ai/artifact/RRHVupDEdejtHvbVwLuDWE): A Graphite Glass, B Studio Solid,
+      C Daylight Frost. **The user chose A** (2026-10-14): dark graphite, the canvas fills the window and the panels
+      float over it as frosted-glass islands (tool rail left; tool options bar on top; Colors, Layers, History stacked
+      on the right), document tabs and a command search in the title bar, one blue accent, Geist + Geist Mono.
+- Decisions (2026-10-14): the quick buttons (New, Open, Save, Print, Cut, Copy, Paste, Crop, Deselect, Undo, Redo,
+  Grid, Rulers) go at the start of the tool options bar; icons are **Lucide** (ISC), replacing the 3.36 icons; menu
+  items without a good Lucide match show no icon. A's Colors picker (square + hue, OKLCH) and brush-size presets are
+  Phase 14's; Phase 13 restyles the existing controls.
+### 13a ✅ Design tokens and type
+- [x] Tokens in `theme.rs`: colours for A's dark look and a light counterpart (same structure), corner radii,
+      spacing, type scale, motion durations, control height; mapped onto every egui widget (menus, popups, buttons,
+      sliders, checkboxes, text boxes, combo boxes, windows, floating scrollbars), so dialogs, effect dialogs,
+      Settings and the command palette all follow; dialog title bars no longer turn blue
+- [x] Geist (Regular, Medium, SemiBold) and Geist Mono v1.7.2 (SIL OFL 1.1) embedded from `assets/fonts/geist/`
+      with their licence (NOTICE, PKGBUILD installs `Geist-OFL.txt`); the desktop's UI font stays as a fallback for
+      scripts Geist lacks (e.g. CJK layer names)
+- **Verified 2026-10-14:** unit tests check every text colour against every surface (WCAG ≥ 7:1 body, ≥ 4.5:1
+  secondary and hints, ≥ 4.5:1 on the accent) in both themes, and that each font family starts with Geist and has
+  fallbacks; renders of menus, Settings and an effect dialog checked by eye.
+### 13b ✅ Docked shell
+- [x] Title bar: logo, menus (sized to their contents), document tabs centred (thumbnail, name, • when unsaved,
+      close button on the active/hovered tab, drag to reorder, middle-click closes), "Search commands" box (opens the
+      Ctrl+K palette), the four panel toggles (paint.net's top-right icons, kept so the panels stay reachable by
+      mouse), Settings and Help
+- [x] Islands over a full-bleed canvas (`panels.rs`, replacing the 3.36 `SnapManager` floating windows): tool rail
+      top-left in groups (select, move, view, paint, pick, draw), one column, two when the window is too short; tool
+      options bar along the top with the quick buttons first, wrapping onto more lines when it doesn't fit; right
+      dock with Colors (sized to its contents; "More" opens the sliders below the wheel), Layers (fills the room) and
+      History; Layers and History buttons moved into their title rows. Dock width drags from its left edge
+      (240–520 pt), History's height from the gap above it, a section collapses by clicking its title; all saved in
+      `settings.toml` (`[dock]`). F5–F8 toggle panels, Ctrl+Shift+F5–F8 reset size
+- [x] The canvas fits and centres in the free area between the islands and draws under them; scrollbars are thin
+      pills floating over the image
+- [x] Status bar on the title bar's band colour
+- **Verified 2026-10-14:** layout unit tests (design A's geometry at 1440×900, hidden panels free the canvas,
+  collapsed sections, History squeezed before Layers on short windows, settings round trip); UI tests: no island
+  overlaps another or the free canvas, rail one column and left, dock stacked in order; dragging the dock edge 60 pt
+  widens it by 60, clicking History's title collapses it to 36 pt and both land in the saved settings; every
+  earlier UI test still passes (116). Renders checked: dark, light, zoomed to 300% (pixels sampled in the gaps
+  show the image running under the islands). **On the real desktop** (Wayland, Vulkan): smoke test 164.6 fps with
+  an image open; a screenshot of the window shows the layout, with the rail in two columns at the default size.
+- Known rough edges for Phase 14: the paintbrush's options wrap onto three lines at 1202 pt wide, and a label can
+  wrap away from its control; tool and command icons are still the 3.36 bitmaps until 13d.
+### 13c Glass
+- [ ] wgpu: the canvas is drawn a second time at reduced size and blurred; islands, dialogs and popups paint that
+      blurred backdrop (rounded, tinted) behind their contents; plain translucent fill when the GPU path isn't available
+- [ ] KDE window blur protocol: not needed for A (the window is opaque); skipped unless that changes
+### 13d Icons and cursors
+- [ ] Lucide SVGs (pinned version, ISC licence in NOTICE) rendered and tinted to the theme; every tool, toolbar and
+      panel button; 3.36 icons removed from the build (kept in `assets/icons/pdn336` for the `recreation` branch)
+- [ ] Per-tool cursors drawn over the canvas (egui can't show cursor images)
+### 13e Motion
+- [ ] Short, consistent animations for islands, sections, menus and dialogs; never in the way of drawing
 
 ## Phase 14: Tool controls
 - [ ] Brush size: on-canvas resize gesture with a live outline and readout, a size slider with a stroke preview,

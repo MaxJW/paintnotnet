@@ -87,22 +87,22 @@ pub struct GpuSync {
 }
 
 pub fn surround_color(ui: &egui::Ui) -> egui::Color32 {
-    if ui.visuals().dark_mode {
-        egui::Color32::from_gray(48)
-    } else {
-        egui::Color32::from_gray(171)
-    }
+    crate::theme::palette(ui.ctx()).surround
 }
 
 pub fn show(
     ui: &mut egui::Ui,
     tab: &mut DocumentTab,
     state: &mut CanvasState,
+    free: Rect,
     gpu: Option<&egui_wgpu::RenderState>,
 ) {
     let ppp = ui.ctx().pixels_per_point() as f64;
-    let outer = snap_to_pixels(ui.available_rect_before_wrap(), ppp as f32);
-    ui.allocate_rect(outer, Sense::hover());
+    // The image is drawn over the whole area (it runs on under the panels' glass); fitting,
+    // centring, rulers and scrollbars use the part the panels leave free.
+    let area = snap_to_pixels(ui.available_rect_before_wrap(), ppp as f32);
+    ui.allocate_rect(area, Sense::hover());
+    let outer = snap_to_pixels(free.intersect(area), ppp as f32);
     let full = if state.rulers.is_some() {
         Rect::from_min_max(outer.min + vec2(RULER, RULER), outer.max)
     } else {
@@ -134,7 +134,7 @@ pub fn show(
     state.viewport = vp;
     state.rect = Some(canvas_rect);
 
-    let response = ui.interact(canvas_rect, ui.id().with("canvas"), Sense::click_and_drag());
+    let response = ui.interact(area, ui.id().with("canvas"), Sense::click_and_drag());
     let space_held =
         ui.input(|i| i.key_down(egui::Key::Space)) && !ui.ctx().egui_wants_keyboard_input();
 
@@ -248,11 +248,7 @@ pub fn show(
                         PointerButton::Secondary => ToolButton::Secondary,
                         _ => continue,
                     };
-                    if pressed
-                        && state.tool_button.is_none()
-                        && over_canvas
-                        && canvas_rect.contains(pos)
-                    {
+                    if pressed && state.tool_button.is_none() && over_canvas && area.contains(pos) {
                         state.tool_button = Some(b);
                         state.events.push(ToolEvent::Down {
                             pos: to_img(pos),
@@ -274,7 +270,7 @@ pub fn show(
 
     state.cursor = ui
         .input(|i| i.pointer.hover_pos())
-        .filter(|p| canvas_rect.contains(*p))
+        .filter(|p| area.contains(*p))
         .map(|p| {
             view.screen_to_image(
                 [
@@ -286,43 +282,29 @@ pub fn show(
         });
 
     let view = *view;
-    scrollbars(ui, full, canvas_rect, tab, ppp);
-    if let Some((units, dpi)) = state.rulers {
-        rulers(
-            ui,
-            outer,
-            canvas_rect,
-            &view,
-            vp,
-            ppp,
-            units,
-            dpi,
-            state.cursor,
-        );
-    }
-
-    ui.painter()
-        .rect_filled(canvas_rect, 0.0, surround_color(ui));
+    ui.painter().rect_filled(area, 0.0, surround_color(ui));
     if let Some(gpu) = gpu {
         sync_gpu(gpu, tab);
         if let Some((rev, mask)) = &state.overlay {
             sync_overlay(gpu, tab, *rev, mask);
         }
+        // The view's coordinates start at the free area; the callback covers all of `area`.
         let origin = view.image_to_screen([0.0, 0.0], vp);
+        let shift = (canvas_rect.min - area.min) * ppp as f32;
         let uniforms = ViewUniforms {
-            origin: [origin[0] as f32, origin[1] as f32],
+            origin: [origin[0] as f32 + shift.x, origin[1] as f32 + shift.y],
             zoom: view.zoom as f32,
             ppp: ppp as f32,
-            viewport: [vp[0] as f32, vp[1] as f32],
+            viewport: [area.width() * ppp as f32, area.height() * ppp as f32],
             image_size: [img[0] as f32, img[1] as f32],
             grid: if state.pixel_grid { 1.0 } else { 0.0 },
             overlay: if state.overlay.is_some() { 1.0 } else { 0.0 },
             ..Default::default()
         };
         ui.painter()
-            .with_clip_rect(canvas_rect)
+            .with_clip_rect(area)
             .add(egui_wgpu::Callback::new_paint_callback(
-                canvas_rect,
+                area,
                 CanvasCallback {
                     key: tab.key,
                     uniforms,
@@ -331,10 +313,10 @@ pub fn show(
     }
     if !tab.doc.selection().is_empty() {
         let contours = tab.ant_contours(ui.ctx());
-        marching_ants(ui, &contours, &view, canvas_rect, vp, ppp);
+        marching_ants(ui, &contours, &view, canvas_rect, area, vp, ppp);
     }
     if let Some(handles) = state.handles {
-        let painter = ui.painter().with_clip_rect(canvas_rect);
+        let painter = ui.painter().with_clip_rect(area);
         for h in handles {
             let sp = view.image_to_screen(h, vp);
             let c = egui::pos2(
@@ -354,7 +336,7 @@ pub fn show(
     }
     if let Some(nubs) = state.gradient_nubs {
         // 3.36 draws the gradient's nubs as circles (`MoveNubShape.Circle`).
-        let painter = ui.painter().with_clip_rect(canvas_rect);
+        let painter = ui.painter().with_clip_rect(area);
         let pts = nubs.map(|p| {
             let sp = view.image_to_screen(p, vp);
             egui::pos2(
@@ -385,7 +367,7 @@ pub fn show(
         let r = ((d as f64 / 2.0 * view.zoom / ppp) as f32).max(3.0);
         let t = ui.input(|i| i.time);
         let alpha = (((t * 1000.0 / 300.0).sin() + 1.0) / 2.0 * 224.0 + 31.0) as u8;
-        let painter = ui.painter().with_clip_rect(canvas_rect);
+        let painter = ui.painter().with_clip_rect(area);
         painter.circle_stroke(
             c,
             r + 1.0,
@@ -400,7 +382,7 @@ pub fn show(
     }
     if let Some(handles) = &state.vector_handles {
         // Pulsing nubs (paint.net 5 pulses them so they stand out) and the move icon.
-        let painter = ui.painter().with_clip_rect(canvas_rect);
+        let painter = ui.painter().with_clip_rect(area);
         let to_screen = |p: [f64; 2]| {
             let sp = view.image_to_screen(p, vp);
             egui::pos2(
@@ -448,7 +430,7 @@ pub fn show(
         ui.ctx().request_repaint();
     }
     if let Some((top, bottom, nub)) = state.text_handles {
-        let painter = ui.painter().with_clip_rect(canvas_rect);
+        let painter = ui.painter().with_clip_rect(area);
         let to_screen = |p: [f64; 2]| {
             let sp = view.image_to_screen(p, vp);
             egui::pos2(
@@ -479,7 +461,7 @@ pub fn show(
     }
     // The brush outline around the pointer (paint.net's `BrushPreviewRenderer`).
     if let (Some(d), Some(cur)) = (state.brush_outline, state.cursor)
-        && ui.rect_contains_pointer(canvas_rect)
+        && ui.rect_contains_pointer(area)
     {
         let sp = view.image_to_screen(cur, vp);
         let c = egui::pos2(
@@ -488,10 +470,25 @@ pub fn show(
         );
         let r = (d as f64 / 2.0 * view.zoom / ppp) as f32;
         if r >= 2.0 {
-            let painter = ui.painter().with_clip_rect(canvas_rect);
+            let painter = ui.painter().with_clip_rect(area);
             painter.circle_stroke(c, r + 1.0, egui::Stroke::new(1.0, egui::Color32::WHITE));
             painter.circle_stroke(c, r, egui::Stroke::new(1.0, egui::Color32::BLACK));
         }
+    }
+    // Last, so they sit over the image (it now runs under them).
+    scrollbars(ui, full, canvas_rect, tab, ppp);
+    if let Some((units, dpi)) = state.rulers {
+        rulers(
+            ui,
+            outer,
+            canvas_rect,
+            &view,
+            vp,
+            ppp,
+            units,
+            dpi,
+            state.cursor,
+        );
     }
 }
 
@@ -633,22 +630,25 @@ fn scrollbars(ui: &mut egui::Ui, full: Rect, canvas: Rect, tab: &mut DocumentTab
             delta[axis] = if before { -vp[axis] } else { vp[axis] };
             view.scroll_by(delta, img, vp);
         }
-        let visuals = ui.visuals();
-        ui.painter()
-            .rect_filled(track, 0.0, visuals.extreme_bg_color);
-        let fill = if response.dragged() || response.hovered() {
-            visuals.widgets.hovered.bg_fill
+        // A thin pill floating over the image (no track), thicker while in use.
+        let active = response.dragged() || response.hovered();
+        let thickness = if active { 8.0 } else { 5.0 };
+        let pill = if axis == 0 {
+            Rect::from_center_size(thumb.center(), vec2(thumb.width(), thickness))
         } else {
-            visuals.widgets.inactive.bg_fill
+            Rect::from_center_size(thumb.center(), vec2(thickness, thumb.height()))
         };
-        ui.painter().rect_filled(thumb, 3.0, fill);
-    }
-    // Corner square where both scrollbars meet.
-    if canvas.max.x < full.max.x && canvas.max.y < full.max.y {
-        ui.painter().rect_filled(
-            Rect::from_min_max(canvas.max, full.max),
-            0.0,
-            ui.visuals().extreme_bg_color,
+        let fill = if active {
+            egui::Color32::from_rgba_unmultiplied(170, 175, 185, 230)
+        } else {
+            egui::Color32::from_rgba_unmultiplied(130, 135, 145, 190)
+        };
+        ui.painter().rect(
+            pill,
+            thickness / 2.0,
+            fill,
+            egui::Stroke::new(1.0, egui::Color32::from_black_alpha(90)),
+            egui::StrokeKind::Outside,
         );
     }
 }
@@ -782,13 +782,14 @@ fn marching_ants(
     contours: &[pnn_core::selection::Contour],
     view: &View,
     canvas: Rect,
+    clip: Rect,
     vp: [f64; 2],
     ppp: f64,
 ) {
-    let painter = ui.painter().with_clip_rect(canvas);
+    let painter = ui.painter().with_clip_rect(clip);
     let time = ui.input(|i| i.time);
     let offset = ((time * 12.0) % 8.0) as f32;
-    let visible = canvas.expand(4.0);
+    let visible = clip.expand(4.0);
     let to_screen = |p: [f64; 2]| {
         let s = view.image_to_screen(p, vp);
         egui::pos2(

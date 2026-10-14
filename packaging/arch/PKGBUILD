@@ -70,4 +70,6 @@ package() {
   install -Dm644 LICENSE NOTICE -t "$pkgdir/usr/share/licenses/$pkgname/"
   install -Dm644 assets/icons/pdn336/README.md \
     "$pkgdir/usr/share/licenses/$pkgname/paint.net-3.36-icons.md"
+  install -Dm644 assets/fonts/geist/OFL.txt \
+    "$pkgdir/usr/share/licenses/$pkgname/Geist-OFL.txt"
 }

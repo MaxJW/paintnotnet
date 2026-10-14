@@ -170,7 +170,6 @@ impl Default for ColorsState {
 
 const WHEEL: f32 = 150.0;
 const SWATCH: f32 = 11.0;
-const MORE_WIDTH: f32 = 180.0;
 
 impl ColorsState {
     fn slot(settings: &ToolSettings, inactive: bool) -> usize {
@@ -220,64 +219,58 @@ impl ColorsState {
         self.hsv_of[slot] = c;
     }
 
-    /// Preferred window width for the current mode.
-    pub fn width(&self) -> f32 {
-        if self.more { 212.0 + MORE_WIDTH } else { 212.0 }
+    /// Title-row button: "More" shows the RGB, HSV and alpha sliders under the wheel.
+    pub fn actions(&mut self, ui: &mut egui::Ui) {
+        let label = if self.more { "Less" } else { "More" };
+        if ui
+            .add(egui::Button::new(label).min_size(vec2(52.0, 24.0)))
+            .on_hover_text("Show or hide the RGB, HSV and alpha sliders")
+            .clicked()
+        {
+            self.more = !self.more;
+        }
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, settings: &mut ToolSettings, icons: &Icons) {
-        ui.horizontal_top(|ui| {
-            ui.vertical(|ui| {
-                ui.set_width(200.0);
-                ui.horizontal(|ui| {
-                    self.swatches(ui, settings, icons);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                        let label = if self.more { "<< Less" } else { "More >>" };
-                        if ui
-                            .add(egui::Button::new(label).min_size(vec2(70.0, 20.0)))
-                            .clicked()
-                        {
-                            self.more = !self.more;
-                        }
-                    });
-                });
-                ui.add_space(4.0);
-                ui.vertical_centered(|ui| self.wheel(ui, settings));
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    let add = ui.add(
-                        egui::Button::image(icons.image(Icon::AddColor)).selected(self.adding),
-                    );
-                    if add
-                        .on_hover_text(
-                            "Add color to palette: click a swatch to store the active color",
-                        )
-                        .clicked()
-                    {
-                        self.adding = !self.adding;
+        let width = ui.available_width();
+        ui.horizontal(|ui| {
+            self.swatches(ui, settings, icons);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                ui.menu_image_button(icons.image(Icon::Palettes), |ui| {
+                    if ui.button("Reset to default palette").clicked() {
+                        self.palette = DEFAULT_PALETTE
+                            .iter()
+                            .map(|&c| ColorBgra::from_u32(c))
+                            .collect();
+                        ui.close();
                     }
-                    ui.menu_image_button(icons.image(Icon::Palettes), |ui| {
-                        if ui.button("Reset to default palette").clicked() {
-                            self.palette = DEFAULT_PALETTE
-                                .iter()
-                                .map(|&c| ColorBgra::from_u32(c))
-                                .collect();
-                            ui.close();
-                        }
-                        ui.add_enabled(false, egui::Button::new("Save palette as..."));
-                        ui.add_enabled(false, egui::Button::new("Open palettes folder"));
-                    });
-                });
-                self.palette_grid(ui, settings);
+                    ui.add_enabled(false, egui::Button::new("Save palette as..."));
+                    ui.add_enabled(false, egui::Button::new("Open palettes folder"));
+                })
+                .response
+                .on_hover_text("Palettes");
+                let add = ui.add(
+                    egui::Button::image(icons.image(Icon::AddColor))
+                        .selected(self.adding)
+                        .frame_when_inactive(false),
+                );
+                if add
+                    .on_hover_text("Add color to palette: click a swatch to store the active color")
+                    .clicked()
+                {
+                    self.adding = !self.adding;
+                }
             });
-            if self.more {
-                ui.separator();
-                ui.vertical(|ui| {
-                    ui.set_width(MORE_WIDTH - 12.0);
-                    self.more_panel(ui, settings);
-                });
-            }
         });
+        let wheel = (width - 8.0).clamp(96.0, WHEEL);
+        ui.vertical_centered(|ui| self.wheel(ui, settings, wheel));
+        self.palette_grid(ui, settings, width);
+        if self.more {
+            ui.add_space(4.0);
+            ui.separator();
+            self.more_panel(ui, settings);
+        }
     }
 
     fn swatches(&mut self, ui: &mut egui::Ui, settings: &mut ToolSettings, icons: &Icons) {
@@ -366,10 +359,10 @@ impl ColorsState {
         }
     }
 
-    fn wheel(&mut self, ui: &mut egui::Ui, settings: &mut ToolSettings) {
-        let (rect, response) = ui.allocate_exact_size(vec2(WHEEL, WHEEL), Sense::click_and_drag());
+    fn wheel(&mut self, ui: &mut egui::Ui, settings: &mut ToolSettings, size: f32) {
+        let (rect, response) = ui.allocate_exact_size(vec2(size, size), Sense::click_and_drag());
         let center = rect.center();
-        let radius = WHEEL / 2.0 - 1.0;
+        let radius = size / 2.0 - 1.0;
         // Hue/saturation disc at full value, as paint.net draws it.
         let mut mesh = Mesh::default();
         mesh.colored_vertex(center, Color32::WHITE);
@@ -418,20 +411,21 @@ impl ColorsState {
             .circle_stroke(p, 2.5, Stroke::new(1.0, Color32::WHITE));
     }
 
-    fn palette_grid(&mut self, ui: &mut egui::Ui, settings: &mut ToolSettings) {
+    fn palette_grid(&mut self, ui: &mut egui::Ui, settings: &mut ToolSettings, width: f32) {
         let rows = if self.more { 6 } else { 2 };
+        let swatch = ((width - 1.0) / 16.0).floor().clamp(SWATCH, 2.0 * SWATCH);
         let (rect, _) = ui.allocate_exact_size(
-            vec2(16.0 * SWATCH + 1.0, rows as f32 * SWATCH + 1.0),
+            vec2(16.0 * swatch + 1.0, rows as f32 * swatch + 1.0),
             Sense::hover(),
         );
         for i in 0..(16 * rows).min(self.palette.len()) {
             let c = self.palette[i];
             let (col, row) = ((i % 16) as f32, (i / 16) as f32);
             let r = Rect::from_min_size(
-                rect.min + vec2(col * SWATCH, row * SWATCH),
-                vec2(SWATCH, SWATCH),
+                rect.min + vec2(col * swatch, row * swatch),
+                vec2(swatch, swatch),
             );
-            ui.painter().rect_filled(r.shrink(0.5), 0.0, to_color32(c));
+            ui.painter().rect_filled(r.shrink(1.0), 2.0, to_color32(c));
             let response = ui
                 .interact(r, ui.id().with(("swatch", i)), Sense::click())
                 .on_hover_text(to_hex(c));
@@ -610,7 +604,8 @@ fn set_ch(c: &mut ColorBgra, ch: usize, v: u8) {
 /// paint.net-style colour slider: a gradient bar with a triangle marker. Returns true when
 /// the user changed the value.
 fn gradient_slider(ui: &mut egui::Ui, value: &mut u8, stops: &[Color32]) -> bool {
-    let (rect, response) = ui.allocate_exact_size(vec2(96.0, 14.0), Sense::click_and_drag());
+    let width = (ui.available_width() - 64.0).max(96.0);
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 14.0), Sense::click_and_drag());
     let bar = Rect::from_min_max(rect.min, pos2(rect.max.x, rect.max.y - 4.0));
     checker(ui, bar);
     let mut mesh = Mesh::default();
