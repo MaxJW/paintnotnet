@@ -267,6 +267,18 @@ fn julia(mut x: f64, mut y: f64, r: f64, i: f64) -> f64 {
 }
 
 fn mandelbrot(r: f64, i: f64, factor: i32) -> f64 {
+    // Points in the main cardioid or the period-2 bulb never escape; 3.36 iterates them to
+    // the limit and every channel then clamps to 255. Infinity gives exactly that colour
+    // without the 1024 iterations (most of the default view).
+    let q = (r - 0.25) * (r - 0.25) + i * i;
+    if q * (q + (r - 0.25)) <= 0.25 * i * i || (r + 1.0) * (r + 1.0) + i * i <= 0.0625 {
+        return f64::INFINITY;
+    }
+    mandelbrot_iterate(r, i, factor)
+}
+
+/// 3.36 `MandelbrotFractalEffect.Mandelbrot`: the escape count, smoothed.
+fn mandelbrot_iterate(r: f64, i: f64, factor: i32) -> f64 {
     let (mut c, mut x, mut y) = (0i32, 0.0f64, 0.0f64);
     while c * factor < 1024 && x * x + y * y < 100000.0 {
         let t = x;
@@ -647,6 +659,29 @@ fn clouds(v: &[Value], src: &Surface, env: &Env, turb: bool) -> Box<dyn Renderer
 
 #[cfg(test)]
 mod tests {
+
+    /// Skipping the cardioid and bulb gives the same colour channels as iterating them.
+    #[test]
+    fn mandelbrot_interior_shortcut_is_exact() {
+        let channels = |m: f64, factor: i32| {
+            let c = 64.0 + factor as f64 * m;
+            let cl = |v: f64| v.clamp(0.0, 255.0) as i32;
+            [cl(c - 768.0), cl(c - 512.0), cl(c - 256.0), cl(c)]
+        };
+        for factor in [1, 3, 10] {
+            for j in 0..200 {
+                for k in 0..300 {
+                    let (r, i) = (-2.2 + k as f64 * 0.01, -1.0 + j as f64 * 0.01);
+                    assert_eq!(
+                        channels(mandelbrot(r, i, factor), factor),
+                        channels(mandelbrot_iterate(r, i, factor), factor),
+                        "({r}, {i}) factor {factor}"
+                    );
+                }
+            }
+        }
+    }
+
     use super::*;
     use crate::framework::render_rect;
 

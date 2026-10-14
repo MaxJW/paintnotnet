@@ -40,7 +40,19 @@ pub fn blend(samples: &[ColorBgra]) -> ColorBgra {
 
 /// 3.36 `Surface.GetBilinearSample` (transparent outside the surface).
 pub fn bilinear(src: &Surface, x: f32, y: f32) -> ColorBgra {
-    let (w, h) = (src.width() as f32, src.height() as f32);
+    bilinear_with(|x, y| src.get(x, y), src.width(), src.height(), x, y)
+}
+
+/// [`bilinear`] over any pixel source of `width` × `height`.
+#[inline]
+fn bilinear_with(
+    get: impl Fn(u32, u32) -> ColorBgra,
+    width: u32,
+    height: u32,
+    x: f32,
+    y: f32,
+) -> ColorBgra {
+    let (w, h) = (width as f32, height as f32);
     if !(x.is_finite() && y.is_finite()) || x < 0.0 || y < 0.0 || x >= w || y >= h {
         return ColorBgra::TRANSPARENT;
     }
@@ -48,13 +60,13 @@ pub fn bilinear(src: &Surface, x: f32, y: f32) -> ColorBgra {
     let fx = (256.0 * (x - iu as f32)) as u32;
     let fy = (256.0 * (y - iv as f32)) as u32;
     let (ix, iy) = (256 - fx, 256 - fy);
-    let right = if iu == src.width() - 1 { iu } else { iu + 1 };
-    let bottom = if iv == src.height() - 1 { iv } else { iv + 1 };
+    let right = if iu == width - 1 { iu } else { iu + 1 };
+    let bottom = if iv == height - 1 { iv } else { iv + 1 };
     let c = [
-        (src.get(iu, iv), ix * iy),
-        (src.get(right, iv), fx * iy),
-        (src.get(iu, bottom), ix * fy),
-        (src.get(right, bottom), fx * fy),
+        (get(iu, iv), ix * iy),
+        (get(right, iv), fx * iy),
+        (get(iu, bottom), ix * fy),
+        (get(right, bottom), fx * fy),
     ];
     // BlendColors4W16IP.
     let af: u64 = c.iter().map(|(p, w)| p.a as u64 * *w as u64).sum();
@@ -69,6 +81,64 @@ pub fn bilinear(src: &Surface, x: f32, y: f32) -> ColorBgra {
             / af) as u8
     };
     ColorBgra::from_bgra(ch(|p| p.b), ch(|p| p.g), ch(|p| p.r), a)
+}
+
+/// The source pixels a tile's samples can reach (the tile plus `margin`, clipped to the
+/// image), copied once: effects that take many samples per pixel then index a flat slice
+/// instead of looking up the tiled surface for every sample. Pixels outside the copy fall
+/// back to the surface, so results never depend on the margin.
+pub(crate) struct Block<'a> {
+    src: &'a Surface,
+    x0: u32,
+    y0: u32,
+    w: u32,
+    h: u32,
+    pixels: Vec<ColorBgra>,
+}
+
+impl<'a> Block<'a> {
+    pub(crate) fn new(src: &'a Surface, rect: Rect, margin: u32) -> Self {
+        let x0 = rect.x.saturating_sub(margin);
+        let y0 = rect.y.saturating_sub(margin);
+        let x1 = (rect.x + rect.width + margin).min(src.width());
+        let y1 = (rect.y + rect.height + margin).min(src.height());
+        let (w, h) = (x1 - x0, y1 - y0);
+        let mut pixels = Vec::with_capacity((w * h) as usize);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                pixels.push(src.get(x, y));
+            }
+        }
+        Self {
+            src,
+            x0,
+            y0,
+            w,
+            h,
+            pixels,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn get(&self, x: u32, y: u32) -> ColorBgra {
+        let (bx, by) = (x.wrapping_sub(self.x0), y.wrapping_sub(self.y0));
+        if bx < self.w && by < self.h {
+            self.pixels[(by * self.w + bx) as usize]
+        } else {
+            self.src.get(x, y)
+        }
+    }
+
+    #[inline]
+    pub(crate) fn bilinear(&self, x: f32, y: f32) -> ColorBgra {
+        bilinear_with(
+            |x, y| self.get(x, y),
+            self.src.width(),
+            self.src.height(),
+            x,
+            y,
+        )
+    }
 }
 
 /// Weighted 1-D tent (r+1−|d|) of `a` (length L + 2r, index r = first output): out[j] for
@@ -267,6 +337,31 @@ impl Renderer for Motion {
             *o = blend(&samples);
         }
     }
+
+    fn render_rect(&self, src: &Surface, rect: Rect, out: &mut [ColorBgra]) {
+        let reach = self
+            .points
+            .iter()
+            .map(|p| p[0].abs().max(p[1].abs()))
+            .fold(0.0f32, f32::max);
+        let block = Block::new(src, rect, reach.ceil() as u32 + 2);
+        let (w, h) = ((src.width() - 1) as f32, (src.height() - 1) as f32);
+        let mut samples = Vec::with_capacity(self.points.len());
+        for (j, row) in out.chunks_mut(rect.width.max(1) as usize).enumerate() {
+            let y = (rect.y + j as u32) as f32;
+            for (i, o) in row.iter_mut().enumerate() {
+                let x = (rect.x + i as u32) as f32;
+                samples.clear();
+                for p in &self.points {
+                    let (px, py) = (p[0] + x, p[1] + y);
+                    if px >= 0.0 && py >= 0.0 && px <= w && py <= h {
+                        samples.push(block.bilinear(px, py));
+                    }
+                }
+                *o = blend(&samples);
+            }
+        }
+    }
 }
 
 /// 3.36 Zoom Blur (fixed point).
@@ -450,6 +545,96 @@ impl<F: Fn(ColorBgra, &[[u32; 256]; 4], u32) -> ColorBgra + Send + Sync> Rendere
                 let e = edge[v.unsigned_abs() as usize];
                 put(x - e, y + v, -1, &mut hist, &mut area);
                 put(x + e + 1, y + v, 1, &mut hist, &mut area);
+            }
+        }
+    }
+
+    /// The same disc histograms, but the source block the tile needs is copied out once and
+    /// the window snakes through the tile (right along a row, down one, left along the next),
+    /// so it is never rebuilt: O(radius) per pixel with no per-row O(radius²) start-up.
+    fn render_rect(&self, src: &Surface, rect: Rect, out: &mut [ColorBgra]) {
+        let rad = self.radius;
+        let (w, h) = (src.width() as i32, src.height() as i32);
+        let (rw, rh) = (rect.width as i32, rect.height as i32);
+        if rw == 0 || rh == 0 {
+            return;
+        }
+        let cutoff = ((rad * 2 + 1) * (rad * 2 + 1) + 2) / 4;
+        let edge: Vec<i32> = (0..=rad)
+            .map(|v| {
+                (0..=rad)
+                    .filter(|u| u * u + v * v <= cutoff)
+                    .max()
+                    .unwrap_or(0)
+            })
+            .collect();
+        let e = |d: i32| edge[d.unsigned_abs() as usize];
+        // The source block every window in the tile can reach, clipped to the image.
+        let bx0 = (rect.x as i32 - rad - 1).max(0);
+        let bx1 = (rect.x as i32 + rw + rad + 1).min(w);
+        let by0 = (rect.y as i32 - rad - 1).max(0);
+        let by1 = (rect.y as i32 + rh + rad + 1).min(h);
+        let bw = (bx1 - bx0) as usize;
+        let mut block = Vec::with_capacity(bw * (by1 - by0) as usize);
+        for yy in by0..by1 {
+            for xx in bx0..bx1 {
+                block.push(src.get(xx as u32, yy as u32));
+            }
+        }
+        let mut hist = [[0u32; 256]; 4];
+        let mut area = 0u32;
+        let put = |hist: &mut [[u32; 256]; 4], area: &mut u32, x: i32, y: i32, add: bool| {
+            if x < bx0 || x >= bx1 || y < by0 || y >= by1 {
+                return;
+            }
+            let c = block[(y - by0) as usize * bw + (x - bx0) as usize];
+            if add {
+                hist[0][c.b as usize] += 1;
+                hist[1][c.g as usize] += 1;
+                hist[2][c.r as usize] += 1;
+                hist[3][c.a as usize] += 1;
+                *area += 1;
+            } else {
+                hist[0][c.b as usize] -= 1;
+                hist[1][c.g as usize] -= 1;
+                hist[2][c.r as usize] -= 1;
+                hist[3][c.a as usize] -= 1;
+                *area -= 1;
+            }
+        };
+        let (mut x, mut y) = (rect.x as i32, rect.y as i32);
+        for v in -rad..=rad {
+            for u in -e(v)..=e(v) {
+                put(&mut hist, &mut area, x + u, y + v, true);
+            }
+        }
+        for j in 0..rh {
+            if j > 0 {
+                // Down one row: each column of the disc loses its top pixel, gains one below.
+                for u in -rad..=rad {
+                    put(&mut hist, &mut area, x + u, y - e(u), false);
+                    put(&mut hist, &mut area, x + u, y + 1 + e(u), true);
+                }
+                y += 1;
+            }
+            let rightwards = j % 2 == 0;
+            for k in 0..rw {
+                let i = if rightwards { k } else { rw - 1 - k };
+                let c = block[(y - by0) as usize * bw + (x - bx0) as usize];
+                out[(j * rw + i) as usize] = (self.apply)(c, &hist, area);
+                if k + 1 == rw {
+                    break;
+                }
+                for v in -rad..=rad {
+                    if rightwards {
+                        put(&mut hist, &mut area, x - e(v), y + v, false);
+                        put(&mut hist, &mut area, x + e(v) + 1, y + v, true);
+                    } else {
+                        put(&mut hist, &mut area, x + e(v), y + v, false);
+                        put(&mut hist, &mut area, x - e(v) - 1, y + v, true);
+                    }
+                }
+                x += if rightwards { 1 } else { -1 };
             }
         }
     }
@@ -749,6 +934,60 @@ pub fn def(name: &str) -> Option<EffectDef> {
 mod tests {
     use super::*;
     use crate::framework::{Env, render_rect};
+
+    /// Tile renderers (snaking histograms, copied source blocks) must give exactly what the
+    /// row-by-row ones did.
+    #[test]
+    fn tile_renderers_match_rows() {
+        let (w, h) = (300u32, 200u32);
+        let mut src = Surface::new_transparent(w, h);
+        let mut seed = 12345u32;
+        for y in 0..h {
+            for x in 0..w {
+                seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+                let n = (seed >> 16) as u8;
+                src.set(
+                    x,
+                    y,
+                    ColorBgra::from_rgba(n, (x % 256) as u8, (y % 256) as u8, 255 - n / 4),
+                );
+            }
+        }
+        let all = Rect {
+            x: 0,
+            y: 0,
+            width: w,
+            height: h,
+        };
+        let env = Env {
+            primary: ColorBgra::BLACK,
+            secondary: ColorBgra::WHITE,
+            bounds: all,
+            selection: None,
+            layers: Vec::new(),
+            active_layer: 0,
+            selection_contours: Default::default(),
+        };
+        for (name, values) in [
+            ("Median Blur", vec![Value::Int(3), Value::Int(50)]),
+            ("Median Blur", vec![Value::Int(40), Value::Int(80)]),
+            ("Reduce Noise", vec![Value::Int(25), Value::Float(0.6)]),
+            (
+                "Motion Blur",
+                vec![Value::Float(25.0), Value::Bool(true), Value::Int(60)],
+            ),
+            ("Surface Blur", vec![Value::Int(12), Value::Int(30)]),
+        ] {
+            let d = def(name).or_else(|| crate::stylize::def(name)).unwrap();
+            let r = d.renderer(&values, &src, &env);
+            let tiles = render_rect(r.as_ref(), &src, all);
+            let mut rows = vec![ColorBgra::TRANSPARENT; (w * h) as usize];
+            for (y, row) in rows.chunks_mut(w as usize).enumerate() {
+                r.render_row(&src, 0, y as u32, row);
+            }
+            assert!(tiles == rows, "{name} {values:?}");
+        }
+    }
 
     fn checker(w: u32, h: u32) -> Surface {
         let mut s = Surface::new_transparent(w, h);

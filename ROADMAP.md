@@ -461,10 +461,23 @@ ours is better, and keep a test showing the difference.
       4.9 s, Radial Blur 4.0 s, Outline / Median / Reduce Noise / Dents ~2.5 s, Julia 2.4 s, Surface Blur, Bokeh,
       Morphology 1.1–1.4 s; accuracy: Gaussian is 3.36's tent, gradients band (256-entry table), shrinking a
       selection aliases, wand tolerance is RGB; linear-light blending not recommended as a default
-### 15b Speed on the CPU
-- [ ] Constant-time local histograms (Median, Reduce Noise, Outline, Surface Blur); Motion Blur independent of
-      distance; Morphology (van Herk / Gil–Werman); faster Mandelbrot / Julia; Radial Blur; Dents
+### 15b ✅ Speed on the CPU (exact speed-ups; the rest moves to the GPU, 15d)
+- [x] Local-histogram effects (Median, Reduce Noise, Outline, Surface Blur, Sharpen): the tile's source block is
+      copied once and the disc window snakes through the tile instead of being rebuilt every row; output is
+      bit-identical. At 75% sliders: Median 2.5 → 1.6 s, Reduce Noise 2.5 → 1.5 s, Outline 2.6 → 1.9 s, Surface
+      Blur 1.4 → 1.2 s. The rest of the cost is the O(radius) window itself: constant-time methods need a square
+      window, which would change the effects' look
+- [x] Motion Blur samples a copied source block (`Block`, reusable by other sampling effects): 4.9 → 3.8 s, output
+      identical. Its cost is the ~1.5 bilinear samples per pixel of distance, which the GPU does in milliseconds
+- [x] Mandelbrot skips points in the main cardioid and period-2 bulb (they clamp to 255 in every channel after
+      1024 iterations): exact (tested over a 300 × 200 grid at three factors); zoomed out 0.26 s, but the default
+      view sits on the boundary and stays ~4.8 s
+- Not done on the CPU, left for 15d: Radial and Zoom Blur, Julia, the remaining Mandelbrot cost, Dents and other
+  Distort effects, Bokeh, Morphology: per-sample work dominates, and the CPU options left (rotate-and-blur Motion,
+  periodicity checks) change results
 ### 15c Accuracy
+- Decisions (2026-10-14): the true Gaussian replaces the tent (no classic option); linear light is an option in the
+  blurs, off by default; the wand and bucket compare in OKLab by default, RGB under More.
 - [ ] True Gaussian (same variance as the old radius) with a linear-light option; dithered high-precision
       gradients; area-correct filtering when the move tools shrink; OKLab tolerance option for the wand and bucket
 ### 15d GPU and frame budget
