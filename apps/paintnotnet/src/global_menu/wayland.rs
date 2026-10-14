@@ -113,10 +113,12 @@ impl AppMenu {
         }
     }
 
-    /// Unlink the menu (the desktop stops showing it for this window).
+    /// Unlink the menu (the desktop stops showing it for this window). KWin keeps the last
+    /// address after the appmenu object is released, so clear the address instead; the
+    /// object stays for when the menu is linked again.
     pub fn clear(&mut self) {
-        if let Some(menu) = self.menu.take() {
-            menu.release();
+        if let Some(menu) = &self.menu {
+            menu.set_address(String::new(), String::new());
             if let Err(e) = self.conn.flush() {
                 log::warn!("global menu: {e}");
             }

@@ -462,9 +462,12 @@ impl GlobalMenu {
     /// returns the commands picked from the desktop's menu.
     pub fn update(&mut self, wanted: bool, menus: &[Menu], cx: &MenuContext) -> Vec<Command> {
         let want = wanted && self.registrar.load(Ordering::Relaxed);
-        if want && self.last_build.is_none_or(|t| t.elapsed() >= REFRESH) {
+        if self.last_build.is_none_or(|t| t.elapsed() >= REFRESH) {
             self.last_build = Some(Instant::now());
-            let items = build(menus, cx, &crate::commands::bindings());
+            // Switched off: export an empty menu, so a desktop that still remembers this
+            // window has nothing to show.
+            let source: &[Menu] = if want { menus } else { &[] };
+            let items = build(source, cx, &crate::commands::bindings());
             let mut model = self.model.lock().expect("menu model");
             if model.items != items {
                 model.items = items;
@@ -589,6 +592,20 @@ mod tests {
             let it = &items[c as usize];
             it.submenu && !it.children.is_empty()
         }));
+    }
+
+    #[test]
+    fn switched_off_exports_an_empty_menu() {
+        let enabled = |_: C| true;
+        let checked = |_: C| false;
+        let cx = MenuContext {
+            enabled: &enabled,
+            checked: &checked,
+            last_effect: None,
+        };
+        let items = build(&[], &cx, &crate::commands::bindings());
+        assert_eq!(items.len(), 1, "just the root");
+        assert!(layout(&items, 0, -1, &[]).children.is_empty());
     }
 
     #[test]

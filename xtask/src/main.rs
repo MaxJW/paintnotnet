@@ -1,6 +1,10 @@
 //! Project tasks: `cargo xtask <task>`.
 //!
 //! - `ci`: fmt check, clippy (warnings are errors), tests. Run before calling a phase done.
+//! - `install-desktop [--force]`: install the `.desktop` file and icon for this user
+//!   (`~/.local/share`), so the desktop shows paintnotnet's icon and name for a build run
+//!   from this checkout (the package installs them system-wide). `uninstall-desktop` removes
+//!   them again.
 //!
 //! CI runs at low CPU and I/O priority with a few cores left free, so the desktop stays
 //! responsive while it builds. `PNN_CI_JOBS` overrides the job count.
@@ -23,8 +27,10 @@ const CI_STEPS: &[&[&str]] = &[
 fn main() -> ExitCode {
     match std::env::args().nth(1).as_deref() {
         Some("ci") => ci(),
+        Some("install-desktop") => install_desktop(std::env::args().any(|a| a == "--force")),
+        Some("uninstall-desktop") => uninstall_desktop(),
         _ => {
-            eprintln!("usage: cargo xtask ci");
+            eprintln!("usage: cargo xtask ci | install-desktop [--force] | uninstall-desktop");
             ExitCode::from(2)
         }
     }
@@ -80,4 +86,99 @@ fn low_priority(cargo: &str) -> Command {
     }
     cmd.arg(cargo);
     cmd
+}
+
+/// Where `install-desktop` puts things: (desktop file, icon).
+fn desktop_targets() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    let data = std::env::var_os("XDG_DATA_HOME")
+        .filter(|d| !d.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/share"))
+        })?;
+    Some((
+        data.join("applications/paintnotnet.desktop"),
+        data.join("icons/hicolor/scalable/apps/paintnotnet.svg"),
+    ))
+}
+
+fn install_desktop(force: bool) -> ExitCode {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let Some((desktop, icon)) = desktop_targets() else {
+        eprintln!("no HOME or XDG_DATA_HOME");
+        return ExitCode::FAILURE;
+    };
+    // Run the checkout's release build if there is one, else the debug build.
+    let binary = ["release", "debug"]
+        .iter()
+        .map(|p| root.join("target").join(p).join("paintnotnet"))
+        .find(|b| b.exists())
+        .unwrap_or_else(|| root.join("target/release/paintnotnet"));
+    let binary = binary.canonicalize().unwrap_or(binary);
+    let entry = match std::fs::read_to_string(root.join("packaging/paintnotnet.desktop")) {
+        Ok(text) => text.replace(
+            "Exec=paintnotnet %F",
+            &format!("Exec=\"{}\" %F", binary.display()),
+        ),
+        Err(e) => {
+            eprintln!("packaging/paintnotnet.desktop: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let svg = match std::fs::read(root.join("packaging/paintnotnet.svg")) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("packaging/paintnotnet.svg: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    for (path, contents) in [(&desktop, entry.into_bytes()), (&icon, svg)] {
+        if path.exists() && std::fs::read(path).ok().as_deref() != Some(&contents[..]) && !force {
+            eprintln!(
+                "{} exists and differs; not overwriting (use --force)",
+                path.display()
+            );
+            return ExitCode::FAILURE;
+        }
+        if let Some(dir) = path.parent()
+            && let Err(e) = std::fs::create_dir_all(dir)
+        {
+            eprintln!("{}: {e}", dir.display());
+            return ExitCode::FAILURE;
+        }
+        if let Err(e) = std::fs::write(path, &contents) {
+            eprintln!("{}: {e}", path.display());
+            return ExitCode::FAILURE;
+        }
+        eprintln!("installed {}", path.display());
+    }
+    refresh_desktop_caches(&desktop);
+    eprintln!("Exec points at {}", binary.display());
+    ExitCode::SUCCESS
+}
+
+fn uninstall_desktop() -> ExitCode {
+    let Some((desktop, icon)) = desktop_targets() else {
+        return ExitCode::FAILURE;
+    };
+    for path in [&desktop, &icon] {
+        match std::fs::remove_file(path) {
+            Ok(()) => eprintln!("removed {}", path.display()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                eprintln!("{}: {e}", path.display());
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    refresh_desktop_caches(&desktop);
+    ExitCode::SUCCESS
+}
+
+/// Let the desktop notice new or removed entries (both tools are optional).
+fn refresh_desktop_caches(desktop: &std::path::Path) {
+    if let Some(dir) = desktop.parent() {
+        let _ = Command::new("update-desktop-database").arg(dir).status();
+    }
+    let _ = Command::new("kbuildsycoca6").status();
 }

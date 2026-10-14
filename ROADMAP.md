@@ -407,6 +407,19 @@ ours is better, and keep a test showing the difference.
       Shapes; the Text tool's size units. Finish is a button with a check icon
 - **Verified 2026-10-14:** all 119 UI tests pass (one updated: the Finish button's label); renders of the
   Paintbrush, Line/Curve and dialog toolbars checked by eye (dash-dot preview and caps drawn, groups wrap whole).
+### Requested fixes (2026-10-14) ✅
+- [x] Turning off Settings › Menus › global menu left the menus in Plasma's panel as well as the window: releasing
+      the appmenu object doesn't make KWin forget the address. Now the address is set to empty, and while off the
+      exported menu is empty too (unit test for the empty export). Not checked live on Plasma yet.
+- [x] The window showed KWin's yellow Wayland icon when run from the checkout: KWin finds a window's icon through
+      the `.desktop` file named after its app ID, which only the package installs. `cargo xtask install-desktop`
+      installs the entry (Exec pointing at the checkout's build) and the icon in `~/.local/share` (never
+      overwriting a different file without `--force`); `cargo xtask uninstall-desktop` removes them. Verified: the
+      title bar shows paintnotnet's icon. Setting the icon from inside the app isn't possible: winit 0.30.13 has no
+      `xdg-toplevel-icon` support and doesn't expose the toplevel object
+- The global menu's two `unsafe` calls stay: the appmenu request must name winit's own `wl_surface` on winit's own
+  connection (Wayland objects belong to one connection), and winit only hands those out as raw pointers. There is
+  no safe route on Wayland today; they stay confined to `global_menu/wayland.rs`.
 ### 14c Colour picker
 - [ ] The chosen picker in the Colors panel: hex entry, OKLCH / HSV / RGB sliders, alpha, recent colours, palette
 
