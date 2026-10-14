@@ -100,6 +100,9 @@ struct GpuCanvas {
     chunks: Vec<Chunk>,
     view_buffer: wgpu::Buffer,
     view_bind_group: wgpu::BindGroup,
+    /// View parameters for drawing into the glass backdrop.
+    backdrop_buffer: wgpu::Buffer,
+    backdrop_bind_group: wgpu::BindGroup,
 }
 
 /// Lives in egui-wgpu's `callback_resources`. One per window.
@@ -111,6 +114,7 @@ pub struct CanvasRenderer {
     linear: wgpu::Sampler,
     srgb_target: bool,
     canvases: HashMap<u64, GpuCanvas>,
+    pub(crate) glass: crate::glass::Glass,
 }
 
 impl CanvasRenderer {
@@ -223,6 +227,7 @@ impl CanvasRenderer {
             chunk_layout,
             srgb_target: target_format.is_srgb(),
             canvases: HashMap::new(),
+            glass: crate::glass::Glass::new(device, target_format),
         }
     }
 
@@ -316,29 +321,31 @@ impl CanvasRenderer {
                 });
             }
         }
-        let view_buffer = create_uniform_buffer(
-            device,
-            "canvas view",
-            bytemuck::bytes_of(&ViewUniforms::default()),
-        );
-        let view_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("canvas view"),
-            layout: &self.view_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: view_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.nearest),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.linear),
-                },
-            ],
-        });
+        let view_group = |label| {
+            let buffer =
+                create_uniform_buffer(device, label, bytemuck::bytes_of(&ViewUniforms::default()));
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &self.view_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.nearest),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.linear),
+                    },
+                ],
+            });
+            (buffer, group)
+        };
+        let (view_buffer, view_bind_group) = view_group("canvas view");
+        let (backdrop_buffer, backdrop_bind_group) = view_group("canvas backdrop view");
         self.canvases.insert(
             key,
             GpuCanvas {
@@ -348,6 +355,8 @@ impl CanvasRenderer {
                 chunks,
                 view_buffer,
                 view_bind_group,
+                backdrop_buffer,
+                backdrop_bind_group,
             },
         );
         true
@@ -444,9 +453,76 @@ impl CanvasRenderer {
     pub fn release(&mut self, key: u64) {
         self.canvases.remove(&key);
     }
+
+    /// Draw document `key` at a quarter of its on-screen size over `surround` (sRGB 0–1) into
+    /// the glass backdrop, and blur it.
+    fn render_backdrop(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        key: u64,
+        mut uniforms: ViewUniforms,
+        surround: [f32; 4],
+    ) {
+        let Some(canvas) = self.canvases.get(&key) else {
+            return;
+        };
+        let size = crate::glass::Glass::backdrop_size(uniforms.viewport);
+        let s = 1.0 / crate::glass::DOWNSCALE as f32;
+        uniforms.origin = uniforms.origin.map(|v| v * s);
+        uniforms.zoom *= s;
+        uniforms.ppp *= s;
+        uniforms.viewport = size.map(|v| v as f32);
+        uniforms.grid = 0.0;
+        uniforms.overlay = 0.0;
+        queue.write_buffer(&canvas.backdrop_buffer, 0, bytemuck::bytes_of(&uniforms));
+        let lin = |c: f32| {
+            if !self.srgb_target {
+                c
+            } else if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let clear = wgpu::Color {
+            r: lin(surround[0]) as f64,
+            g: lin(surround[1]) as f64,
+            b: lin(surround[2]) as f64,
+            a: 1.0,
+        };
+        let view = self.glass.ensure(device, size);
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("glass backdrop"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(clear),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &canvas.backdrop_bind_group, &[]);
+            for chunk in &canvas.chunks {
+                pass.set_bind_group(1, &chunk.bind_group, &[]);
+                pass.draw(0..6, 0..1);
+            }
+        }
+        self.glass.blur(encoder);
+    }
 }
 
-fn create_uniform_buffer(device: &wgpu::Device, label: &str, contents: &[u8]) -> wgpu::Buffer {
+pub(crate) fn create_uniform_buffer(
+    device: &wgpu::Device,
+    label: &str,
+    contents: &[u8],
+) -> wgpu::Buffer {
     use wgpu::util::DeviceExt;
     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some(label),
@@ -459,23 +535,28 @@ fn create_uniform_buffer(device: &wgpu::Device, label: &str, contents: &[u8]) ->
 pub struct CanvasCallback {
     pub key: u64,
     pub uniforms: ViewUniforms,
+    /// Also draw the glass backdrop, over this surround colour (sRGB 0–1).
+    pub backdrop: Option<[f32; 4]>,
 }
 
 impl egui_wgpu::CallbackTrait for CanvasCallback {
     fn prepare(
         &self,
-        _device: &wgpu::Device,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
         _screen: &egui_wgpu::ScreenDescriptor,
-        _encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut wgpu::CommandEncoder,
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        if let Some(renderer) = resources.get::<CanvasRenderer>()
+        if let Some(renderer) = resources.get_mut::<CanvasRenderer>()
             && let Some(canvas) = renderer.canvases.get(&self.key)
         {
             let mut uniforms = self.uniforms;
             uniforms.srgb_target = if renderer.srgb_target { 1.0 } else { 0.0 };
             queue.write_buffer(&canvas.view_buffer, 0, bytemuck::bytes_of(&uniforms));
+            if let Some(surround) = self.backdrop {
+                renderer.render_backdrop(device, queue, encoder, self.key, uniforms, surround);
+            }
         }
         Vec::new()
     }

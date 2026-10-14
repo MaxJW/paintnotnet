@@ -113,15 +113,17 @@ impl PaintNotNetApp {
         let mut open = true;
         let mut changed = false;
         let path = self.config_path.clone();
-        egui::Window::new("Settings")
-            .id(egui::Id::new("settings_dialog"))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(true)
-            .default_size(egui::vec2(560.0, 460.0))
-            .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(ctx.content_rect().center())
-            .show(ctx, |ui| {
+        crate::glass::window(
+            ctx,
+            egui::Window::new("Settings")
+                .id(egui::Id::new("settings_dialog"))
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(true)
+                .default_size(egui::vec2(560.0, 460.0))
+                .pivot(egui::Align2::CENTER_CENTER)
+                .default_pos(ctx.content_rect().center()),
+            |ui| {
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut st.keyboard_tab, false, "General");
                     if ui
@@ -187,7 +189,8 @@ impl PaintNotNetApp {
                 } else {
                     changed |= self.keyboard_tab_ui(ui, &mut st);
                 }
-            });
+            },
+        );
         if changed {
             self.config_changed(ctx);
         }
@@ -338,14 +341,16 @@ impl PaintNotNetApp {
         }
         p.selected = p.selected.min(matches.len().saturating_sub(1));
         let mut run = None;
-        egui::Window::new("Command palette")
-            .id(egui::Id::new("command_palette"))
-            .title_bar(false)
-            .collapsible(false)
-            .resizable(false)
-            .fixed_size(egui::vec2(460.0, 0.0))
-            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 80.0))
-            .show(ctx, |ui| {
+        crate::glass::window(
+            ctx,
+            egui::Window::new("Command palette")
+                .id(egui::Id::new("command_palette"))
+                .title_bar(false)
+                .collapsible(false)
+                .resizable(false)
+                .fixed_size(egui::vec2(460.0, 0.0))
+                .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 80.0)),
+            |ui| {
                 let edit = ui.add(
                     egui::TextEdit::singleline(&mut p.query)
                         .hint_text("Type a command…")
@@ -381,7 +386,8 @@ impl PaintNotNetApp {
                             ui.label(egui::RichText::new("No matching command").weak());
                         }
                     });
-            });
+            },
+        );
         if enter && let Some((c, _)) = matches.get(p.selected) {
             run = Some(*c);
         }

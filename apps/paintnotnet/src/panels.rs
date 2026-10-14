@@ -331,7 +331,7 @@ impl Panels {
             .fixed_pos(rail.min)
             .constrain(false)
             .show(ctx, |ui| {
-                island(palette).inner_margin(margin).show(ui, |ui| {
+                crate::glass::show(ui, island(palette).inner_margin(margin), "rail", |ui| {
                     contents(ui, max_height - margin.sum().y);
                 })
             });
@@ -358,7 +358,7 @@ impl Panels {
             .fixed_pos(rect.min)
             .constrain(false)
             .show(ctx, |ui| {
-                island(palette).inner_margin(margin).show(ui, |ui| {
+                crate::glass::show(ui, island(palette).inner_margin(margin), "options", |ui| {
                     let w = rect.width() - margin.sum().x;
                     ui.set_width(w);
                     ui.set_max_width(w);
@@ -392,7 +392,7 @@ impl Panels {
                 .fixed_pos(rect.min)
                 .constrain(false)
                 .show(ctx, |ui| {
-                    island(palette).show(ui, |ui| {
+                    crate::glass::show(ui, island(palette), ("dock", panel.name()), |ui| {
                         ui.set_width(rect.width());
                         // Colors sizes itself to its contents; the others fill their slot.
                         if panel != Panel::Colors || collapsed {

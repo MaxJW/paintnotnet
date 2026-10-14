@@ -71,19 +71,30 @@ fn docked_shell_matches_design_a() {
         (history.max.y - layers.min.y) > 300.0,
         "Layers and History fill the dock"
     );
+    // Zoomed in, the (white) image runs on under the panels, which show it as glass that
+    // stays dark enough for their secondary text.
+    let ctx = h.ctx.clone();
+    for _ in 0..3 {
+        h.state_mut()
+            .execute(&ctx, Triggered::once(Command::ZoomIn));
+    }
+    for _ in 0..3 {
+        h.step();
+    }
+    let image = h.render().expect("render");
+    let empty_layers = h.state().panels().rect(Panel::Layers).center_bottom() - vec2(0.0, 30.0);
+    let glass = image.get_pixel(empty_layers.x as u32, empty_layers.y as u32);
+    let weak = paintnotnet::theme::Palette::dark().weak_text;
+    let ratio = contrast(
+        [glass[0], glass[1], glass[2]],
+        [weak.r(), weak.g(), weak.b()],
+    );
+    assert!(
+        ratio >= 4.5,
+        "glass {glass:?} over white: weak text contrast {ratio:.2}"
+    );
     if let Ok(dir) = std::env::var("PNN_RENDER_DUMP") {
-        // Zoomed in, the image runs on under the panels.
-        let ctx = h.ctx.clone();
-        for _ in 0..3 {
-            h.state_mut()
-                .execute(&ctx, Triggered::once(Command::ZoomIn));
-        }
-        for _ in 0..3 {
-            h.step();
-        }
-        if let Ok(image) = h.render() {
-            image.save(format!("{dir}/shell-zoomed.png")).unwrap();
-        }
+        image.save(format!("{dir}/shell-zoomed.png")).unwrap();
         h.ctx.set_theme(eframe::egui::ThemePreference::Light);
         for _ in 0..3 {
             h.step();
@@ -92,6 +103,23 @@ fn docked_shell_matches_design_a() {
             image.save(format!("{dir}/shell-light.png")).unwrap();
         }
     }
+}
+
+/// WCAG contrast ratio of two sRGB colours.
+fn contrast(a: [u8; 3], b: [u8; 3]) -> f64 {
+    let lum = |c: [u8; 3]| {
+        let l = |v: u8| {
+            let v = v as f64 / 255.0;
+            if v <= 0.04045 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * l(c[0]) + 0.7152 * l(c[1]) + 0.0722 * l(c[2])
+    };
+    let (la, lb) = (lum(a), lum(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
 #[test]

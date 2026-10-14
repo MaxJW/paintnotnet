@@ -10,7 +10,7 @@ the git branch `recreation` and tag `recreation-2026-10-13` keep that faithful p
 modernised paint.net, "keeping things vaguely in place" but with docked side panels instead of draggable windows, a
 glassy, great-looking UI, better tool controls (brush size first), super smooth performance, extra features, and better
 maths wherever something we copied (paint.net 3.36, BoltBait) can be done more accurately or faster. **Next:** Phase 13
-(design system and docked shell): design A chosen; 13a and 13b done, 13c (glass) next. The recreation backlog (rest of the
+(design system and docked shell): design A chosen; 13a–13c done, 13d (Lucide icons, tool cursors) next. The recreation backlog (rest of the
 BoltBait pack, Sketch Blur, comparing against the 5.1.12 release files) is parked below and done on the `recreation`
 branch only if wanted.
 
@@ -325,10 +325,22 @@ ours is better, and keep a test showing the difference.
   an image open; a screenshot of the window shows the layout, with the rail in two columns at the default size.
 - Known rough edges for Phase 14: the paintbrush's options wrap onto three lines at 1202 pt wide, and a label can
   wrap away from its control; tool and command icons are still the 3.36 bitmaps until 13d.
-### 13c Glass
-- [ ] wgpu: the canvas is drawn a second time at reduced size and blurred; islands, dialogs and popups paint that
-      blurred backdrop (rounded, tinted) behind their contents; plain translucent fill when the GPU path isn't available
-- [ ] KDE window blur protocol: not needed for A (the window is opaque); skipped unless that changes
+### 13c ✅ Glass
+- [x] wgpu (`pnn-render/src/glass.rs`, `glass.wgsl`): each frame the canvas callback draws the image again at a
+      quarter of its on-screen size over the surround colour, then blurs it (two separable 9-tap Gaussian
+      iterations, the second at twice the step); the islands and dialogs (effect, layer/image, Settings, command
+      palette) paint that blur in a rounded rectangle, 1.6× saturated and mixed with the theme's glass tint, in place
+      of their fill (`apps/paintnotnet/src/glass.rs`). Mixing is in sRGB as in the CSS mockup, and the tint thickens
+      the further the backdrop's brightness is from it, so panel text stays readable over white (dark theme) and
+      black (light theme) images
+- [x] No document (nothing to blur) or no GPU: the solid panel colour (chosen over a plain translucent fill so
+      text stays readable). Menus, tooltips and the modal message boxes stay solid: egui draws their frames itself
+- [—] KDE window blur protocol: not needed for A (the window is opaque); skipped
+- **Verified 2026-10-14:** both shaders pass naga validation; uniform layout and backdrop sizing unit tests; a UI
+  test zooms a white image under the dock and requires the glass to keep secondary text ≥ 4.5:1 (5.0 measured; it
+  fails at 1.9 without the tint boost); renders of the Bevel dialog over a red object (the object shows blurred
+  through it) and of the dark and light shells. **On the real desktop** (Wayland, Vulkan, RTX 3070): a screenshot
+  zoomed into an image shows it blurred and tinted under every island; smoke test still 164.7 fps, mean 6.07 ms.
 ### 13d Icons and cursors
 - [ ] Lucide SVGs (pinned version, ISC licence in NOTICE) rendered and tinted to the theme; every tool, toolbar and
       panel button; 3.36 icons removed from the build (kept in `assets/icons/pdn336` for the `recreation` branch)

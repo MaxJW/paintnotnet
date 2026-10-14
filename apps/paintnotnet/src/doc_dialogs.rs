@@ -334,14 +334,16 @@ impl DocDialog {
         let title = self.title();
         // A movable window rather than a modal so the live canvas preview can be watched
         // behind or beside it; opens centred, then stays where it was dragged.
-        egui::Window::new(title)
-            .id(egui::Id::new(("doc_dialog", title)))
-            .collapsible(false)
-            .resizable(false)
-            .auto_sized()
-            .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(ctx.content_rect().center())
-            .show(ctx, |ui| {
+        crate::glass::window(
+            ctx,
+            egui::Window::new(title)
+                .id(egui::Id::new(("doc_dialog", title)))
+                .collapsible(false)
+                .resizable(false)
+                .auto_sized()
+                .pivot(egui::Align2::CENTER_CENTER)
+                .default_pos(ctx.content_rect().center()),
+            |ui| {
                 ui.set_min_width(300.0);
                 ui.set_max_width(420.0);
                 match &mut self.kind {
@@ -505,7 +507,8 @@ impl DocDialog {
                         }
                     });
                 });
-            });
+            },
+        );
         let (enter, escape) = ctx.input(|i| {
             (
                 i.key_pressed(egui::Key::Enter),

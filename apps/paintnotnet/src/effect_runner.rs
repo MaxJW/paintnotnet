@@ -400,13 +400,15 @@ impl PaintNotNetApp {
         let (before, bounds, env) = (&s.before, s.env.bounds, &s.env);
         // Movable, so the live preview behind it can be watched; opens centred, then stays
         // where it was dragged (egui remembers the position per effect).
-        egui::Window::new(def.name)
-            .id(egui::Id::new(("effect_dialog", def.name)))
-            .collapsible(false)
-            .resizable(false)
-            .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(ctx.content_rect().center())
-            .show(ctx, |ui| {
+        crate::glass::window(
+            ctx,
+            egui::Window::new(def.name)
+                .id(egui::Id::new(("effect_dialog", def.name)))
+                .collapsible(false)
+                .resizable(false)
+                .pivot(egui::Align2::CENTER_CENTER)
+                .default_pos(ctx.content_rect().center()),
+            |ui| {
                 ui.set_min_width(300.0);
                 match custom {
                     Some(Custom::Curves(c)) => changed |= curves_ui(ui, c, grab),
@@ -465,7 +467,8 @@ impl PaintNotNetApp {
                         outcome = Some(false);
                     }
                 });
-            });
+            },
+        );
         let (enter, esc) = ctx.input(|i| {
             (
                 i.key_pressed(egui::Key::Enter),

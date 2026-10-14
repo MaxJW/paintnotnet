@@ -1629,6 +1629,8 @@ impl eframe::App for PaintNotNetApp {
             }
         }
 
+        // No glass until the canvas draws its backdrop this frame.
+        crate::glass::set_backdrop(&ctx, None);
         self.sync_global_menu(&ctx, modal_open && !self.menu.open);
         self.title_bar(ui, &ctx);
         self.toolbar_feather();

@@ -308,8 +308,11 @@ pub fn show(
                 CanvasCallback {
                     key: tab.key,
                     uniforms,
+                    backdrop: Some(surround_color(ui).to_array().map(|v| v as f32 / 255.0)),
                 },
             ));
+        // The panels over the canvas show this blurred (see `glass`).
+        crate::glass::set_backdrop(ui.ctx(), Some(area));
     }
     if !tab.doc.selection().is_empty() {
         let contours = tab.ant_contours(ui.ctx());
