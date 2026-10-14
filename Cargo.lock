@@ -3064,6 +3064,8 @@ dependencies = [
  "egui-wgpu",
  "naga",
  "pnn-core",
+ "pnn-effects",
+ "pollster 0.4.0",
  "rayon",
  "wgpu",
 ]

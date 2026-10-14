@@ -512,7 +512,21 @@ ours is better, and keep a test showing the difference.
       12 ms; live gradient 29 → 53 fps
 - [ ] To decide: a live gradient (or any whole-image preview) at 165 fps needs the preview drawn on the GPU, which
       means compositing layers there too (a GPU compositor); the CPU path is now ~12 ms render + ~4 ms upload
-- [ ] wgpu compute for effects still slower than ~100 ms at 4K (Motion / Radial / Zoom Blur, fractals, Dents, …)
+- [x] **Effects on the GPU** (`pnn-render/src/effects.rs`, `effects.wgsl`): Motion, Zoom and Radial Blur ported
+      exactly (3.36's fixed point in i32/u32; bilinear weights in f32 as the CPU does). An effect offers a `GpuJob`
+      (`Renderer::gpu`); the app wraps its renderer so the first tile renders the whole bounds on the GPU (row bands,
+      so no submission trips the driver timeout) and every tile copies from that; any failure, linear light, or an
+      image past the buffer limits renders on the CPU. 4K at 75% sliders, RTX 3070: Motion 4.44 s → 66 ms, Zoom 352 →
+      31 ms, Radial 9.42 s → 116 ms (`cargo run --release -p pnn-render --example gpu_effects_bench`, which also
+      checks the 4K output is identical). Live previews with a slider moving every frame: Zoom 145, Motion 143,
+      Radial 138 fps (CPU: 29). Test: GPU = CPU pixel for pixel for 3 effects × several settings × whole image and
+      a sub-rectangle, direct and tiled through the wrapper (skips without an adapter). `PNN_GPU_EFFECTS=0` turns
+      it off; `PNN_SMOKE_EFFECT=<effect name>` smoke-tests any effect's live preview
+- Fixed on the way: a preview still rendering at exit destroyed the GPU device on its worker thread while the
+  process exited (NVIDIA driver segfault); `on_exit` now cancels it and waits for the workers to let go.
+- [ ] Still slow at 4K, not yet on the GPU: Mandelbrot (~5.6 s), Julia (2.4 s), Dents (2.6 s), Outline / Median /
+      Reduce Noise (1.5–1.9 s), Bokeh, Morphology, Surface Blur (1.1–1.3 s). The fractals compute in f64 on the CPU;
+      an f32 port would not match pixel for pixel, so that needs a decision (accept f32, or emulate f64)
 ## Phase 16: Remove Background (local AI) — requested 2026-10-13
 - [ ] Effects › Object › Remove Background: BiRefNet (MIT; the model BRIA's RMBG-2.0 is built on) run with ONNX Runtime,
       loaded at run time from the system (`onnxruntime-opt-cuda` 1.29 is installed: CUDA on the RTX 3070, CPU fallback),

@@ -101,6 +101,7 @@ pub struct EffectSession {
     selection: Option<Arc<Mask>>,
     env: Env,
     job: Option<Job>,
+    gpu: Option<Arc<pnn_render::GpuEffects>>,
 }
 
 impl Drop for Job {
@@ -183,11 +184,12 @@ impl EffectSession {
 
     /// Start rendering the current values in the background.
     fn renderer(&self) -> Box<dyn Renderer> {
-        match &self.custom {
+        let cpu = match &self.custom {
             Some(Custom::Curves(c)) => c.renderer(),
             Some(Custom::Levels { levels, .. }) => levels.renderer(),
             None => self.def.renderer(&self.values, &self.before, &self.env),
-        }
+        };
+        pnn_render::gpu_renderer(self.gpu.as_ref(), cpu, &self.before, self.env.bounds)
     }
 
     fn spawn(&mut self, ctx: &egui::Context) {
@@ -249,14 +251,17 @@ impl EffectSession {
         self.spawn(ctx);
     }
 
-    /// Smoke test: set every integer property and re-render if it changed.
+    /// Smoke test: set every integer property (within its range) and re-render if it
+    /// changed.
     pub fn set_all_ints(&mut self, ctx: &egui::Context, v: i32) {
         let new: Vec<Value> = self
             .values
             .iter()
-            .map(|x| match x {
-                Value::Int(_) => Value::Int(v),
-                other => *other,
+            .zip(&self.def.props)
+            .map(|(x, p)| match (x, &p.kind) {
+                (Value::Int(_), PropKind::Int { min, max }) => Value::Int(v.clamp(*min, *max)),
+                (Value::Int(_), _) => Value::Int(v),
+                (other, _) => *other,
             })
             .collect();
         if new != self.values {
@@ -360,6 +365,7 @@ impl PaintNotNetApp {
                 selection_contours: Arc::new(tab.doc.selection().contours().to_vec()),
             },
             job: None,
+            gpu: self.gpu_effects.clone(),
         })
     }
 

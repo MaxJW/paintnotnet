@@ -16,7 +16,7 @@
 
 use pnn_core::{BlendMode, ColorBgra, Rect, Surface};
 
-use crate::framework::{EffectDef, PropDef, Renderer, Value};
+use crate::framework::{EffectDef, GpuJob, PropDef, Renderer, Value};
 
 /// 3.36 `ColorBgra.Blend(colors, count)`: alpha-weighted average.
 /// [`blend`], or the same average taken in linear light.
@@ -560,6 +560,12 @@ impl Renderer for Motion {
             }
         }
     }
+
+    fn gpu(&self, _: &Surface) -> Option<GpuJob> {
+        (!self.linear).then(|| GpuJob::Motion {
+            points: self.points.clone(),
+        })
+    }
 }
 
 /// 3.36 Zoom Blur (fixed point).
@@ -569,12 +575,36 @@ struct Zoom {
     linear: bool,
 }
 
-impl Renderer for Zoom {
-    fn render_row(&self, src: &Surface, x0: u32, y: u32, out: &mut [ColorBgra]) {
+impl Zoom {
+    fn centre(&self, src: &Surface) -> (i64, i64) {
         let (w, h) = (src.width() as i64, src.height() as i64);
         let fox = (w as f64 * self.offset[0] * 32768.0) as i64;
         let foy = (h as f64 * self.offset[1] * 32768.0) as i64;
-        let (fcx, fcy) = (fox + (w << 15), foy + (h << 15));
+        (fox + (w << 15), foy + (h << 15))
+    }
+}
+
+impl Renderer for Zoom {
+    fn gpu(&self, src: &Surface) -> Option<GpuJob> {
+        // The shader works in i32: positions (x << 16, x < 2^14) and the centre must fit.
+        let (fcx, fcy) = self.centre(src);
+        let fits = |v: i64| v.abs() < 1 << 30;
+        (!self.linear
+            && src.width() < 1 << 14
+            && src.height() < 1 << 14
+            && fits(fcx)
+            && fits(fcy)
+            && (0..=100).contains(&self.amount))
+        .then_some(GpuJob::Zoom {
+            amount: self.amount as i32,
+            fcx: fcx as i32,
+            fcy: fcy as i32,
+        })
+    }
+
+    fn render_row(&self, src: &Surface, x0: u32, y: u32, out: &mut [ColorBgra]) {
+        let (w, h) = (src.width() as i64, src.height() as i64);
+        let (fcx, fcy) = self.centre(src);
         for (i, o) in out.iter_mut().enumerate() {
             let x = (x0 + i as u32) as i64;
             let c0 = src.get(x as u32, y);
@@ -639,15 +669,29 @@ fn rotate(fx: &mut i32, fy: &mut i32, fr: i32) {
         .wrapping_sub(((cy >> 14).wrapping_mul(fr.wrapping_mul(fr) >> 11)) >> 8);
 }
 
-impl Renderer for Radial {
-    fn render_row(&self, src: &Surface, x0: u32, y: u32, out: &mut [ColorBgra]) {
+impl Radial {
+    /// (fcx, fcy, steps, step angle) in 3.36's fixed point.
+    fn params(&self, src: &Surface) -> (i32, i32, i32, i32) {
         let (w, h) = (src.width() as i32, src.height() as i32);
         let fcx = (w << 15).wrapping_add((self.offset[0] * (w << 15) as f64) as i32);
         let fcy = (h << 15).wrapping_add((self.offset[1] * (h << 15) as f64) as i32);
         let q = self.quality;
         let n = (q * q) * (30 + q * q);
         let fr = (self.angle * std::f64::consts::PI * 65536.0 / 181.0) as i32;
-        let fsr = fr / n;
+        (fcx, fcy, n, fr / n)
+    }
+}
+
+impl Renderer for Radial {
+    fn gpu(&self, src: &Surface) -> Option<GpuJob> {
+        // The CPU wraps in i32 as 3.36 did, so the shader matches it at any size.
+        let (fcx, fcy, n, fsr) = self.params(src);
+        (!self.linear).then_some(GpuJob::Radial { n, fsr, fcx, fcy })
+    }
+
+    fn render_row(&self, src: &Surface, x0: u32, y: u32, out: &mut [ColorBgra]) {
+        let (w, h) = (src.width() as i32, src.height() as i32);
+        let (fcx, fcy, n, fsr) = self.params(src);
         for (i, o) in out.iter_mut().enumerate() {
             let x = (x0 + i as u32) as i32;
             let fx = (x << 16).wrapping_sub(fcx);

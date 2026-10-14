@@ -107,6 +107,8 @@ pub struct PaintNotNetApp {
     pub(crate) palette: Option<crate::settings_ui::PaletteState>,
     /// The adjustment/effect dialog in progress.
     pub(crate) effect: Option<crate::effect_runner::EffectSession>,
+    /// Effects with an exact GPU port render there (`None`: no wgpu, or `PNN_GPU_EFFECTS=0`).
+    pub(crate) gpu_effects: Option<std::sync::Arc<pnn_render::GpuEffects>>,
     /// Last applied effect and its settings, for Repeat (Ctrl+F).
     pub(crate) last_applied: Option<(
         crate::effect_runner::EffectRef,
@@ -131,6 +133,11 @@ impl PaintNotNetApp {
         if let Some(rs) = cc.wgpu_render_state.as_ref() {
             CanvasRenderer::install(rs);
         }
+        let gpu_effects = cc
+            .wgpu_render_state
+            .as_ref()
+            .filter(|_| std::env::var("PNN_GPU_EFFECTS").as_deref() != Ok("0"))
+            .map(|rs| std::sync::Arc::new(pnn_render::GpuEffects::new(&rs.device, &rs.queue)));
         let mut diagnostics = Diagnostics::default();
         diagnostics.set_visible(cfg!(debug_assertions) || smoke.is_some());
         let mut files = FileOps::new(cc.egui_ctx.clone());
@@ -186,6 +193,7 @@ impl PaintNotNetApp {
             settings_open: None,
             palette: None,
             effect: None,
+            gpu_effects,
             last_applied: None,
             synced_selection: 0,
             resize_base: None,
@@ -946,14 +954,22 @@ impl PaintNotNetApp {
                 };
                 tab.doc.set_selection(base.with_feather(feather));
             }
-        } else if std::env::var_os("PNN_SMOKE_EFFECT").is_some() {
+        } else if let Ok(name) = std::env::var("PNN_SMOKE_EFFECT") {
             // PNN_SMOKE_EFFECT=1: Posterize open, its levels changing every frame (the live
-            // preview of a whole-image adjustment).
+            // preview of a whole-image adjustment). PNN_SMOKE_EFFECT=<effect name>: that
+            // effect, its integer settings changing every frame.
             if self.effect.is_none() {
-                self.open_effect(
-                    ctx,
-                    crate::effect_runner::EffectRef::Adjustment(pnn_effects::Adjustment::Posterize),
-                );
+                let target = pnn_effects::Category::ALL
+                    .into_iter()
+                    .flat_map(pnn_effects::effects_in)
+                    .find(|(_, e)| e.name == name)
+                    .map_or(
+                        crate::effect_runner::EffectRef::Adjustment(
+                            pnn_effects::Adjustment::Posterize,
+                        ),
+                        |(id, _)| crate::effect_runner::EffectRef::Effect(id),
+                    );
+                self.open_effect(ctx, target);
             }
             let levels = 2 + (elapsed.as_secs_f64() * 20.0) as i32 % 30;
             if let Some(e) = self.effect.as_mut() {
@@ -1625,6 +1641,16 @@ impl eframe::App for PaintNotNetApp {
         // A clean exit leaves nothing to recover.
         if let Some(a) = self.autosave.as_mut() {
             a.finish();
+        }
+        // A preview still rendering on a worker holds the GPU device: cancel it and let it
+        // let go, so the device is destroyed here rather than on that thread while the
+        // process exits (which crashes the NVIDIA driver).
+        self.effect = None;
+        if let Some(gpu) = self.gpu_effects.take() {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while std::sync::Arc::strong_count(&gpu) > 1 && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(5));
+            }
         }
     }
 

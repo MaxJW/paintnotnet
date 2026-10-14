@@ -223,6 +223,30 @@ pub trait Renderer: Send + Sync {
             self.render_row(src, rect.x, rect.y + j as u32, row);
         }
     }
+
+    /// The same effect as a GPU job, if it has an exact GPU port (`pnn-render`'s
+    /// `effects.wgsl`) for these settings and `src`.
+    fn gpu(&self, src: &Surface) -> Option<GpuJob> {
+        let _ = src;
+        None
+    }
+}
+
+/// An effect the GPU renders exactly as the CPU would: the parameters its shader needs,
+/// in the CPU renderer's own fixed-point units.
+#[derive(Clone, Debug, PartialEq)]
+pub enum GpuJob {
+    /// Motion Blur: sample offsets, averaged by `blurs::blend`.
+    Motion { points: Vec<[f32; 2]> },
+    /// Zoom Blur: amount and centre (16.16 fixed point).
+    Zoom { amount: i32, fcx: i32, fcy: i32 },
+    /// Radial Blur: steps each way, step angle and centre (16.16 fixed point).
+    Radial {
+        n: i32,
+        fsr: i32,
+        fcx: i32,
+        fcy: i32,
+    },
 }
 
 /// A per-pixel operation (most adjustments).
