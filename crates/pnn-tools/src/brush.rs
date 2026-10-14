@@ -282,8 +282,17 @@ pub fn for_each_tile_row<T: Copy + PartialEq + Send + Sync>(
     f: impl Fn(u32, u32, &mut [T]) + Sync,
 ) {
     use rayon::prelude::*;
-    let tiles = buf.tiles_mut_in(r);
-    let visit = |(c, tile): (pnn_core::TileCoord, &mut pnn_core::Tile<T>)| {
+    let absent = buf.absent();
+    // Slots, made writable (allocated or un-shared) inside the workers, so the copies
+    // happen in parallel.
+    let tiles = buf.slots_in(r);
+    let visit = |(c, slot): (
+        pnn_core::TileCoord,
+        &mut Option<std::sync::Arc<pnn_core::Tile<T>>>,
+    )| {
+        let tile = std::sync::Arc::make_mut(
+            slot.get_or_insert_with(|| std::sync::Arc::new(pnn_core::Tile::filled(absent))),
+        );
         let (ox, oy) = (c.tx * TILE_SIZE, c.ty * TILE_SIZE);
         let x0 = r.x.max(ox);
         let x1 = (r.x + r.width).min(ox + TILE_SIZE);

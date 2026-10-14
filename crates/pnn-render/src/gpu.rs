@@ -17,49 +17,6 @@ const CHUNK_PX: u32 = CHUNK_TILES * TILE_SIZE;
 /// Mip levels kept per tile: 256, 128, …, 1.
 const TILE_MIPS: u32 = 9;
 
-/// A composite tile prepared for upload: premultiplied BGRA bytes for each mip level.
-pub struct DisplayTile {
-    levels: Vec<Vec<u8>>,
-}
-
-/// Convert a composite tile for display. `None` (fully transparent) gives zeros.
-pub fn display_tile(tile: Option<&Tile<ColorBgra>>) -> DisplayTile {
-    let Some(tile) = tile else {
-        return DisplayTile {
-            levels: (0..TILE_MIPS)
-                .map(|k| vec![0u8; ((TILE_SIZE >> k).pow(2) * 4) as usize])
-                .collect(),
-        };
-    };
-    let mut level0 = Vec::with_capacity((TILE_SIZE * TILE_SIZE * 4) as usize);
-    for p in tile.pixels() {
-        let a = p.a as u32;
-        let pm = |c: u8| ((c as u32 * a + 127) / 255) as u8;
-        level0.extend_from_slice(&[pm(p.b), pm(p.g), pm(p.r), p.a]);
-    }
-    let mut levels = vec![level0];
-    for k in 1..TILE_MIPS {
-        let src_size = (TILE_SIZE >> (k - 1)) as usize;
-        let size = src_size / 2;
-        let src = &levels[k as usize - 1];
-        let mut dst = vec![0u8; size * size * 4];
-        for y in 0..size {
-            for x in 0..size {
-                for ch in 0..4 {
-                    let at = |sx: usize, sy: usize| src[(sy * src_size + sx) * 4 + ch] as u32;
-                    let sum = at(2 * x, 2 * y)
-                        + at(2 * x + 1, 2 * y)
-                        + at(2 * x, 2 * y + 1)
-                        + at(2 * x + 1, 2 * y + 1);
-                    dst[(y * size + x) * 4 + ch] = ((sum + 2) / 4) as u8;
-                }
-            }
-        }
-        levels.push(dst);
-    }
-    DisplayTile { levels }
-}
-
 /// Per-frame view parameters, laid out to match `View` in canvas.wgsl.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
@@ -84,13 +41,14 @@ struct ChunkUniforms {
 }
 
 struct Chunk {
-    texture: wgpu::Texture,
+    /// One view per mip level, for the compute passes that fill them (they keep the
+    /// texture alive).
+    mip_views: Vec<wgpu::TextureView>,
     /// Selection coverage for the feather preview overlay (R8, one level).
     overlay: wgpu::Texture,
     bind_group: wgpu::BindGroup,
     width: u32,
     height: u32,
-    mips: u32,
 }
 
 struct GpuCanvas {
@@ -114,6 +72,7 @@ pub struct CanvasRenderer {
     linear: wgpu::Sampler,
     srgb_target: bool,
     canvases: HashMap<u64, GpuCanvas>,
+    uploader: crate::tile_upload::TileUploader,
     pub(crate) glass: crate::glass::Glass,
 }
 
@@ -227,6 +186,7 @@ impl CanvasRenderer {
             chunk_layout,
             srgb_target: target_format.is_srgb(),
             canvases: HashMap::new(),
+            uploader: crate::tile_upload::TileUploader::new(device),
             glass: crate::glass::Glass::new(device, target_format),
         }
     }
@@ -267,10 +227,22 @@ impl CanvasRenderer {
                     mip_level_count: mips,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Bgra8Unorm,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    // Written by compute passes (`tile_upload`), which can't write BGRA.
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING
+                        | wgpu::TextureUsages::COPY_DST
+                        | wgpu::TextureUsages::STORAGE_BINDING,
                     view_formats: &[],
                 });
+                let mip_views = (0..mips)
+                    .map(|k| {
+                        texture.create_view(&wgpu::TextureViewDescriptor {
+                            base_mip_level: k,
+                            mip_level_count: Some(1),
+                            ..Default::default()
+                        })
+                    })
+                    .collect();
                 let uniforms = ChunkUniforms {
                     origin: [x0 as f32, y0 as f32],
                     size: [w as f32, h as f32],
@@ -312,12 +284,11 @@ impl CanvasRenderer {
                     ],
                 });
                 chunks.push(Chunk {
-                    texture,
+                    mip_views,
                     overlay,
                     bind_group,
                     width: w,
                     height: h,
-                    mips,
                 });
             }
         }
@@ -362,44 +333,33 @@ impl CanvasRenderer {
         true
     }
 
-    /// Write one composite tile (all its mip levels) into the document's textures.
-    pub fn upload(&self, queue: &wgpu::Queue, key: u64, c: TileCoord, tile: &DisplayTile) {
+    /// Show changed composite tiles (`None`: fully transparent): uploaded as they are, then
+    /// premultiplied and mip-mapped on the GPU (see `tile_upload`).
+    pub fn upload_tiles(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        key: u64,
+        tiles: &[(TileCoord, Option<&Tile<ColorBgra>>)],
+    ) {
         let Some(canvas) = self.canvases.get(&key) else {
             return;
         };
-        let chunk =
-            &canvas.chunks[((c.ty / CHUNK_TILES) * canvas.chunks_x + c.tx / CHUNK_TILES) as usize];
-        let (lx, ly) = (
-            (c.tx % CHUNK_TILES) * TILE_SIZE,
-            (c.ty % CHUNK_TILES) * TILE_SIZE,
-        );
-        for k in 0..chunk.mips {
-            let (level_w, level_h) = ((chunk.width >> k).max(1), (chunk.height >> k).max(1));
-            let (x, y) = (lx >> k, ly >> k);
-            if x >= level_w || y >= level_h {
-                continue;
-            }
-            let stride = TILE_SIZE >> k;
-            let (w, h) = (stride.min(level_w - x), stride.min(level_h - y));
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &chunk.texture,
-                    mip_level: k,
-                    origin: wgpu::Origin3d { x, y, z: 0 },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &tile.levels[k as usize],
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(stride * 4),
-                    rows_per_image: Some(h),
-                },
-                wgpu::Extent3d {
-                    width: w,
-                    height: h,
-                    depth_or_array_layers: 1,
-                },
-            );
+        let mut by_chunk: HashMap<usize, Vec<crate::tile_upload::TileJob<'_>>> = HashMap::new();
+        for &(c, tile) in tiles {
+            let i = ((c.ty / CHUNK_TILES) * canvas.chunks_x + c.tx / CHUNK_TILES) as usize;
+            by_chunk
+                .entry(i)
+                .or_default()
+                .push(crate::tile_upload::TileJob {
+                    x: (c.tx % CHUNK_TILES) * TILE_SIZE,
+                    y: (c.ty % CHUNK_TILES) * TILE_SIZE,
+                    tile,
+                });
+        }
+        for (i, jobs) in by_chunk {
+            self.uploader
+                .upload(device, queue, &canvas.chunks[i].mip_views, &jobs);
         }
     }
 
@@ -602,25 +562,5 @@ mod tests {
     fn uniforms_match_wgsl_layout() {
         assert_eq!(std::mem::size_of::<ViewUniforms>(), 48);
         assert_eq!(std::mem::size_of::<ChunkUniforms>(), 16);
-    }
-
-    #[test]
-    fn display_tile_premultiplies_and_mips() {
-        let mut tile = Tile::filled(ColorBgra::from_rgba(255, 128, 0, 128));
-        tile.set(0, 0, ColorBgra::TRANSPARENT);
-        let d = display_tile(Some(&tile));
-        assert_eq!(d.levels.len(), TILE_MIPS as usize);
-        assert_eq!(d.levels[8].len(), 4);
-        // pixel (1,0): b=0, g=128*128/255, r=128, a=128
-        assert_eq!(&d.levels[0][4..8], &[0, 64, 128, 128]);
-        assert_eq!(&d.levels[0][0..4], &[0, 0, 0, 0]);
-        // 1×1 level averages the whole tile (one transparent pixel barely moves it)
-        assert_eq!(d.levels[8][3], 128);
-    }
-
-    #[test]
-    fn transparent_tile_is_all_zero() {
-        let d = display_tile(None);
-        assert!(d.levels.iter().all(|l| l.iter().all(|&b| b == 0)));
     }
 }

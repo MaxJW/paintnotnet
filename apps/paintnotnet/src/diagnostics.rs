@@ -169,6 +169,44 @@ impl Diagnostics {
 }
 
 /// The monitor the window is on, as winit reports it, e.g. `2560x1440 @1x`.
+/// Per-stage timings for `PNN_PROFILE=1` smoke tests: total time and count per stage name.
+static PROFILE: std::sync::Mutex<Vec<(&'static str, Duration, u32)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Time `f` as stage `name` when `PNN_PROFILE` is set (otherwise just run it).
+pub fn timed<R>(name: &'static str, f: impl FnOnce() -> R) -> R {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ON.get_or_init(|| std::env::var_os("PNN_PROFILE").is_some()) {
+        return f();
+    }
+    let t = Instant::now();
+    let r = f();
+    let d = t.elapsed();
+    if let Ok(mut p) = PROFILE.lock() {
+        match p.iter_mut().find(|(n, _, _)| *n == name) {
+            Some(e) => {
+                e.1 += d;
+                e.2 += 1;
+            }
+            None => p.push((name, d, 1)),
+        }
+    }
+    r
+}
+
+/// "stage=mean ms (count)" for every timed stage, for the smoke-test summary.
+pub fn profile_summary() -> String {
+    PROFILE.lock().map_or_else(
+        |_| String::new(),
+        |p| {
+            p.iter()
+                .map(|(n, d, c)| format!("{n}={:.2}ms({c})", d.as_secs_f64() * 1e3 / *c as f64))
+                .collect::<Vec<_>>()
+                .join(" ")
+        },
+    )
+}
+
 pub fn monitor_label(ctx: &egui::Context) -> String {
     ctx.input(|i| {
         let viewport = i.viewport();

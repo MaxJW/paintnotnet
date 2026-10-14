@@ -151,6 +151,28 @@ impl<T: Copy + PartialEq> TiledBuffer<T> {
             .collect()
     }
 
+    /// The tile slots overlapping `r`, for callers that make them writable themselves (in
+    /// parallel: un-sharing a 4K layer's tiles one by one copied 33 MB on one thread).
+    pub fn slots_in(&mut self, r: crate::Rect) -> Vec<(TileCoord, &mut Option<Arc<Tile<T>>>)> {
+        if r.width == 0 || r.height == 0 {
+            return Vec::new();
+        }
+        let (tx0, tx1) = (r.x / TILE_SIZE, (r.x + r.width - 1) / TILE_SIZE);
+        let (ty0, ty1) = (r.y / TILE_SIZE, (r.y + r.height - 1) / TILE_SIZE);
+        let tiles_x = self.tiles_x;
+        self.tiles
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(i, slot)| {
+                let c = TileCoord {
+                    tx: i as u32 % tiles_x,
+                    ty: i as u32 / tiles_x,
+                };
+                (c.tx >= tx0 && c.tx <= tx1 && c.ty >= ty0 && c.ty <= ty1).then_some((c, slot))
+            })
+            .collect()
+    }
+
     pub fn set_tile(&mut self, c: TileCoord, tile: Option<Arc<Tile<T>>>) {
         let i = self.index(c);
         self.tiles[i] = tile;

@@ -3,8 +3,9 @@
 
 pub mod glass;
 pub mod gpu;
+mod tile_upload;
 pub mod view;
 
 pub use glass::{GlassCallback, GlassUniforms};
-pub use gpu::{CanvasCallback, CanvasRenderer, DisplayTile, ViewUniforms, display_tile};
+pub use gpu::{CanvasCallback, CanvasRenderer, ViewUniforms};
 pub use view::View;

@@ -196,6 +196,10 @@ impl PaintNotNetApp {
 
     /// Re-render the live gradient if its points, colours or options changed.
     pub(crate) fn refresh_gradient(&mut self) {
+        crate::diagnostics::timed("gradient", || self.refresh_gradient_now())
+    }
+
+    fn refresh_gradient_now(&mut self) {
         let Some(session) = self.gradient.as_ref() else {
             return;
         };

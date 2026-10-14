@@ -4,8 +4,7 @@
 use eframe::egui::{self, PointerButton, Rect, Sense, Vec2, pos2, vec2};
 use eframe::egui_wgpu;
 use pnn_core::TileCoord;
-use pnn_render::{CanvasCallback, CanvasRenderer, View, ViewUniforms, display_tile, view};
-use rayon::prelude::*;
+use pnn_render::{CanvasCallback, CanvasRenderer, View, ViewUniforms, view};
 
 use crate::commands::Units;
 use crate::workspace::DocumentTab;
@@ -706,7 +705,7 @@ fn sync_overlay(
 }
 
 fn sync_gpu(gpu: &egui_wgpu::RenderState, tab: &mut DocumentTab) {
-    tab.compositor.update(&tab.doc);
+    crate::diagnostics::timed("composite", || tab.compositor.update(&tab.doc));
     let (w, h) = (tab.doc.width(), tab.doc.height());
     let recreated = {
         let mut renderer = gpu.renderer.write();
@@ -731,15 +730,17 @@ fn sync_gpu(gpu: &egui_wgpu::RenderState, tab: &mut DocumentTab) {
     }
     let compositor = &tab.compositor;
     let sync = &mut tab.gpu;
-    let tiles: Vec<_> = stale
-        .par_iter()
-        .map(|&c| display_tile(compositor.tile(c).map(|t| &**t)))
-        .collect();
     let renderer = gpu.renderer.read();
     if let Some(canvas) = renderer.callback_resources.get::<CanvasRenderer>() {
-        for (c, tile) in stale.iter().zip(&tiles) {
-            canvas.upload(&gpu.queue, tab.key, *c, tile);
-            sync.revisions[(c.ty * tx + c.tx) as usize] = compositor.tile_revision(*c);
+        let tiles: Vec<_> = stale
+            .iter()
+            .map(|&c| (c, compositor.tile(c).map(|t| &**t)))
+            .collect();
+        crate::diagnostics::timed("upload", || {
+            canvas.upload_tiles(&gpu.device, &gpu.queue, tab.key, &tiles)
+        });
+        for &c in &stale {
+            sync.revisions[(c.ty * tx + c.tx) as usize] = compositor.tile_revision(c);
         }
     }
 }

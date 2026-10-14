@@ -1042,6 +1042,9 @@ impl PaintNotNetApp {
             stats.map_or(0.0, |s| s.p99.as_secs_f64() * 1000.0),
             stats.map_or(0.0, |s| s.max.as_secs_f64() * 1000.0),
         );
+        if std::env::var_os("PNN_PROFILE").is_some() {
+            println!("profile: {}", crate::diagnostics::profile_summary());
+        }
         self.allow_close = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         self.smoke = None;

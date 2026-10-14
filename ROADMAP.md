@@ -497,9 +497,22 @@ ours is better, and keep a test showing the difference.
       50% reaches through greys as paint.net's does; 100% matches all), "Compare colors: As seen / RGB" under More.
       Test: a dark-blue and a light-yellow step of equal RGB size: RGB treats them alike, OKLab matches the yellows only
 - Gradient UI tests now accept the dither's ±1 level at exact half-way pixels.
-### 15d GPU and frame budget
-- [ ] wgpu compute for effects still slower than ~100 ms at 4K; 165 fps while painting, panning and previewing
-
+### 15d GPU and frame budget (in progress)
+- [x] Measured (release, 4K photo, 165 Hz display, `--smoke-test` modes; `PNN_PROFILE=1` now prints per-stage
+      timings): pan/zoom, brush strokes (50 and 300 px) and the feather slider hold 165 fps; the live gradient ran
+      29 fps and the Posterize preview 121 fps with 26 ms spikes. Every full-image change paid ~12.5 ms to reach the
+      screen: the CPU built each tile's 9-level premultiplied mip chain (5 ms) and uploaded ~1200 textures (7.4 ms)
+- [x] **Tiles to the screen on the GPU** (`pnn-render/src/tile_upload.rs`, `tiles.wgsl`): changed composite tiles
+      are uploaded raw in 64-tile batches; compute passes premultiply them into the chunk's level 0 and build the mip
+      chain with the same rounding box filter; chunk textures are now `Rgba8Unorm` (writable by compute). Upload stage
+      12.5 → 3.9 ms; Posterize preview 121 → 158 fps (spikes 26 → 16 ms)
+- [x] Live gradient: tiles are un-shared (the compositor shares a single plain layer's tiles) in parallel instead of
+      one by one on one thread (`TiledBuffer::slots_in`); Normal blending skips the arithmetic for opaque and (over
+      non-transparent) fully transparent sources, exactly (tested over 40 000 random pairs). Gradient render 16.5 →
+      12 ms; live gradient 29 → 53 fps
+- [ ] To decide: a live gradient (or any whole-image preview) at 165 fps needs the preview drawn on the GPU, which
+      means compositing layers there too (a GPU compositor); the CPU path is now ~12 ms render + ~4 ms upload
+- [ ] wgpu compute for effects still slower than ~100 ms at 4K (Motion / Radial / Zoom Blur, fractals, Dents, …)
 ## Phase 16: Remove Background (local AI) — requested 2026-10-13
 - [ ] Effects › Object › Remove Background: BiRefNet (MIT; the model BRIA's RMBG-2.0 is built on) run with ONNX Runtime,
       loaded at run time from the system (`onnxruntime-opt-cuda` 1.29 is installed: CUDA on the RTX 3070, CPU fallback),
