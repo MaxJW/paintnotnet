@@ -230,6 +230,11 @@ icons! {
     AspectFree => ("link-2-off"),
     SwapOrientation => ("rotate-ccw-square"),
     Warning => ("triangle-alert"),
+    // Window buttons (own title bar)
+    WindowMinimize => ("minus"),
+    WindowMaximize => ("square"),
+    WindowRestore => ("copy"),
+    WindowClose => ("x"),
 }
 
 impl Icon {

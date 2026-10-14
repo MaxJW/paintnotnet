@@ -60,6 +60,8 @@ pub struct Config {
     pub mouse_wheel: MouseWheel,
     /// Show the menus in KDE Plasma's global menu when one is running.
     pub global_menu: bool,
+    /// Use the desktop's title bar instead of paintnotnet's own window buttons.
+    pub system_title_bar: bool,
     /// Minutes between autosaves for crash recovery; 0 turns it off.
     pub autosave_minutes: u32,
     /// Rebound shortcuts: command id → chords ("Ctrl+Shift+K"); empty = unbound.
@@ -73,6 +75,7 @@ impl Default for Config {
             appearance: Appearance::System,
             mouse_wheel: MouseWheel::Zoom,
             global_menu: true,
+            system_title_bar: false,
             autosave_minutes: 1,
             shortcuts: BTreeMap::new(),
             dock: Dock::default(),

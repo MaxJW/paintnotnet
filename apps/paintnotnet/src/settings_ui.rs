@@ -52,6 +52,9 @@ impl PaintNotNetApp {
         });
         crate::commands::set_overrides(self.config.overrides());
         self.canvas.wheel = self.config.mouse_wheel;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(
+            self.config.system_title_bar,
+        ));
         self.panels.load(&self.config.dock);
         if let Some(a) = self.autosave.as_mut() {
             a.set_interval(self.config.autosave_minutes);
@@ -168,6 +171,14 @@ impl PaintNotNetApp {
                         .checkbox(
                             &mut self.config.global_menu,
                             "Show the menus in the desktop's global menu (KDE Plasma)",
+                        )
+                        .changed();
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new("Window").strong());
+                    changed |= ui
+                        .checkbox(
+                            &mut self.config.system_title_bar,
+                            "Use the desktop's title bar (instead of paintnotnet's window buttons)",
                         )
                         .changed();
                     ui.add_space(8.0);

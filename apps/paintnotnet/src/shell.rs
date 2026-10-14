@@ -219,3 +219,133 @@ pub fn update_thumbnail(ctx: &egui::Context, tab: &mut DocumentTab, now: Instant
     tab.thumbnail_revision = tab.doc.revision();
     tab.thumbnail_updated = Some(now);
 }
+
+/// The window buttons of paintnotnet's own title bar (when the desktop's is off), right to
+/// left: close, maximise/restore, minimise. Close asks about unsaved images as the
+/// desktop's close does.
+pub fn window_buttons(ui: &mut egui::Ui, icons: &crate::icons::Icons) {
+    use crate::icons::Icon;
+    let ctx = ui.ctx().clone();
+    let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+    // Named for screen readers (and tests); the icons say the same.
+    let button = |ui: &mut egui::Ui, icon: Icon, name: &'static str| {
+        let r = ui
+            .add(egui::Button::image(icons.image(icon)).frame_when_inactive(false))
+            .on_hover_text(name);
+        r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name));
+        r.clicked()
+    };
+    // Close turns red under the pointer, as desktops draw it.
+    let close = ui
+        .scope(|ui| {
+            let red = Color32::from_rgb(0xd9, 0x2d, 0x3a);
+            let widgets = &mut ui.visuals_mut().widgets;
+            for w in [&mut widgets.hovered, &mut widgets.active] {
+                w.weak_bg_fill = red;
+                w.bg_fill = red;
+            }
+            button(ui, Icon::WindowClose, "Close")
+        })
+        .inner;
+    if close {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+    let (icon, name) = if maximized {
+        (Icon::WindowRestore, "Restore")
+    } else {
+        (Icon::WindowMaximize, "Maximize")
+    };
+    if button(ui, icon, name) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+    }
+    if button(ui, Icon::WindowMinimize, "Minimize") {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+    }
+}
+
+/// Dragging the title bar's empty space moves the window; double-clicking it maximises or
+/// restores. `bar` is the background response, made before the bar's widgets (which sit on
+/// top of it and keep their own clicks).
+pub fn title_bar_drag(ctx: &egui::Context, bar: &egui::Response) {
+    if bar.double_clicked() {
+        let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+    } else if bar.drag_started_by(egui::PointerButton::Primary) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+    }
+}
+
+/// Without the desktop's frame the window resizes from thin strips along its edges and
+/// corners (not while maximised or full screen).
+pub fn resize_edges(ctx: &egui::Context) {
+    use egui::viewport::ResizeDirection as D;
+    let (maximized, fullscreen) = ctx.input(|i| {
+        let v = i.viewport();
+        (v.maximized.unwrap_or(false), v.fullscreen.unwrap_or(false))
+    });
+    if maximized || fullscreen {
+        return;
+    }
+    const EDGE: f32 = 5.0;
+    const CORNER: f32 = 12.0;
+    let r = ctx.content_rect();
+    let (l, t, rt, b) = (r.min.x, r.min.y, r.max.x, r.max.y);
+    let strips = [
+        (
+            D::NorthWest,
+            Rect::from_min_max(pos2(l, t), pos2(l + CORNER, t + CORNER)),
+        ),
+        (
+            D::NorthEast,
+            Rect::from_min_max(pos2(rt - CORNER, t), pos2(rt, t + CORNER)),
+        ),
+        (
+            D::SouthWest,
+            Rect::from_min_max(pos2(l, b - CORNER), pos2(l + CORNER, b)),
+        ),
+        (
+            D::SouthEast,
+            Rect::from_min_max(pos2(rt - CORNER, b - CORNER), pos2(rt, b)),
+        ),
+        (
+            D::North,
+            Rect::from_min_max(pos2(l + CORNER, t), pos2(rt - CORNER, t + EDGE)),
+        ),
+        (
+            D::South,
+            Rect::from_min_max(pos2(l + CORNER, b - EDGE), pos2(rt - CORNER, b)),
+        ),
+        (
+            D::West,
+            Rect::from_min_max(pos2(l, t + CORNER), pos2(l + EDGE, b - CORNER)),
+        ),
+        (
+            D::East,
+            Rect::from_min_max(pos2(rt - EDGE, t + CORNER), pos2(rt, b - CORNER)),
+        ),
+    ];
+    for (dir, rect) in strips {
+        let cursor = match dir {
+            D::North => egui::CursorIcon::ResizeNorth,
+            D::South => egui::CursorIcon::ResizeSouth,
+            D::West => egui::CursorIcon::ResizeWest,
+            D::East => egui::CursorIcon::ResizeEast,
+            D::NorthWest => egui::CursorIcon::ResizeNorthWest,
+            D::NorthEast => egui::CursorIcon::ResizeNorthEast,
+            D::SouthWest => egui::CursorIcon::ResizeSouthWest,
+            D::SouthEast => egui::CursorIcon::ResizeSouthEast,
+        };
+        egui::Area::new(egui::Id::new(("resize edge", dir as u8)))
+            .order(egui::Order::Foreground)
+            .fixed_pos(rect.min)
+            .show(ctx, |ui| {
+                let (_, response) = ui.allocate_exact_size(rect.size(), Sense::drag());
+                let response = response.on_hover_cursor(cursor);
+                if response.is_pointer_button_down_on()
+                    && ctx.input(|i| i.pointer.primary_pressed())
+                {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
+                }
+            });
+    }
+}

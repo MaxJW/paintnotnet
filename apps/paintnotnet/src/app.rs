@@ -1138,6 +1138,7 @@ impl PaintNotNetApp {
         let picked: std::cell::Cell<Option<Command>> = std::cell::Cell::new(None);
         let menu = std::cell::RefCell::new(std::mem::take(&mut self.menu));
         let global_menu = self.global_menu_active();
+        let own_buttons = !self.config.system_title_bar;
         let palette = theme::palette(ctx);
         let mut list_actions = Vec::new();
         egui::Panel::top("title_bar")
@@ -1157,6 +1158,14 @@ impl PaintNotNetApp {
                     last_effect: self.last_effect_name(),
                 };
                 let full = ui.max_rect();
+                // Under everything else in the bar: its empty space moves the window.
+                let drag_area = own_buttons.then(|| {
+                    ui.interact(
+                        ui.max_rect().expand2(egui::vec2(12.0, 0.0)),
+                        ui.id().with("title bar drag"),
+                        egui::Sense::click_and_drag(),
+                    )
+                });
                 let row =
                     |layout: egui::Layout| egui::UiBuilder::new().max_rect(full).layout(layout);
                 let left = ui
@@ -1196,6 +1205,10 @@ impl PaintNotNetApp {
                         |ui| {
                             ui.spacing_mut().item_spacing.x = 2.0;
                             ui.spacing_mut().button_padding = egui::vec2(6.0, 6.0);
+                            if own_buttons {
+                                shell::window_buttons(ui, &self.icons);
+                                ui.separator();
+                            }
                             if let Some(c) =
                                 menus::help_button(ui, &mut menu.borrow_mut(), &cx, &self.icons)
                             {
@@ -1263,7 +1276,13 @@ impl PaintNotNetApp {
                         |ui| list_actions = shell::image_list(ui, &self.workspace, &palette),
                     );
                 }
+                if let Some(bar) = drag_area {
+                    shell::title_bar_drag(ctx, &bar);
+                }
             });
+        if own_buttons {
+            shell::resize_edges(ctx);
+        }
         for action in list_actions {
             match action {
                 ImageListAction::Activate(i) => self.workspace.activate(i),

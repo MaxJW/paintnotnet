@@ -27,3 +27,4 @@ mod shapes_ui;
 mod shell_render;
 mod text_ui;
 mod webp_ui;
+mod window_ui;

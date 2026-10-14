@@ -41,9 +41,17 @@ fn main() -> ExitCode {
         }
     };
 
+    // The settings, read before the window opens (it needs them to choose its title bar).
+    let config = (smoke.is_none())
+        .then(paintnotnet::config::default_path)
+        .flatten()
+        .map(|path| (paintnotnet::config::Config::load(&path), path));
+    let system_title_bar = config.as_ref().is_some_and(|(c, _)| c.system_title_bar);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("paintnotnet")
+            // paintnotnet's own window buttons sit in its title bar (unless set otherwise).
+            .with_decorations(system_title_bar)
             // Wayland app_id: lets KDE match the .desktop file and window rules.
             .with_app_id("paintnotnet")
             .with_inner_size([1280.0, 800.0])
@@ -76,8 +84,7 @@ fn main() -> ExitCode {
                 if let Some(dir) = paintnotnet::autosave::default_state_dir() {
                     app.enable_autosave(dir, std::time::Duration::from_secs(60));
                 }
-                if let Some(path) = paintnotnet::config::default_path() {
-                    let config = paintnotnet::config::Config::load(&path);
+                if let Some((config, path)) = config {
                     app.set_config(&cc.egui_ctx, config, Some(path));
                 }
                 let link = paintnotnet::wayland::WindowLink::new(cc);

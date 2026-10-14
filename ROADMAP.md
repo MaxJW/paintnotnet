@@ -591,6 +591,16 @@ Supersedes PLAN.md §5 ("No .pdn support needed"): the user now wants .pdn suppo
       to .bin. The installed copy isn't updated yet (`cargo xtask install-desktop --force` overwrites it)
 - [ ] Left: paint.net 5.x files (needs real ones), and opening our .pdn in real paint.net (needs the user)
 
+### Requested: own window buttons (2026-10-14) ✅
+- [x] No desktop title bar by default: minimise, maximise/restore and close sit at the right end of paintnotnet's own
+      bar (after Help, Settings, the panel toggles and the command search); dragging the bar's empty space moves
+      the window, double-clicking it maximises/restores, 5 px strips along the edges (12 px corners) resize it (not
+      while maximised). Close goes through the unsaved-images prompt. Settings › General › Window › "Use the
+      desktop's title bar" brings the desktop's back (read before the window opens, so it doesn't flash)
+- **Verified 2026-10-14:** screenshot of the window without the desktop's bar, buttons in place; UI test: the three
+  buttons (named for screen readers) send minimise, maximise and close. **Not checked:** dragging, double-click and
+  edge resizing with a real pointer on KWin (no way to drive the pointer from here); the user should try them
+
 ## Phase 17: Remove Background (local AI) — requested 2026-10-13
 - [ ] Effects › Object › Remove Background: BiRefNet (MIT; the model BRIA's RMBG-2.0 is built on) run with ONNX Runtime,
       loaded at run time from the system (`onnxruntime-opt-cuda` 1.29 is installed: CUDA on the RTX 3070, CPU fallback),
