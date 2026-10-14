@@ -885,3 +885,29 @@ fn object_and_selection_dialogs_render() {
             .unwrap();
     }
 }
+
+/// Most tools draw their own cursor over the canvas (crosshair and the tool's icon) and hide
+/// the system one; Pan keeps the system's grab hand.
+#[test]
+fn tools_draw_their_cursor_over_the_canvas() {
+    use eframe::egui::{CursorIcon, Event};
+    let mut h = harness();
+    let canvas = h.state().canvas().rect.unwrap();
+    h.event(Event::PointerMoved(canvas.center()));
+    h.step();
+    h.step();
+    assert_eq!(
+        h.output().platform_output.cursor_icon,
+        CursorIcon::None,
+        "paintbrush hides the system cursor"
+    );
+    if let Ok(dir) = std::env::var("PNN_RENDER_DUMP")
+        && let Ok(image) = h.render()
+    {
+        image.save(format!("{dir}/shell-cursor.png")).unwrap();
+    }
+    h.state_mut().set_tool(pnn_tools::ToolKind::Pan);
+    h.step();
+    h.step();
+    assert_eq!(h.output().platform_output.cursor_icon, CursorIcon::Grab);
+}

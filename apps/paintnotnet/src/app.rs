@@ -1629,6 +1629,7 @@ impl eframe::App for PaintNotNetApp {
             }
         }
 
+        self.icons.update(&ctx);
         // No glass until the canvas draws its backdrop this frame.
         crate::glass::set_backdrop(&ctx, None);
         self.sync_global_menu(&ctx, modal_open && !self.menu.open);
@@ -1675,25 +1676,16 @@ impl eframe::App for PaintNotNetApp {
             None => {}
         }
 
-        self.canvas.tool_cursor = match self.tool {
-            ToolKind::Paintbrush
-            | ToolKind::LineCurve
-            | ToolKind::Shapes
-            | ToolKind::Eraser
-            | ToolKind::PaintBucket
-            | ToolKind::Gradient
-            | ToolKind::ColorPicker
-            | ToolKind::Recolor
-            | ToolKind::CloneStamp => Some(egui::CursorIcon::Crosshair),
-            ToolKind::Text => Some(egui::CursorIcon::Text),
-            ToolKind::Pencil
-            | ToolKind::RectangleSelect
-            | ToolKind::EllipseSelect
-            | ToolKind::LassoSelect
-            | ToolKind::MagicWand => Some(egui::CursorIcon::Crosshair),
-            ToolKind::MoveSelectedPixels | ToolKind::MoveSelection => Some(egui::CursorIcon::Move),
-            _ => None,
-        };
+        // Pan, the move tools and Text keep the system's grab, move and I-beam cursors; the
+        // rest get a drawn crosshair with the tool's icon.
+        self.canvas.tool_cursor = Some(match self.tool {
+            ToolKind::Pan => canvas::ToolCursor::System(egui::CursorIcon::Grab),
+            ToolKind::Text => canvas::ToolCursor::System(egui::CursorIcon::Text),
+            ToolKind::MoveSelectedPixels | ToolKind::MoveSelection => {
+                canvas::ToolCursor::System(egui::CursorIcon::Move)
+            }
+            tool => canvas::ToolCursor::Drawn(self.icons.texture(Icon::for_tool(tool)).id()),
+        });
         self.refresh_gradient();
         self.refresh_vector();
         self.refresh_text();

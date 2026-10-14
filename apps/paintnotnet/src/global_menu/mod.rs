@@ -247,8 +247,8 @@ fn properties(item: &Item, names: &[String]) -> HashMap<String, OwnedValue> {
     if let Some(keys) = &item.shortcut {
         put("shortcut", owned(vec![keys.clone()]));
     }
-    if let Some(icon) = item.icon {
-        put("icon-data", owned(icon.png().to_vec()));
+    if let Some(png) = item.icon.and_then(|i| i.png()) {
+        put("icon-data", owned(png));
     }
     p
 }

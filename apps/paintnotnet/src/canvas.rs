@@ -40,6 +40,16 @@ pub enum ToolEvent {
     },
 }
 
+/// How the pointer looks over the canvas.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ToolCursor {
+    /// A system cursor (grab, move, text).
+    System(egui::CursorIcon),
+    /// Drawn by us (egui can't show cursor images): a crosshair on the hot spot and the
+    /// tool's icon on a small chip beside it.
+    Drawn(egui::TextureId),
+}
+
 #[derive(Default)]
 pub struct CanvasState {
     /// Tool input gathered this frame (taken by the app).
@@ -47,7 +57,7 @@ pub struct CanvasState {
     /// Mouse button that started the current tool drag.
     tool_button: Option<ToolButton>,
     /// Cursor for the active tool over the canvas (set by the app).
-    pub tool_cursor: Option<egui::CursorIcon>,
+    pub tool_cursor: Option<ToolCursor>,
     /// Feather preview: (mask identity, coverage) to tint outside of, set by the app.
     pub overlay: Option<(u64, std::sync::Arc<pnn_core::Mask>)>,
     /// Clone Stamp source marker (image coordinates).
@@ -152,7 +162,15 @@ pub fn show(
     } else if let Some(cursor) = state.tool_cursor
         && (response.hovered() || state.tool_button.is_some())
     {
-        ui.ctx().set_cursor_icon(cursor);
+        match cursor {
+            ToolCursor::System(icon) => ui.ctx().set_cursor_icon(icon),
+            ToolCursor::Drawn(texture) => {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+                if let Some(p) = ui.input(|i| i.pointer.hover_pos()) {
+                    draw_cursor(ui.ctx(), p, texture);
+                }
+            }
+        }
     }
 
     // Wheel. Zoom mode: a mouse wheel steps through the zoom presets about the pointer;
@@ -493,6 +511,47 @@ pub fn show(
             state.cursor,
         );
     }
+}
+
+/// The drawn tool cursor: a crosshair with a gap at `p` (white with a dark halo, so it shows
+/// on any colour) and the tool's icon on a dark chip below right, above everything else.
+fn draw_cursor(ctx: &egui::Context, p: egui::Pos2, texture: egui::TextureId) {
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Tooltip,
+        egui::Id::new("tool_cursor"),
+    ));
+    let (gap, arm) = (3.0, 6.0);
+    let arms = [
+        vec2(1.0, 0.0),
+        vec2(-1.0, 0.0),
+        vec2(0.0, 1.0),
+        vec2(0.0, -1.0),
+    ];
+    for (width, color) in [
+        (3.0, egui::Color32::from_black_alpha(170)),
+        (1.0, egui::Color32::WHITE),
+    ] {
+        for d in arms {
+            painter.line_segment(
+                [p + d * gap, p + d * (gap + arm)],
+                egui::Stroke::new(width, color),
+            );
+        }
+    }
+    let chip = Rect::from_min_size(p + vec2(9.0, 9.0), vec2(20.0, 20.0));
+    painter.rect(
+        chip,
+        6.0,
+        egui::Color32::from_rgba_unmultiplied(20, 22, 26, 225),
+        egui::Stroke::new(1.0, egui::Color32::from_white_alpha(40)),
+        egui::StrokeKind::Inside,
+    );
+    painter.image(
+        texture,
+        Rect::from_center_size(chip.center(), vec2(14.0, 14.0)),
+        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+        egui::Color32::WHITE,
+    );
 }
 
 /// Upload the feather-preview mask when it changed since the last upload.

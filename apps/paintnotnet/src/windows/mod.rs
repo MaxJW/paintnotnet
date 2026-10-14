@@ -112,11 +112,16 @@ fn tool_button(
     } else if response.hovered() {
         ui.painter().rect_filled(rect, radius, palette.hover);
     }
+    let tint = if selected || response.hovered() {
+        palette.text
+    } else {
+        palette.icon
+    };
     ui.painter().image(
         icons.texture(Icon::for_tool(tool)).id(),
-        Rect::from_center_size(rect.center(), vec2(16.0, 16.0)),
+        Rect::from_center_size(rect.center(), vec2(18.0, 18.0)),
         Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-        Color32::WHITE,
+        tint,
     );
     response.on_hover_text(tool.tooltip()).clicked()
 }
@@ -438,9 +443,9 @@ pub fn history(
                 row_background(ui, rect, selected, response.hovered(), palette);
                 let undone = i > current;
                 let tint = if undone {
-                    Color32::from_white_alpha(110)
+                    palette.faint_text
                 } else {
-                    Color32::WHITE
+                    palette.icon
                 };
                 let icon_rect = Rect::from_center_size(
                     pos2(rect.min.x + 16.0, rect.center().y),

@@ -10,7 +10,7 @@ the git branch `recreation` and tag `recreation-2026-10-13` keep that faithful p
 modernised paint.net, "keeping things vaguely in place" but with docked side panels instead of draggable windows, a
 glassy, great-looking UI, better tool controls (brush size first), super smooth performance, extra features, and better
 maths wherever something we copied (paint.net 3.36, BoltBait) can be done more accurately or faster. **Next:** Phase 13
-(design system and docked shell): design A chosen; 13a–13c done, 13d (Lucide icons, tool cursors) next. The recreation backlog (rest of the
+(design system and docked shell): design A chosen; 13a–13d done, 13e (motion) next. The recreation backlog (rest of the
 BoltBait pack, Sketch Blur, comparing against the 5.1.12 release files) is parked below and done on the `recreation`
 branch only if wanted.
 
@@ -341,10 +341,22 @@ ours is better, and keep a test showing the difference.
   fails at 1.9 without the tint boost); renders of the Bevel dialog over a red object (the object shows blurred
   through it) and of the dark and light shells. **On the real desktop** (Wayland, Vulkan, RTX 3070): a screenshot
   zoomed into an image shows it blurred and tinted under every island; smoke test still 164.7 fps, mean 6.07 ms.
-### 13d Icons and cursors
-- [ ] Lucide SVGs (pinned version, ISC licence in NOTICE) rendered and tinted to the theme; every tool, toolbar and
-      panel button; 3.36 icons removed from the build (kept in `assets/icons/pdn336` for the `recreation` branch)
-- [ ] Per-tool cursors drawn over the canvas (egui can't show cursor images)
+### 13d ✅ Icons and cursors
+- [x] Lucide 1.48.0 (released 2026-09-24; ISC, Feather-derived icons MIT; `assets/icons/lucide/` with LICENSE and
+      README, NOTICE, PKGBUILD installs `Lucide-LICENSE`): 109 SVGs embedded, rasterised with `resvg` (no text or
+      raster features; shares the existing tiny-skia 0.12) at the display's scale, re-rasterised if it changes, and
+      tinted to the theme. Every tool, toolbar, panel, title-bar, status-bar and menu icon is Lucide; 19 entries
+      without a clear match (some effects, Invert Colors, Posterize, Sepia) show no icon. The KDE global menu gets
+      PNGs rendered in the theme's icon colour. The 3.36 bitmaps are no longer built in (still in
+      `assets/icons/pdn336` for the `recreation` branch)
+- [x] Drawn tool cursors: over the canvas most tools hide the system cursor and draw a crosshair (white with a dark
+      halo, readable on any colour) with the tool's icon on a small dark chip beside it, above everything else; Pan,
+      the move tools and Text keep the system's grab, move and I-beam cursors
+- **Verified 2026-10-14:** unit tests: every mapped icon parses and draws at 16 px, every tool and toolbar icon
+  has one (only effects/adjustments may lack one), the filled variant is solid; UI test: hovering the canvas with
+  the Paintbrush hides the system cursor, Pan shows the grab hand; renders of the shell, File menu, Layers and
+  History checked by eye, and of the drawn cursor enlarged. Not checked: the drawn cursor on the real desktop
+  (needs a real pointer), the global menu's new icons in Plasma's panel.
 ### 13e Motion
 - [ ] Short, consistent animations for islands, sections, menus and dialogs; never in the way of drawing
 

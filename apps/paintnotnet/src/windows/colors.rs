@@ -333,7 +333,7 @@ impl ColorsState {
             icons.texture(Icon::Swap).id(),
             swap,
             Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
-            Color32::WHITE,
+            icons.tint(),
         );
         if ui
             .interact(swap, ui.id().with("swap"), Sense::click())
@@ -347,7 +347,7 @@ impl ColorsState {
             icons.texture(Icon::Reset).id(),
             reset,
             Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
-            Color32::WHITE,
+            icons.tint(),
         );
         if ui
             .interact(reset, ui.id().with("reset"), Sense::click())

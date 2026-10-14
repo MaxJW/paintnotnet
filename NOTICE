@@ -41,3 +41,10 @@ BSD 3-Clause licence; see the COPYING file in the libwebp-sys crate's vendor dir
 Geist and Geist Mono (https://github.com/vercel/geist-font), the UI typeface, are embedded
 unmodified from release v1.7.2. Copyright 2024 The Geist Project Authors. Licensed under the
 SIL Open Font License, Version 1.1; the full licence is in assets/fonts/geist/OFL.txt.
+
+-------------------------------------------------------------------------------
+
+Lucide icons 1.48.0 (https://github.com/lucide-icons/lucide), the UI's icons, are embedded
+unmodified from assets/icons/lucide/. Copyright (c) 2026 Lucide Icons and Contributors, ISC
+License; icons derived from Feather are Copyright (c) 2013-present Cole Bemis, MIT License.
+Both licences are in full in assets/icons/lucide/LICENSE.

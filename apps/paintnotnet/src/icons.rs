@@ -1,24 +1,55 @@
-//! paint.net 3.36's 16×16 icons (CC BY-NC-ND 2.5, used unmodified; see
-//! `assets/icons/pdn336/README.md`), embedded in the binary.
+//! The UI's icons: Lucide 1.48.0 (ISC, partly MIT from Feather; see
+//! `assets/icons/lucide/LICENSE`), one line style throughout. The SVGs are embedded,
+//! rasterised for the display's scale and tinted to the theme when drawn. Icons without a good
+//! Lucide match (some effects and adjustments) have none.
 
 use std::collections::HashMap;
 
-use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
+use eframe::egui::{self, Color32, ColorImage, TextureHandle, TextureOptions};
 use pnn_tools::ToolKind;
+use resvg::{tiny_skia, usvg};
+
+/// An icon's source: a Lucide file name (`filled` draws its shape solid), or none.
+macro_rules! source {
+    () => {
+        None
+    };
+    ($file:literal) => {
+        Some((
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/icons/lucide/",
+                $file,
+                ".svg"
+            )),
+            false,
+        ))
+    };
+    (filled $file:literal) => {
+        Some((
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/icons/lucide/",
+                $file,
+                ".svg"
+            )),
+            true,
+        ))
+    };
+}
 
 macro_rules! icons {
-    ($($name:ident => $file:literal),* $(,)?) => {
+    ($($name:ident => ($($src:tt)*)),* $(,)?) => {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
         pub enum Icon { $($name),* }
 
         impl Icon {
             pub const ALL: &'static [Icon] = &[$(Icon::$name),*];
 
-            pub(crate) fn png(self) -> &'static [u8] {
+            /// The SVG and whether it's drawn filled; `None` for no icon.
+            pub(crate) fn svg(self) -> Option<(&'static str, bool)> {
                 match self {
-                    $(Icon::$name => include_bytes!(concat!(
-                        env!("CARGO_MANIFEST_DIR"), "/../../assets/icons/pdn336/", $file, ".png"
-                    ))),*
+                    $(Icon::$name => source!($($src)*)),*
                 }
             }
         }
@@ -27,169 +58,169 @@ macro_rules! icons {
 
 icons! {
     // Tools
-    RectangleSelect => "RectangleSelectToolIcon",
-    MoveSelectedPixels => "MoveToolIcon",
-    LassoSelect => "LassoSelectToolIcon",
-    MoveSelection => "MoveSelectionToolIcon",
-    EllipseSelect => "EllipseSelectToolIcon",
-    Zoom => "ZoomToolIcon",
-    MagicWand => "MagicWandToolIcon",
-    Pan => "PanToolIcon",
-    PaintBucket => "PaintBucketIcon",
-    Gradient => "GradientToolIcon",
-    Paintbrush => "PaintBrushToolIcon",
-    Eraser => "EraserToolIcon",
-    Pencil => "PencilToolIcon",
-    ColorPicker => "ColorPickerToolIcon",
-    CloneStamp => "CloneStampToolIcon",
-    Recolor => "RecoloringToolIcon",
-    Text => "TextToolIcon",
-    LineCurve => "LineToolIcon",
-    Shapes => "RectangleToolIcon",
+    RectangleSelect => ("square-dashed"),
+    MoveSelectedPixels => ("move"),
+    LassoSelect => ("lasso"),
+    MoveSelection => ("square-dashed-mouse-pointer"),
+    EllipseSelect => ("circle-dashed"),
+    Zoom => ("zoom-in"),
+    MagicWand => ("wand-sparkles"),
+    Pan => ("hand"),
+    PaintBucket => ("paint-bucket"),
+    Gradient => ("blend"),
+    Paintbrush => ("paintbrush"),
+    Eraser => ("eraser"),
+    Pencil => ("pencil"),
+    ColorPicker => ("pipette"),
+    CloneStamp => ("stamp"),
+    Recolor => ("replace"),
+    Text => ("type"),
+    LineCurve => ("spline"),
+    Shapes => ("shapes"),
     // File / Edit
-    New => "MenuFileNewIcon",
-    Open => "MenuFileOpenIcon",
-    Save => "MenuFileSaveIcon",
-    SaveAs => "MenuFileSaveAsIcon",
-    Print => "MenuFilePrintIcon",
-    Close => "MenuFileCloseIcon",
-    Acquire => "MenuFileAcquireFromScannerOrCameraIcon",
-    Undo => "MenuEditUndoIcon",
-    Redo => "MenuEditRedoIcon",
-    Cut => "MenuEditCutIcon",
-    Copy => "MenuEditCopyIcon",
-    Paste => "MenuEditPasteIcon",
-    PasteNewLayer => "MenuEditPasteInToNewLayerIcon",
-    PasteNewImage => "MenuEditPasteInToNewImageIcon",
-    EraseSelection => "MenuEditEraseSelectionIcon",
-    FillSelection => "MenuEditFillSelectionIcon",
-    InvertSelection => "MenuEditInvertSelectionIcon",
-    SelectAll => "MenuEditSelectAllIcon",
-    Deselect => "MenuEditDeselectIcon",
+    New => ("file-plus"),
+    Open => ("folder-open"),
+    Save => ("save"),
+    SaveAs => ("file-pen"),
+    Print => ("printer"),
+    Close => ("x"),
+    Acquire => ("camera"),
+    Undo => ("undo-2"),
+    Redo => ("redo-2"),
+    Cut => ("scissors"),
+    Copy => ("copy"),
+    Paste => ("clipboard-paste"),
+    PasteNewLayer => ("layers-plus"),
+    PasteNewImage => ("image-plus"),
+    EraseSelection => ("eraser"),
+    FillSelection => ("paint-bucket"),
+    InvertSelection => ("squares-exclude"),
+    SelectAll => ("scan"),
+    Deselect => ("square-x"),
     // View
-    ZoomIn => "MenuViewZoomInIcon",
-    ZoomOut => "MenuViewZoomOutIcon",
-    ZoomToWindow => "MenuViewZoomToWindowIcon",
-    ZoomToSelection => "MenuViewZoomToSelectionIcon",
-    ActualSize => "MenuViewActualSizeIcon",
-    Grid => "MenuViewGridIcon",
-    Rulers => "MenuViewRulersIcon",
+    ZoomIn => ("zoom-in"),
+    ZoomOut => ("zoom-out"),
+    ZoomToWindow => ("fullscreen"),
+    ZoomToSelection => ("scan-search"),
+    ActualSize => ("ratio"),
+    Grid => ("grid-3x3"),
+    Rulers => ("ruler"),
     // Image
-    Crop => "MenuImageCropIcon",
-    Resize => "MenuImageResizeIcon",
-    CanvasSize => "MenuImageCanvasSizeIcon",
-    FlipImageHorizontal => "MenuImageFlipHorizontalIcon",
-    FlipImageVertical => "MenuImageFlipVerticalIcon",
-    Rotate90Cw => "MenuImageRotate90CWIcon",
-    Rotate90Ccw => "MenuImageRotate90CCWIcon",
-    Rotate180 => "MenuImageRotate180Icon",
-    Flatten => "MenuImageFlattenIcon",
+    Crop => ("crop"),
+    Resize => ("scaling"),
+    CanvasSize => ("frame"),
+    FlipImageHorizontal => ("arrow-left-right"),
+    FlipImageVertical => ("arrow-up-down"),
+    Rotate90Cw => ("rotate-cw"),
+    Rotate90Ccw => ("rotate-ccw"),
+    Rotate180 => ("refresh-cw"),
+    Flatten => ("square-stack"),
     // Layers
-    AddLayer => "MenuLayersAddNewLayerIcon",
-    DeleteLayer => "MenuLayersDeleteLayerIcon",
-    DuplicateLayer => "MenuLayersDuplicateLayerIcon",
-    MergeLayerDown => "MenuLayersMergeLayerDownIcon",
-    ImportFromFile => "MenuLayersImportFromFileIcon",
-    FlipLayerHorizontal => "MenuLayersFlipHorizontalIcon",
-    FlipLayerVertical => "MenuLayersFlipVerticalIcon",
-    LayerProperties => "MenuLayersLayerPropertiesIcon",
-    MoveLayerUp => "MenuLayersMoveLayerUpIcon",
-    MoveLayerDown => "MenuLayersMoveLayerDownIcon",
-    RotateZoom => "RotateZoomIcon",
+    AddLayer => ("layers-plus"),
+    DeleteLayer => ("trash"),
+    DuplicateLayer => ("copy"),
+    MergeLayerDown => ("merge"),
+    ImportFromFile => ("file-input"),
+    FlipLayerHorizontal => ("arrow-left-right"),
+    FlipLayerVertical => ("arrow-up-down"),
+    LayerProperties => ("sliders-horizontal"),
+    MoveLayerUp => ("arrow-up"),
+    MoveLayerDown => ("arrow-down"),
+    RotateZoom => ("rotate-3d"),
     // Adjustments
-    AutoLevel => "AutoLevel",
-    BlackAndWhite => "BlackAndWhiteIcon",
-    BrightnessContrast => "BrightnessAndContrastAdjustment",
-    Curves => "CurvesEffect",
-    HueSaturation => "HueAndSaturationAdjustment",
-    InvertColors => "InvertColorsEffect",
-    Levels => "LevelsEffect",
-    Posterize => "PosterizeEffectIcon",
-    Sepia => "SepiaEffect",
-    // Effects (3.36 icons; history entries)
-    FxBlur => "BlurEffect",
-    FxAddNoise => "AddNoiseEffect",
-    FxBulge => "BulgeEffect",
-    FxClouds => "CloudsEffect",
-    FxDents => "DentsEffectIcon",
-    FxEdgeDetect => "EdgeDetectEffect",
-    FxEmboss => "EmbossEffect",
-    FxFragment => "FragmentEffectIcon",
-    FxFrostedGlass => "FrostedGlassEffect",
-    FxGlow => "GlowEffect",
-    FxInkSketch => "InkSketchEffectIcon",
-    FxJulia => "JuliaFractalEffectIcon",
-    FxMandelbrot => "MandelbrotFractalEffectIcon",
-    FxMedian => "MedianEffectIcon",
-    FxMotionBlur => "MotionBlurEffect",
-    FxOilPainting => "OilPaintingEffect",
-    FxOutline => "OutlineEffectIcon",
-    FxPencilSketch => "PencilSketchEffectIcon",
-    FxPixelate => "PixelateEffect",
-    FxPolarInversion => "PolarInversionEffect",
-    FxRadialBlur => "RadialBlurEffect",
-    FxRedEye => "RedEyeRemoveEffect",
-    FxReduceNoise => "ReduceNoiseEffectIcon",
-    FxRelief => "ReliefEffect",
-    FxSharpen => "SharpenEffect",
-    FxSoftenPortrait => "SoftenPortraitEffectIcon",
-    FxSurfaceBlur => "SurfaceBlurEffectIcon",
-    FxTile => "TileEffect",
-    FxTwist => "TwistEffect",
-    FxVignette => "VignetteEffectIcon",
-    FxZoomBlur => "ZoomBlurEffect",
+    AutoLevel => ("sparkles"),
+    BlackAndWhite => ("contrast"),
+    BrightnessContrast => ("sun-medium"),
+    Curves => ("chart-spline"),
+    HueSaturation => ("droplet"),
+    InvertColors => (),
+    Levels => ("chart-column"),
+    Posterize => (),
+    Sepia => (),
+    // Effects (history entries): only clear matches get an icon
+    FxBlur => (),
+    FxAddNoise => ("dices"),
+    FxBulge => (),
+    FxClouds => ("cloud"),
+    FxDents => (),
+    FxEdgeDetect => (),
+    FxEmboss => (),
+    FxFragment => (),
+    FxFrostedGlass => ("glass-water"),
+    FxGlow => ("sparkle"),
+    FxInkSketch => ("pen-tool"),
+    FxJulia => (),
+    FxMandelbrot => (),
+    FxMedian => (),
+    FxMotionBlur => ("wind"),
+    FxOilPainting => ("palette"),
+    FxOutline => (),
+    FxPencilSketch => ("pencil"),
+    FxPixelate => ("grid-3x3"),
+    FxPolarInversion => (),
+    FxRadialBlur => (),
+    FxRedEye => ("eye"),
+    FxReduceNoise => (),
+    FxRelief => ("mountain"),
+    FxSharpen => (),
+    FxSoftenPortrait => (),
+    FxSurfaceBlur => (),
+    FxTile => ("layout-grid"),
+    FxTwist => ("tornado"),
+    FxVignette => ("aperture"),
+    FxZoomBlur => ("focus"),
     // Windows, settings, help
-    ToolsWindow => "MenuWindowToolsIcon",
-    HistoryWindow => "MenuWindowHistoryIcon",
-    LayersWindow => "MenuWindowLayersIcon",
-    ColorsWindow => "MenuWindowColorsIcon",
-    Settings => "SettingsIcon",
-    Help => "MenuHelpHelpTopicsIcon",
-    About => "MenuHelpAboutIcon",
+    ToolsWindow => ("wrench"),
+    HistoryWindow => ("rotate-ccw-clock"),
+    LayersWindow => ("layers"),
+    ColorsWindow => ("palette"),
+    Settings => ("settings"),
+    Help => ("circle-question-mark"),
+    About => ("info"),
     // Toolbar options
-    AntialiasingOn => "AntiAliasingEnabledIcon",
-    AntialiasingOff => "AntiAliasingDisabledIcon",
-    BlendNormal => "BlendingEnabledIcon",
-    BlendOverwrite => "BlendingOverwriteIcon",
-    SelReplace => "ToolConfigStrip.SelectionCombineMode.Replace",
-    SelUnion => "ToolConfigStrip.SelectionCombineMode.Union",
-    SelExclude => "ToolConfigStrip.SelectionCombineMode.Exclude",
-    SelIntersect => "ToolConfigStrip.SelectionCombineMode.Intersect",
-    SelXor => "ToolConfigStrip.SelectionCombineMode.Xor",
-    DrawNormal => "ToolConfigStrip.SelectionDrawModeSplitButton.Normal",
-    DrawFixedRatio => "ToolConfigStrip.SelectionDrawModeSplitButton.FixedRatio",
-    DrawFixedSize => "ToolConfigStrip.SelectionDrawModeSplitButton.FixedSize",
-    FloodContiguous => "ToolConfigStrip.FloodMode.Local",
-    FloodGlobal => "ToolConfigStrip.FloodMode.Global",
-    ShapeOutline => "ShapeOutlineIcon",
-    ShapeInterior => "ShapeInteriorIcon",
-    ShapeBoth => "ShapeBothIcon",
-    GradientLinear => "LinearClampedGradientIcon",
-    GradientReflected => "LinearReflectedGradientIcon",
-    GradientDiamond => "LinearDiamondGradientIcon",
-    GradientRadial => "RadialGradientIcon",
-    GradientConical => "ConicalGradientIcon",
-    ColorMode => "AllColorChannelsIcon",
-    TransparencyMode => "AlphaChannelOnlyIcon",
-    Bold => "FontBoldIcon",
-    Italic => "FontItalicIcon",
-    Underline => "FontUnderlineIcon",
-    AlignLeft => "TextAlignLeftIcon",
-    AlignCenter => "TextAlignCenterIcon",
-    AlignRight => "TextAlignRightIcon",
-    Plus => "PlusButtonIcon",
-    Minus => "MinusButtonIcon",
+    AntialiasingOn => ("circle"),
+    AntialiasingOff => ("circle-dashed"),
+    BlendNormal => ("layers"),
+    BlendOverwrite => ("square-stack"),
+    SelReplace => ("square"),
+    SelUnion => ("squares-unite"),
+    SelExclude => ("squares-subtract"),
+    SelIntersect => ("squares-intersect"),
+    SelXor => ("squares-exclude"),
+    DrawNormal => ("square-dashed"),
+    DrawFixedRatio => ("ratio"),
+    DrawFixedSize => ("ruler-dimension-line"),
+    FloodContiguous => ("droplet"),
+    FloodGlobal => ("globe"),
+    ShapeOutline => ("square"),
+    ShapeInterior => (filled "square"),
+    ShapeBoth => ("square-square"),
+    GradientLinear => ("arrow-right"),
+    GradientReflected => ("arrow-left-right"),
+    GradientDiamond => ("diamond"),
+    GradientRadial => ("circle-dot"),
+    GradientConical => ("cone"),
+    ColorMode => ("palette"),
+    TransparencyMode => ("eye-dashed"),
+    Bold => ("bold"),
+    Italic => ("italic"),
+    Underline => ("underline"),
+    AlignLeft => ("text-align-start"),
+    AlignCenter => ("text-align-center"),
+    AlignRight => ("text-align-end"),
+    Plus => ("plus"),
+    Minus => ("minus"),
     // Status bar, colors, history
-    ImageSize => "ImageSizeIcon",
-    CursorXY => "CursorXYIcon",
-    Selection => "SelectionIcon",
-    Swap => "SwapIcon",
-    Reset => "ResetIcon",
-    AddColor => "ColorAddOverlay",
-    Palettes => "ColorPalettes",
-    Swatch => "SwatchIcon",
-    HistoryRewind => "HistoryRewindIcon",
-    HistoryFastForward => "HistoryFastForwardIcon",
+    ImageSize => ("image"),
+    CursorXY => ("mouse-pointer-2"),
+    Selection => ("square-dashed"),
+    Swap => ("arrow-left-right"),
+    Reset => ("rotate-ccw"),
+    AddColor => ("plus"),
+    Palettes => ("swatch-book"),
+    Swatch => ("square"),
+    HistoryRewind => ("rewind"),
+    HistoryFastForward => ("fast-forward"),
 }
 
 impl Icon {
@@ -218,37 +249,121 @@ impl Icon {
     }
 }
 
-/// Icon textures, uploaded once at startup.
+/// Whether the app is showing its dark theme (icons exported to the KDE global menu, which
+/// Plasma draws in the system's colours, follow it).
+static DARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+impl Icon {
+    /// The icon as a 16×16 PNG in the theme's icon colour, for the KDE global menu.
+    pub fn png(self) -> Option<Vec<u8>> {
+        let (svg, filled) = self.svg()?;
+        let dark = DARK.load(std::sync::atomic::Ordering::Relaxed);
+        let palette = if dark {
+            crate::theme::Palette::dark()
+        } else {
+            crate::theme::Palette::light()
+        };
+        let mask = rasterize(svg, filled, 16);
+        let [r, g, b, _] = palette.icon.to_array();
+        let mut rgba = Vec::with_capacity(16 * 16 * 4);
+        for p in &mask.pixels {
+            rgba.extend_from_slice(&[r, g, b, p.a()]);
+        }
+        let mut png = Vec::new();
+        image::ImageEncoder::write_image(
+            image::codecs::png::PngEncoder::new(&mut png),
+            &rgba,
+            16,
+            16,
+            image::ExtendedColorType::Rgba8,
+        )
+        .ok()?;
+        Some(png)
+    }
+}
+
+/// Icon textures: white masks at the display's scale, tinted when drawn.
 pub struct Icons {
     textures: HashMap<Icon, TextureHandle>,
     blank: TextureHandle,
+    /// Pixels per point the textures were rasterised for.
+    ppp: f32,
+    tint: Color32,
 }
 
 /// Icon edge in points.
 pub const ICON_SIZE: f32 = 16.0;
 
+/// Rasterise a Lucide SVG at `px`×`px` as a white mask.
+fn rasterize(svg: &str, filled: bool, px: u32) -> ColorImage {
+    let mut text = svg.replace("currentColor", "#ffffff");
+    if filled {
+        text = text.replace("fill=\"none\"", "fill=\"#ffffff\"");
+    }
+    let tree =
+        usvg::Tree::from_str(&text, &usvg::Options::default()).expect("embedded icon parses");
+    let mut pixmap = tiny_skia::Pixmap::new(px, px).expect("icon size");
+    let scale = px as f32 / tree.size().width();
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    ColorImage::from_rgba_premultiplied([px as usize, px as usize], pixmap.data())
+}
+
 impl Icons {
     pub fn load(ctx: &egui::Context) -> Self {
+        let ppp = ctx.pixels_per_point();
+        let px = Self::pixels(ppp);
         let textures = Icon::ALL
             .iter()
-            .map(|&icon| {
-                let rgba = image::load_from_memory_with_format(icon.png(), image::ImageFormat::Png)
-                    .expect("embedded icon decodes")
-                    .into_rgba8();
-                let size = [rgba.width() as usize, rgba.height() as usize];
-                let image = ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
-                (
+            .filter_map(|&icon| {
+                let (svg, filled) = icon.svg()?;
+                let image = rasterize(svg, filled, px);
+                Some((
                     icon,
-                    ctx.load_texture(format!("icon-{icon:?}"), image, TextureOptions::NEAREST),
-                )
+                    ctx.load_texture(format!("icon-{icon:?}"), image, TextureOptions::LINEAR),
+                ))
             })
             .collect();
         let blank = ctx.load_texture(
             "icon-blank",
-            ColorImage::new([16, 16], vec![egui::Color32::TRANSPARENT; 256]),
+            ColorImage::new([16, 16], vec![Color32::TRANSPARENT; 256]),
             TextureOptions::NEAREST,
         );
-        Self { textures, blank }
+        Self {
+            textures,
+            blank,
+            ppp,
+            tint: crate::theme::palette(ctx).icon,
+        }
+    }
+
+    fn pixels(ppp: f32) -> u32 {
+        (ICON_SIZE * ppp).round().max(1.0) as u32
+    }
+
+    /// Call once a frame: follow the theme, and re-rasterise when the display scale changes.
+    pub fn update(&mut self, ctx: &egui::Context) {
+        let palette = crate::theme::palette(ctx);
+        self.tint = palette.icon;
+        DARK.store(palette.dark, std::sync::atomic::Ordering::Relaxed);
+        let ppp = ctx.pixels_per_point();
+        if (ppp - self.ppp).abs() > 0.01 {
+            self.ppp = ppp;
+            let px = Self::pixels(ppp);
+            for (icon, handle) in &mut self.textures {
+                if let Some((svg, filled)) = icon.svg() {
+                    handle.set(rasterize(svg, filled, px), TextureOptions::LINEAR);
+                }
+            }
+        }
+    }
+
+    /// The colour icons are drawn in for the current theme.
+    pub fn tint(&self) -> Color32 {
+        self.tint
     }
 
     /// A transparent 16×16 spacer.
@@ -256,13 +371,15 @@ impl Icons {
         egui::Image::new((self.blank.id(), egui::vec2(ICON_SIZE, ICON_SIZE)))
     }
 
+    /// The icon's texture (a white mask: draw it tinted), or a transparent one.
     pub fn texture(&self, icon: Icon) -> &TextureHandle {
-        &self.textures[&icon]
+        self.textures.get(&icon).unwrap_or(&self.blank)
     }
 
-    /// The icon at its native 16×16 size.
+    /// The icon at 16×16 points in the theme's icon colour.
     pub fn image(&self, icon: Icon) -> egui::Image<'static> {
-        egui::Image::new((self.textures[&icon].id(), egui::vec2(ICON_SIZE, ICON_SIZE)))
+        egui::Image::new((self.texture(icon).id(), egui::vec2(ICON_SIZE, ICON_SIZE)))
+            .tint(self.tint)
     }
 }
 
@@ -271,16 +388,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_icon_decodes_at_16px() {
+    fn every_icon_renders_something_at_16px() {
         for &icon in Icon::ALL {
-            let img =
-                image::load_from_memory(icon.png()).unwrap_or_else(|e| panic!("{icon:?}: {e}"));
-            assert!(
-                img.width() <= 16 && img.height() <= 16,
-                "{icon:?} is {}x{}",
-                img.width(),
-                img.height()
-            );
+            let Some((svg, filled)) = icon.svg() else {
+                continue;
+            };
+            let image = rasterize(svg, filled, 16);
+            let ink = image.pixels.iter().filter(|p| p.a() > 64).count();
+            assert!(ink >= 12, "{icon:?} draws {ink} px");
         }
+    }
+
+    #[test]
+    fn tools_and_toolbar_buttons_all_have_icons() {
+        for tool in ToolKind::ALL {
+            assert!(Icon::for_tool(tool).svg().is_some(), "{tool:?}");
+        }
+        let without: Vec<Icon> = Icon::ALL
+            .iter()
+            .copied()
+            .filter(|i| i.svg().is_none())
+            .collect();
+        assert!(
+            without.iter().all(|i| format!("{i:?}").starts_with("Fx")
+                || matches!(i, Icon::InvertColors | Icon::Posterize | Icon::Sepia)),
+            "only some effects and adjustments lack an icon: {without:?}"
+        );
+    }
+
+    #[test]
+    fn filled_icons_are_solid() {
+        let (svg, _) = Icon::ShapeInterior.svg().unwrap();
+        let outline = rasterize(svg, false, 16);
+        let filled = rasterize(svg, true, 16);
+        let ink = |i: &ColorImage| i.pixels.iter().filter(|p| p.a() > 64).count();
+        assert!(ink(&filled) > ink(&outline) * 2);
     }
 }
