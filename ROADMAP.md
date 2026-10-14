@@ -498,6 +498,8 @@ ours is better, and keep a test showing the difference.
       Test: a dark-blue and a light-yellow step of equal RGB size: RGB treats them alike, OKLab matches the yellows only
 - Gradient UI tests now accept the dither's ±1 level at exact half-way pixels.
 ### 15d GPU and frame budget (in progress)
+- Decisions (2026-10-14): fractals may compute in f32 on the GPU (tiny differences at the set's edges from the CPU's
+  f64 are accepted); layers are composited on the GPU so whole-image previews (live gradient, effects) reach 165 fps.
 - [x] Measured (release, 4K photo, 165 Hz display, `--smoke-test` modes; `PNN_PROFILE=1` now prints per-stage
       timings): pan/zoom, brush strokes (50 and 300 px) and the feather slider hold 165 fps; the live gradient ran
       29 fps and the Posterize preview 121 fps with 26 ms spikes. Every full-image change paid ~12.5 ms to reach the
@@ -510,8 +512,10 @@ ours is better, and keep a test showing the difference.
       one by one on one thread (`TiledBuffer::slots_in`); Normal blending skips the arithmetic for opaque and (over
       non-transparent) fully transparent sources, exactly (tested over 40 000 random pairs). Gradient render 16.5 →
       12 ms; live gradient 29 → 53 fps
-- [ ] To decide: a live gradient (or any whole-image preview) at 165 fps needs the preview drawn on the GPU, which
-      means compositing layers there too (a GPU compositor); the CPU path is now ~12 ms render + ~4 ms upload
+- [ ] **GPU compositor:** layers live on the GPU as tile textures and are blended there (every 3.36 blend mode and
+      layer opacity, the same rounding as `pnn-core`'s blend ops, tested against the CPU compositor); a change uploads
+      only the changed layer's tiles. The CPU compositor stays for saving, flattening and as the fallback. Goal: the
+      live gradient (now 53 fps: ~12 ms render + ~4 ms upload) and whole-image previews at 165 fps
 - [x] **Effects on the GPU** (`pnn-render/src/effects.rs`, `effects.wgsl`): Motion, Zoom and Radial Blur ported
       exactly (3.36's fixed point in i32/u32; bilinear weights in f32 as the CPU does). An effect offers a `GpuJob`
       (`Renderer::gpu`); the app wraps its renderer so the first tile renders the whole bounds on the GPU (row bands,
@@ -525,9 +529,30 @@ ours is better, and keep a test showing the difference.
 - Fixed on the way: a preview still rendering at exit destroyed the GPU device on its worker thread while the
   process exited (NVIDIA driver segfault); `on_exit` now cancels it and waits for the workers to let go.
 - [ ] Still slow at 4K, not yet on the GPU: Mandelbrot (~5.6 s), Julia (2.4 s), Dents (2.6 s), Outline / Median /
-      Reduce Noise (1.5–1.9 s), Bokeh, Morphology, Surface Blur (1.1–1.3 s). The fractals compute in f64 on the CPU;
-      an f32 port would not match pixel for pixel, so that needs a decision (accept f32, or emulate f64)
-## Phase 16: Remove Background (local AI) — requested 2026-10-13
+      Reduce Noise (1.5–1.9 s), Bokeh, Morphology, Surface Blur (1.1–1.3 s). Fractals in f32 (decided); the rest
+      exact where the CPU's maths is integer
+## Phase 16: .pdn files and one window — requested 2026-10-14
+Supersedes PLAN.md §5 ("No .pdn support needed"): the user now wants .pdn support.
+- [ ] **Read .pdn.** What is known: a file is `PDN3`, a 24-bit little-endian length, an XML header (`<pdnImage width
+      height layers savedWithVersion>` with a PNG thumbnail), then the `Document` object written with .NET's
+      BinaryFormatter (NRBF), layer pixels in gzip-compressed chunks. Port the layout from 3.36's `Document.cs` and
+      layer serialization in `reference/OpenPDN` (authoritative for 3.x); an NRBF reader in Rust (pypdn, MIT, is a
+      reference: read-only Python, tested on 3.5 and 4.21 files). Not known: whether 5.x changed the NRBF body. A
+      third-party reader found 5.108/5.109 files' headers unchanged, which says nothing about the body. Needs real
+      files saved by 5.x (from the user, or public samples) before 5.x support can be claimed; never decompile
+- [ ] **Write .pdn** (Save As › paint.net image): 3.36's layout. Whether paint.net 5.x opens it must be checked with
+      the real program (the user's 5.1.12, e.g. under Wine); until then, saves as .pdn carry no promise of opening in
+      5.x
+- [ ] Layers, names, opacity, visibility, blend modes, DPI round-trip; paint.net-only blend modes map 1:1
+- [ ] **One window:** opening files while paintnotnet runs (Dolphin, the launcher, the command line) sends them to the
+      running window as new tabs instead of starting a second one, over D-Bus (`zbus`, already used by the global menu;
+      a well-known name on the session bus, the second process hands over its paths and exits); the running window
+      asks to be raised with the launcher's activation token (`XDG_ACTIVATION_TOKEN`; KWin may still refuse focus, to be
+      checked). `--new-window` keeps the old behaviour
+- [ ] `.desktop`/PKGBUILD: `.pdn` in MimeType; shared-mime-info defines no type for `*.pdn` (checked: not in this
+      system's `/usr/share/mime/globs2`), so ship a MIME XML (`image/x-paintnet`, glob `*.pdn`, magic `PDN3`)
+
+## Phase 17: Remove Background (local AI) — requested 2026-10-13
 - [ ] Effects › Object › Remove Background: BiRefNet (MIT; the model BRIA's RMBG-2.0 is built on) run with ONNX Runtime,
       loaded at run time from the system (`onnxruntime-opt-cuda` 1.29 is installed: CUDA on the RTX 3070, CPU fallback),
       through the `ort` crate (2.0.0-rc.14, `load-dynamic`, `api-29`)
@@ -538,7 +563,7 @@ ours is better, and keep a test showing the difference.
       layer in the background, sliders re-shape the mask live
 - [ ] PKGBUILD: optdepends onnxruntime
 
-## Phase 17: Enhanced features (to agree)
+## Phase 18: Enhanced features (to agree)
 - [ ] Ideas to discuss, not yet agreed: adjustment layers / non-destructive effects, layer groups, select subject (the
       Remove Background mask as a selection), content-aware fill, smarter magic wand, more export options
 
