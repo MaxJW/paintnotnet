@@ -75,6 +75,16 @@ pub enum SamplingMode {
     Image,
 }
 
+/// How the Magic Wand and Paint Bucket measure colour differences (paintnotnet addition).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ToleranceSpace {
+    /// OKLab: as different as colours look.
+    #[default]
+    Perceptual,
+    /// paint.net's squared RGB differences.
+    Rgb,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ToleranceAlphaMode {
     #[default]
@@ -451,6 +461,7 @@ pub struct ToolSettings {
     /// 0..=100 %.
     pub tolerance: u8,
     pub tolerance_alpha: ToleranceAlphaMode,
+    pub tolerance_space: ToleranceSpace,
     pub sampling: SamplingMode,
     pub picker_sampling: ColorPickerSampling,
     pub picker_after_click: ColorPickerAfterClick,
@@ -500,6 +511,7 @@ impl Default for ToolSettings {
             flood_mode: FloodMode::Contiguous,
             tolerance: 50,
             tolerance_alpha: ToleranceAlphaMode::Premultiplied,
+            tolerance_space: ToleranceSpace::Perceptual,
             sampling: SamplingMode::Layer,
             picker_sampling: ColorPickerSampling::SinglePixel,
             picker_after_click: ColorPickerAfterClick::DoNotSwitch,

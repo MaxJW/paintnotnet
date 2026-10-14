@@ -232,6 +232,7 @@ fn options(
             percent(ui, "Tolerance", &mut s.tolerance, palette);
             g(ui, "feather", |ui| feather(ui, s, state, palette));
             more(ui, icons, |ui| {
+                tolerance_space(ui, s, icons, palette);
                 sampling(ui, s, icons, palette);
                 selection_quality(ui, s, icons, palette);
             });
@@ -264,7 +265,10 @@ fn options(
             g(ui, "fill", |ui| fill_style(ui, s, palette));
             opacity(ui, s, palette);
             g(ui, "rendering", |ui| rendering(ui, s, icons, palette, true));
-            more(ui, icons, |ui| sampling(ui, s, icons, palette));
+            more(ui, icons, |ui| {
+                tolerance_space(ui, s, icons, palette);
+                sampling(ui, s, icons, palette);
+            });
         }
         Gradient => {
             g(ui, "gradient type", |ui| {
@@ -791,6 +795,31 @@ fn flood_mode(ui: &mut egui::Ui, s: &mut ToolSettings, icons: &Icons, palette: &
         ],
         palette,
     );
+}
+
+/// Compare colours as they look (OKLab) or as paint.net does (RGB).
+fn tolerance_space(ui: &mut egui::Ui, s: &mut ToolSettings, icons: &Icons, palette: &Palette) {
+    ui.horizontal(|ui| {
+        label(ui, "Compare colors", palette);
+        crate::controls::segmented(
+            ui,
+            icons,
+            &mut s.tolerance_space,
+            &[
+                (
+                    ToleranceSpace::Perceptual,
+                    Seg::Text("As seen"),
+                    "Tolerance follows how different colors look (OKLab)",
+                ),
+                (
+                    ToleranceSpace::Rgb,
+                    Seg::Text("RGB"),
+                    "paint.net's comparison of red, green and blue values",
+                ),
+            ],
+            palette,
+        );
+    });
 }
 
 fn sampling(ui: &mut egui::Ui, s: &mut ToolSettings, icons: &Icons, palette: &Palette) {

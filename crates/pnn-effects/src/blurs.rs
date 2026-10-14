@@ -19,6 +19,26 @@ use pnn_core::{BlendMode, ColorBgra, Rect, Surface};
 use crate::framework::{EffectDef, PropDef, Renderer, Value};
 
 /// 3.36 `ColorBgra.Blend(colors, count)`: alpha-weighted average.
+/// [`blend`], or the same average taken in linear light.
+fn blend_in(samples: &[ColorBgra], linear: bool) -> ColorBgra {
+    if !linear || samples.is_empty() {
+        return blend(samples);
+    }
+    let a_sum: u64 = samples.iter().map(|c| c.a as u64).sum();
+    let a = (a_sum / samples.len() as u64) as u8;
+    if a_sum == 0 {
+        return ColorBgra::from_bgra(0, 0, 0, a);
+    }
+    let ch = |f: fn(&ColorBgra) -> u8| {
+        let sum: i64 = samples
+            .iter()
+            .map(|c| c.a as i64 * srgb_to_linear16(f(c)))
+            .sum();
+        linear16_to_srgb(sum / a_sum as i64)
+    };
+    ColorBgra::from_bgra(ch(|c| c.b), ch(|c| c.g), ch(|c| c.r), a)
+}
+
 pub fn blend(samples: &[ColorBgra]) -> ColorBgra {
     if samples.is_empty() {
         return ColorBgra::TRANSPARENT;
@@ -141,8 +161,10 @@ impl<'a> Block<'a> {
     }
 }
 
-/// Weighted 1-D tent (r+1−|d|) of `a` (length L + 2r, index r = first output): out[j] for
-/// j in 0..L, via two running box sums.
+/// 3.36's weighted 1-D tent (r+1−|d|) of `a` (length L + 2r, index r = first output):
+/// out[j] for j in 0..L, via two running box sums. Kept to test against: the Gaussian
+/// replaced it.
+#[cfg(test)]
 pub(crate) fn tent(a: &[i64], r: usize, out: &mut [i64]) {
     let n = a.len();
     let mut s = vec![0i64; n + 1];
@@ -172,10 +194,171 @@ fn boxed(a: &[i64], r: usize, out: &mut [i64]) {
     }
 }
 
-/// Separable alpha-weighted blur with a 1-D kernel applied on both axes.
+/// A separable blur's 1-D kernel.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Kernel {
+    /// A box of width 2r+1 (Square Blur).
+    Box,
+    /// Boxes of these radii one after another: a large Gaussian (see [`Separable::gaussian`]).
+    Boxes(Vec<usize>),
+    /// Explicit integer weights (length 2r+1): a small Gaussian, sampled exactly.
+    Weights(Vec<i64>),
+}
+
+/// Separable alpha-weighted blur with a 1-D kernel applied on both axes; `r` is the kernel's
+/// half-width. `linear` averages colours in linear light instead of sRGB.
 pub(crate) struct Separable {
     pub(crate) r: usize,
-    pub(crate) kernel: fn(&[i64], usize, &mut [i64]),
+    pub(crate) kernel: Kernel,
+    pub(crate) linear: bool,
+}
+
+impl Separable {
+    /// Square Blur's box.
+    pub(crate) fn square(radius: usize) -> Self {
+        Self {
+            r: radius,
+            kernel: Kernel::Box,
+            linear: false,
+        }
+    }
+
+    /// A true Gaussian, replacing 3.36's tent kernel (weights r+1−|d|, a triangle, which
+    /// blurs highlights into diamonds and kinks edges). σ matches the tent's variance at the
+    /// same radius, so a radius blurs as much as it did; the Gaussian is approximated by
+    /// four successive boxes (Kovesi's widths), so the cost doesn't grow with the radius.
+    pub(crate) fn gaussian(radius: usize) -> Self {
+        let sigma = tent_sigma(radius);
+        if sigma < 0.3 {
+            return Self::square(0);
+        }
+        if sigma <= 8.0 {
+            // Small: sample the curve to ±3σ (boxes this narrow can't hit σ closely).
+            let r = (3.0 * sigma).ceil() as usize;
+            let weights = (0..=2 * r)
+                .map(|i| {
+                    let d = i as f64 - r as f64;
+                    ((-d * d / (2.0 * sigma * sigma)).exp() * 65536.0).round() as i64
+                })
+                .collect();
+            return Self {
+                r,
+                kernel: Kernel::Weights(weights),
+                linear: false,
+            };
+        }
+        let radii = gaussian_boxes(sigma, 4);
+        Self {
+            r: radii.iter().sum(),
+            kernel: Kernel::Boxes(radii),
+            linear: false,
+        }
+    }
+
+    pub(crate) fn linear(mut self, linear: bool) -> Self {
+        self.linear = linear;
+        self
+    }
+
+    /// Apply the kernel to `a` (length `out.len() + 2r`).
+    fn apply(&self, a: &[i64], out: &mut [i64]) {
+        match &self.kernel {
+            Kernel::Box => boxed(a, self.r, out),
+            // Normalised per box / pass so sums never grow (four wide boxes on both axes
+            // would overflow i64); inputs carry 16 extra bits, so nothing is lost.
+            Kernel::Boxes(radii) => {
+                let mut cur = a.to_vec();
+                for &r in radii {
+                    let mut next = vec![0i64; cur.len() - 2 * r];
+                    boxed(&cur, r, &mut next);
+                    let width = (2 * r + 1) as i64;
+                    for v in &mut next {
+                        *v = (*v + width / 2).div_euclid(width);
+                    }
+                    cur = next;
+                }
+                out.copy_from_slice(&cur);
+            }
+            Kernel::Weights(w) => {
+                let total: i64 = w.iter().sum();
+                for (j, o) in out.iter_mut().enumerate() {
+                    let sum: i64 = w.iter().zip(&a[j..]).map(|(k, v)| k * v).sum();
+                    *o = (sum + total / 2).div_euclid(total);
+                }
+            }
+        }
+    }
+}
+
+/// Standard deviation of 3.36's tent kernel of `radius` (weights r+1−|d|).
+pub(crate) fn tent_sigma(radius: usize) -> f64 {
+    let r = radius as i64;
+    let (mut sum, mut moment) = (0.0, 0.0);
+    for d in -r..=r {
+        let w = (r + 1 - d.abs()) as f64;
+        sum += w;
+        moment += w * (d * d) as f64;
+    }
+    (moment / sum).sqrt()
+}
+
+/// Radii of `n` successive boxes whose combined kernel is closest to a Gaussian of `sigma`
+/// (P. Kovesi, "Fast almost-Gaussian filtering", 2010): `m` boxes of the lower odd width,
+/// the rest two wider. Empty for no blur.
+pub(crate) fn gaussian_boxes(sigma: f64, n: usize) -> Vec<usize> {
+    if sigma < 0.3 {
+        return Vec::new();
+    }
+    let nf = n as f64;
+    let ideal = (12.0 * sigma * sigma / nf + 1.0).sqrt();
+    let mut wl = ideal.floor() as i64;
+    if wl % 2 == 0 {
+        wl -= 1;
+    }
+    let wl = wl.max(1);
+    let wu = wl + 2;
+    let wlf = wl as f64;
+    let m_ideal =
+        (12.0 * sigma * sigma - nf * wlf * wlf - 4.0 * nf * wlf - 3.0 * nf) / (-4.0 * wlf - 4.0);
+    let m = (m_ideal.round().clamp(0.0, nf)) as usize;
+    (0..n)
+        .map(|i| (if i < m { wl } else { wu } as usize - 1) / 2)
+        .filter(|&r| r > 0)
+        .collect()
+}
+
+/// sRGB byte → linear light in 0..=65535.
+fn srgb_to_linear16(v: u8) -> i64 {
+    static LUT: std::sync::OnceLock<[u16; 256]> = std::sync::OnceLock::new();
+    LUT.get_or_init(|| {
+        std::array::from_fn(|i| {
+            let c = i as f64 / 255.0;
+            let l = if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            };
+            (l * 65535.0).round() as u16
+        })
+    })[v as usize] as i64
+}
+
+/// Linear light in 0..=65535 → sRGB byte.
+fn linear16_to_srgb(v: i64) -> u8 {
+    static LUT: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    LUT.get_or_init(|| {
+        (0..=65535u32)
+            .map(|i| {
+                let l = i as f64 / 65535.0;
+                let c = if l <= 0.003_130_8 {
+                    l * 12.92
+                } else {
+                    1.055 * l.powf(1.0 / 2.4) - 0.055
+                };
+                (c * 255.0).round() as u8
+            })
+            .collect()
+    })[v.clamp(0, 65535) as usize]
 }
 
 const CHANNELS: &str = "Channels and blending";
@@ -247,18 +430,21 @@ impl Renderer for Separable {
         let (we, he) = (w + 2 * r, h + 2 * r);
         let (sw, sh) = (src.width() as i64, src.height() as i64);
         let (ex, ey) = (rect.x as i64 - r as i64, rect.y as i64 - r as i64);
-        // Per source pixel: [1, A', A'·A, A'·B, A'·G, A'·R] with A' = A + A>>7 (3.36).
+        // Per source pixel: [1, A', A'·A, A'·B, A'·G, A'·R] with A' = A + A>>7 (3.36);
+        // in linear light the colours are 16-bit linear values instead of sRGB bytes.
+        let linear = self.linear;
         let q = |c: ColorBgra| -> [i64; 6] {
             let a = c.a as i64;
             let ap = a + (a >> 7);
-            [
-                1,
-                ap,
-                ap * a,
-                ap * c.b as i64,
-                ap * c.g as i64,
-                ap * c.r as i64,
-            ]
+            let ch = |v: u8| {
+                if linear {
+                    srgb_to_linear16(v)
+                } else {
+                    v as i64
+                }
+            };
+            // 16 extra bits of headroom for the normalised kernels.
+            [1, ap, ap * a, ap * ch(c.b), ap * ch(c.g), ap * ch(c.r)].map(|v| v << 16)
         };
         // Vertical pass over every extended column, for the output rows.
         let mut v = vec![[0i64; 6]; we * h];
@@ -282,7 +468,7 @@ impl Renderer for Separable {
                 for (c, s) in col.iter_mut().zip(&samples) {
                     *c = s[k];
                 }
-                (self.kernel)(&col, r, &mut tmp);
+                self.apply(&col, &mut tmp);
                 for (j, t) in tmp.iter().enumerate() {
                     v[j * we + cx][k] = *t;
                 }
@@ -297,7 +483,7 @@ impl Renderer for Separable {
                 for (cx, rv) in row.iter_mut().enumerate() {
                     *rv = v[j * we + cx][k];
                 }
-                (self.kernel)(&row, r, &mut tmp);
+                self.apply(&row, &mut tmp);
                 for (i, t) in tmp.iter().enumerate() {
                     res[i][k] = *t;
                 }
@@ -308,8 +494,19 @@ impl Renderer for Separable {
                 out[j * w + i] = if wa == 0 || wc8 == 0 {
                     ColorBgra::TRANSPARENT
                 } else {
-                    let c = |v: i64| (v / wc).clamp(0, 255) as u8;
-                    ColorBgra::from_bgra(c(b), c(g), c(rr), ((a >> 8) / wa).clamp(0, 255) as u8)
+                    let c = |v: i64| {
+                        if linear {
+                            linear16_to_srgb((v + wc / 2) / wc)
+                        } else {
+                            ((v + wc / 2) / wc).clamp(0, 255) as u8
+                        }
+                    };
+                    ColorBgra::from_bgra(
+                        c(b),
+                        c(g),
+                        c(rr),
+                        (((a >> 8) + wa / 2) / wa).clamp(0, 255) as u8,
+                    )
                 };
             }
         }
@@ -319,6 +516,7 @@ impl Renderer for Separable {
 /// Points along a line, sampled bilinearly (3.36 Motion Blur).
 struct Motion {
     points: Vec<[f32; 2]>,
+    linear: bool,
 }
 
 impl Renderer for Motion {
@@ -334,7 +532,7 @@ impl Renderer for Motion {
                     samples.push(bilinear(src, px, py));
                 }
             }
-            *o = blend(&samples);
+            *o = blend_in(&samples, self.linear);
         }
     }
 
@@ -358,7 +556,7 @@ impl Renderer for Motion {
                         samples.push(block.bilinear(px, py));
                     }
                 }
-                *o = blend(&samples);
+                *o = blend_in(&samples, self.linear);
             }
         }
     }
@@ -368,6 +566,7 @@ impl Renderer for Motion {
 struct Zoom {
     amount: i64,
     offset: [f64; 2],
+    linear: bool,
 }
 
 impl Renderer for Zoom {
@@ -381,10 +580,18 @@ impl Renderer for Zoom {
             let c0 = src.get(x as u32, y);
             let (mut fx, mut fy) = ((x << 16) - fcx, ((y as i64) << 16) - fcy);
             let (mut sr, mut sg, mut sb, mut sa, mut sc) = (0i64, 0i64, 0i64, 0i64, 0i64);
+            let linear = self.linear;
             let mut add = |c: ColorBgra| {
-                sr += c.r as i64 * c.a as i64;
-                sg += c.g as i64 * c.a as i64;
-                sb += c.b as i64 * c.a as i64;
+                let ch = |v: u8| {
+                    if linear {
+                        srgb_to_linear16(v)
+                    } else {
+                        v as i64
+                    }
+                };
+                sr += ch(c.r) * c.a as i64;
+                sg += ch(c.g) * c.a as i64;
+                sb += ch(c.b) * c.a as i64;
                 sa += c.a as i64;
                 sc += 1;
             };
@@ -399,7 +606,13 @@ impl Renderer for Zoom {
                 }
             }
             *o = if sa != 0 {
-                let c = |v: i64| (v / sa).clamp(0, 255) as u8;
+                let c = |v: i64| {
+                    if self.linear {
+                        linear16_to_srgb(v / sa)
+                    } else {
+                        (v / sa).clamp(0, 255) as u8
+                    }
+                };
                 ColorBgra::from_bgra(c(sb), c(sg), c(sr), (sa / sc).clamp(0, 255) as u8)
             } else {
                 ColorBgra::TRANSPARENT
@@ -413,6 +626,7 @@ struct Radial {
     angle: f64,
     offset: [f64; 2],
     quality: i32,
+    linear: bool,
 }
 
 fn rotate(fx: &mut i32, fy: &mut i32, fr: i32) {
@@ -439,10 +653,18 @@ impl Renderer for Radial {
             let fx = (x << 16).wrapping_sub(fcx);
             let fy = ((y as i32) << 16).wrapping_sub(fcy);
             let (mut sr, mut sg, mut sb, mut sa, mut sc) = (0i64, 0i64, 0i64, 0i64, 0i64);
+            let linear = self.linear;
             let mut add = |c: ColorBgra| {
-                sr += c.r as i64 * c.a as i64;
-                sg += c.g as i64 * c.a as i64;
-                sb += c.b as i64 * c.a as i64;
+                let ch = |v: u8| {
+                    if linear {
+                        srgb_to_linear16(v)
+                    } else {
+                        v as i64
+                    }
+                };
+                sr += ch(c.r) * c.a as i64;
+                sg += ch(c.g) * c.a as i64;
+                sb += ch(c.b) * c.a as i64;
                 sa += c.a as i64;
                 sc += 1;
             };
@@ -460,7 +682,13 @@ impl Renderer for Radial {
                 }
             }
             *o = if sa > 0 {
-                let c = |v: i64| (v / sa).clamp(0, 255) as u8;
+                let c = |v: i64| {
+                    if self.linear {
+                        linear16_to_srgb(v / sa)
+                    } else {
+                        (v / sa).clamp(0, 255) as u8
+                    }
+                };
                 ColorBgra::from_bgra(c(sb), c(sg), c(sr), (sa / sc).clamp(0, 255) as u8)
             } else {
                 ColorBgra::TRANSPARENT
@@ -769,12 +997,11 @@ pub fn def(name: &str) -> Option<EffectDef> {
                 PropDef::bool("Blue", true).in_section(CHANNELS),
                 PropDef::bool("Alpha", true).in_section(CHANNELS),
                 PropDef::choice("Blend mode", 0, &BlendMode::NAMES).in_section(CHANNELS),
+                // paintnotnet: average in linear light (highlights spread as light does).
+                PropDef::bool("Linear light", false),
             ],
             |v: &[Value], _, _| {
-                let blur = Separable {
-                    r: v[0].int().max(0) as usize,
-                    kernel: tent,
-                };
+                let blur = Separable::gaussian(v[0].int().max(0) as usize).linear(v[6].bool());
                 let channels = [v[1].bool(), v[2].bool(), v[3].bool(), v[4].bool()];
                 let mode = BlendMode::ALL[v[5].choice().min(BlendMode::ALL.len() - 1)];
                 if channels == [true; 4] && mode == BlendMode::Normal {
@@ -791,12 +1018,7 @@ pub fn def(name: &str) -> Option<EffectDef> {
         "Square Blur" => d(
             "Square Blur",
             vec![PropDef::int("Radius", 2, 0, 200)],
-            |v: &[Value], _, _| {
-                Box::new(Separable {
-                    r: v[0].int().max(0) as usize,
-                    kernel: boxed,
-                })
-            },
+            |v: &[Value], _, _| Box::new(Separable::square(v[0].int().max(0) as usize)),
         ),
         "Motion Blur" => d(
             "Motion Blur",
@@ -804,6 +1026,8 @@ pub fn def(name: &str) -> Option<EffectDef> {
                 PropDef::float("Angle", 25.0, -180.0, 180.0, 2),
                 PropDef::bool("Centered", true),
                 PropDef::int("Distance", 10, 1, 200),
+                // paintnotnet: average in linear light.
+                PropDef::bool("Linear light", false),
             ],
             |v: &[Value], _, _| {
                 let (angle, centered, distance) = (v[0].float(), v[1].bool(), v[2].int());
@@ -828,7 +1052,10 @@ pub fn def(name: &str) -> Option<EffectDef> {
                         })
                         .collect()
                 };
-                Box::new(Motion { points })
+                Box::new(Motion {
+                    points,
+                    linear: v[3].bool(),
+                })
             },
         ),
         "Radial Blur" => d(
@@ -838,12 +1065,15 @@ pub fn def(name: &str) -> Option<EffectDef> {
                 PropDef::float("Offset X", 0.0, -2.0, 2.0, 2),
                 PropDef::float("Offset Y", 0.0, -2.0, 2.0, 2),
                 PropDef::int("Quality", 2, 1, 5),
+                // paintnotnet: average in linear light.
+                PropDef::bool("Linear light", false),
             ],
             |v: &[Value], _, _| {
                 Box::new(Radial {
                     angle: v[0].float(),
                     offset: [v[1].float(), v[2].float()],
                     quality: v[3].int(),
+                    linear: v[4].bool(),
                 })
             },
         ),
@@ -853,11 +1083,14 @@ pub fn def(name: &str) -> Option<EffectDef> {
                 PropDef::int("Zoom Amount", 10, 0, 100),
                 PropDef::float("Offset X", 0.0, -2.0, 2.0, 2),
                 PropDef::float("Offset Y", 0.0, -2.0, 2.0, 2),
+                // paintnotnet: average in linear light.
+                PropDef::bool("Linear light", false),
             ],
             |v: &[Value], _, _| {
                 Box::new(Zoom {
                     amount: v[0].int() as i64,
                     offset: [v[1].float(), v[2].float()],
+                    linear: v[3].bool(),
                 })
             },
         ),
@@ -974,7 +1207,12 @@ mod tests {
             ("Reduce Noise", vec![Value::Int(25), Value::Float(0.6)]),
             (
                 "Motion Blur",
-                vec![Value::Float(25.0), Value::Bool(true), Value::Int(60)],
+                vec![
+                    Value::Float(25.0),
+                    Value::Bool(true),
+                    Value::Int(60),
+                    Value::Bool(true),
+                ],
             ),
             ("Surface Blur", vec![Value::Int(12), Value::Int(30)]),
         ] {
@@ -1021,72 +1259,149 @@ mod tests {
         render_rect(r.as_ref(), src, all)
     }
 
-    /// Brute-force 3.36 Gaussian (the O(r²) original) for comparison.
-    fn gaussian_reference(src: &Surface, r: i32, x: i32, y: i32) -> ColorBgra {
-        let w: Vec<i64> = (0..=2 * r)
-            .map(|i| 16 * (r + 1 - (i - r).abs()) as i64)
+    /// The 1-D kernel applied by `apply` (half-width `r`), as weights summing to 1.
+    fn kernel_weights(apply: impl Fn(&[i64], &mut [i64]), r: usize) -> Vec<f64> {
+        let raw: Vec<f64> = (0..=2 * r)
+            .map(|i| {
+                let mut a = vec![0i64; 4 * r + 1];
+                a[r + i] = 1 << 20;
+                let mut out = vec![0i64; 2 * r + 1];
+                apply(&a, &mut out);
+                out[r] as f64
+            })
             .collect();
-        let (mut wa, mut wc, mut a, mut b, mut g, mut rr) = (0i64, 0i64, 0i64, 0i64, 0i64, 0i64);
-        for wx in 0..=2 * r {
-            let sx = x + wx - r;
-            if sx < 0 || sx >= src.width() as i32 {
-                continue;
-            }
-            let (mut was, mut wcs, mut as_, mut bs, mut gs, mut rs) = (0, 0, 0, 0, 0, 0);
-            for wy in 0..=2 * r {
-                let sy = y + wy - r;
-                if sy < 0 || sy >= src.height() as i32 {
-                    continue;
-                }
-                let c = src.get(sx as u32, sy as u32);
-                let mut wp = w[wy as usize];
-                was += wp;
-                wp *= c.a as i64 + (c.a as i64 >> 7);
-                wcs += wp;
-                wp >>= 8;
-                as_ += wp * c.a as i64;
-                bs += wp * c.b as i64;
-                gs += wp * c.g as i64;
-                rs += wp * c.r as i64;
-            }
-            let k = w[wx as usize];
-            wa += k * was;
-            wc += k * wcs;
-            a += k * as_;
-            b += k * bs;
-            g += k * gs;
-            rr += k * rs;
-        }
-        wc >>= 8;
-        if wa == 0 || wc == 0 {
-            return ColorBgra::TRANSPARENT;
-        }
-        ColorBgra::from_bgra(
-            (b / wc) as u8,
-            (g / wc) as u8,
-            (rr / wc) as u8,
-            (a / wa) as u8,
-        )
+        let total: f64 = raw.iter().sum();
+        raw.into_iter().map(|w| w / total).collect()
     }
 
+    /// A 2-D separable kernel is round only if it is Gaussian: the weight at distance d along
+    /// an axis must equal the weight at d along the diagonal. 3.36's tent fails this badly
+    /// (highlights blur into diamonds); the box-cascade Gaussian doesn't.
     #[test]
-    fn gaussian_matches_3_36_within_one() {
-        let src = checker(40, 30);
-        for r in [1, 3, 7] {
-            let out = run("Gaussian Blur", vec![Value::Int(r)], &src);
-            for (x, y) in [(0, 0), (5, 7), (20, 15), (39, 29), (13, 2)] {
-                let got = out[(y * 40 + x) as usize];
-                let want = gaussian_reference(&src, r, x, y);
-                for (p, q) in [(got.r, want.r), (got.a, want.a)] {
-                    assert!(
-                        (p as i32 - q as i32).abs() <= 1,
-                        "r={r} ({x},{y}): {got:?} vs {want:?}"
-                    );
-                }
+    fn gaussian_is_round_where_the_tent_was_not() {
+        let radius = 30;
+        let g = Separable::gaussian(radius);
+        let gw = kernel_weights(|a, o| g.apply(a, o), g.r);
+        let tw = kernel_weights(|a, o| tent(a, radius, o), radius);
+        // Linear interpolation into a centred kernel.
+        let at = |w: &[f64], d: f64| {
+            let c = (w.len() / 2) as f64 + d;
+            let (i, f) = (c.floor() as usize, c.fract());
+            w[i] * (1.0 - f) + w.get(i + 1).copied().unwrap_or(0.0) * f
+        };
+        let roundness = |w: &[f64], d: f64| {
+            let axis = at(w, d) * at(w, 0.0);
+            let diagonal = at(w, d / 2f64.sqrt()).powi(2);
+            diagonal / axis
+        };
+        let d = 1.2 * tent_sigma(radius);
+        let (gr, tr) = (roundness(&gw, d), roundness(&tw, d));
+        assert!((gr - 1.0).abs() < 0.03, "Gaussian off-round by {gr}");
+        assert!((tr - 1.0).abs() > 0.15, "the tent was off-round by {tr}");
+    }
+
+    /// The box cascade has the tent's σ (within 3%) and follows a Gaussian of its σ closely.
+    #[test]
+    fn gaussian_matches_the_ideal_curve() {
+        for radius in [1usize, 5, 19, 30, 120] {
+            let g = Separable::gaussian(radius);
+            let w = kernel_weights(|a, o| g.apply(a, o), g.r);
+            // The boxes have whole-pixel widths, so σ lands near the target, not on it.
+            let sigma = w
+                .iter()
+                .enumerate()
+                .map(|(i, &v)| v * (i as f64 - g.r as f64).powi(2))
+                .sum::<f64>()
+                .sqrt();
+            let target = tent_sigma(radius);
+            assert!(
+                (sigma / target - 1.0).abs() < 0.03,
+                "radius {radius}: σ {sigma} for {target}"
+            );
+            let peak = w[g.r];
+            let mut worst = 0.0f64;
+            for (i, &v) in w.iter().enumerate() {
+                let d = i as f64 - g.r as f64;
+                let ideal =
+                    (-d * d / (2.0 * sigma * sigma)).exp() / (sigma * std::f64::consts::TAU.sqrt());
+                worst = worst.max((v - ideal).abs() / peak);
+            }
+            assert!(
+                worst < 0.04,
+                "radius {radius}: worst error {worst} of the peak"
+            );
+        }
+        let same = run("Gaussian Blur", vec![Value::Int(0)], &checker(40, 30));
+        assert_eq!(same, checker(40, 30).to_pixels(), "radius 0 copies");
+    }
+
+    /// Across a black/white edge, sRGB averaging gives a dark mid-grey (128); linear light
+    /// gives the brighter grey half the light actually makes (≈188).
+    #[test]
+    fn linear_light_averages_light() {
+        let mut edge = Surface::new_transparent(64, 8);
+        for y in 0..8 {
+            for x in 0..64 {
+                let v = if x < 32 { 0 } else { 255 };
+                edge.set(x, y, ColorBgra::from_rgba(v, v, v, 255));
             }
         }
-        let same = run("Gaussian Blur", vec![Value::Int(0)], &src);
-        assert_eq!(same, src.to_pixels(), "radius 0 copies");
+        let mut values: Vec<Value> = def("Gaussian Blur").unwrap().defaults();
+        values[0] = Value::Int(12);
+        let plain = run("Gaussian Blur", values.clone(), &edge);
+        values[6] = Value::Bool(true);
+        let lin = run("Gaussian Blur", values, &edge);
+        // Between the two middle columns.
+        let mid = |p: &[ColorBgra]| (p[4 * 64 + 31].r as i32 + p[4 * 64 + 32].r as i32) / 2;
+        assert!((mid(&plain) - 128).abs() <= 4, "sRGB {}", mid(&plain));
+        assert!((mid(&lin) - 188).abs() <= 6, "linear {}", mid(&lin));
+    }
+
+    /// The sample-averaging blurs take the option too: Motion Blur across the same edge.
+    #[test]
+    fn motion_blur_linear_light() {
+        let mut edge = Surface::new_transparent(64, 8);
+        for y in 0..8 {
+            for x in 0..64 {
+                let v = if x < 32 { 0 } else { 255 };
+                edge.set(x, y, ColorBgra::from_rgba(v, v, v, 255));
+            }
+        }
+        let values = |linear| {
+            vec![
+                Value::Float(0.0),
+                Value::Bool(true),
+                Value::Int(20),
+                Value::Bool(linear),
+            ]
+        };
+        let plain = run("Motion Blur", values(false), &edge);
+        let lin = run("Motion Blur", values(true), &edge);
+        let mid = |p: &[ColorBgra]| (p[4 * 64 + 31].r as i32 + p[4 * 64 + 32].r as i32) / 2;
+        assert!((mid(&plain) - 128).abs() <= 8, "sRGB {}", mid(&plain));
+        assert!((mid(&lin) - 188).abs() <= 10, "linear {}", mid(&lin));
+    }
+
+    /// A wide Gaussian over a big image must neither overflow nor shift a flat colour, and
+    /// fades evenly towards transparent edges.
+    #[test]
+    fn wide_blurs_keep_flat_colours() {
+        let mut flat = Surface::new_transparent(900, 600);
+        let c = ColorBgra::from_rgba(80, 120, 200, 255);
+        for y in 0..600 {
+            for x in 0..900 {
+                flat.set(x, y, c);
+            }
+        }
+        for linear in [false, true] {
+            let mut values: Vec<Value> = def("Gaussian Blur").unwrap().defaults();
+            values[0] = Value::Int(200);
+            values[6] = Value::Bool(linear);
+            let out = run("Gaussian Blur", values, &flat);
+            for &p in &[out[0], out[300 * 900 + 450], out[599 * 900 + 899]] {
+                assert_eq!(p, c, "linear {linear}");
+            }
+        }
     }
 
     #[test]

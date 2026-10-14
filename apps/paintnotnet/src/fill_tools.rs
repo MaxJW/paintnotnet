@@ -76,7 +76,11 @@ impl PaintNotNetApp {
             ToolBlend::Blend(m) => StrokeOp::Blend(m),
         };
         let (fill, tolerance, sampling) = (s.fill, s.tolerance, s.sampling);
-        let premultiplied = s.tolerance_alpha == ToleranceAlphaMode::Premultiplied;
+        let tol = pnn_core::selection::Tolerance {
+            pct: tolerance,
+            premultiplied: s.tolerance_alpha == ToleranceAlphaMode::Premultiplied,
+            perceptual: s.tolerance_space == pnn_tools::ToleranceSpace::Perceptual,
+        };
         let Some(tab) = self.workspace.active_mut() else {
             return;
         };
@@ -97,20 +101,12 @@ impl PaintNotNetApp {
             SamplingMode::Layer => tab.doc.layer(layer).surface.to_pixels(),
             SamplingMode::Image => pnn_core::flatten(&tab.doc).to_pixels(),
         };
-        let mut stencil = pnn_core::selection::flood_stencil(
-            &pixels,
-            w,
-            h,
-            seed,
-            tolerance,
-            premultiplied,
-            contiguous,
-        );
+        let mut stencil = pnn_core::selection::flood_stencil(&pixels, w, h, seed, tol, contiguous);
         if let Some(m) = &selection {
             // 3.36 limits the flood to the selection; a contiguous fill doesn't leak
             // through unselected pixels.
             if contiguous {
-                stencil = limited_flood(&pixels, w, h, seed, tolerance, premultiplied, m);
+                stencil = limited_flood(&pixels, w, h, seed, tol, m);
             } else {
                 for (i, s) in stencil.iter_mut().enumerate() {
                     *s &= m.get(i as u32 % w, i as u32 / w) > 0;
@@ -363,14 +359,12 @@ fn limited_flood(
     w: u32,
     h: u32,
     seed: (u32, u32),
-    tolerance: u8,
-    premultiplied: bool,
+    tolerance: pnn_core::selection::Tolerance,
     selection: &Mask,
 ) -> Vec<bool> {
     // Every matching pixel, then the 4-connected part of (matching ∧ selected) holding the
     // seed.
-    let candidates =
-        pnn_core::selection::flood_stencil(pixels, w, h, seed, tolerance, premultiplied, false);
+    let candidates = pnn_core::selection::flood_stencil(pixels, w, h, seed, tolerance, false);
     let (wu, hu) = (w as usize, h as usize);
     let ok = |i: usize| candidates[i] && selection.get((i % wu) as u32, (i / wu) as u32) > 0;
     let mut out = vec![false; wu * hu];

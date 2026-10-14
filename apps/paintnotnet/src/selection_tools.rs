@@ -266,11 +266,12 @@ impl PaintNotNetApp {
 
     fn magic_wand(&mut self, key: u64, pos: [f64; 2], mode: CombineMode, contiguous: bool) {
         let feather = self.settings.feather;
-        let (tolerance, premultiplied, sampling) = (
-            self.settings.tolerance,
-            self.settings.tolerance_alpha == ToleranceAlphaMode::Premultiplied,
-            self.settings.sampling,
-        );
+        let tolerance = pnn_core::selection::Tolerance {
+            pct: self.settings.tolerance,
+            premultiplied: self.settings.tolerance_alpha == ToleranceAlphaMode::Premultiplied,
+            perceptual: self.settings.tolerance_space == pnn_tools::ToleranceSpace::Perceptual,
+        };
+        let sampling = self.settings.sampling;
         let Some(tab) = self.workspace.tab_mut(key) else {
             return;
         };
@@ -288,7 +289,6 @@ impl PaintNotNetApp {
             h,
             (pos[0] as u32, pos[1] as u32),
             tolerance,
-            premultiplied,
             contiguous,
         );
         let shape = Selection::from_stencil(&stencil, w, h).with_feather(feather);

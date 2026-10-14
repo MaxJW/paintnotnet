@@ -6,6 +6,11 @@
 //! solid fill and the truncating `(byte)(t * 255)`. Pixels are sampled at their integer
 //! (top-left) coordinates, as 3.36 does.
 //!
+//! paintnotnet change (Phase 15): 3.36 looks each pixel up in a 256-entry table, so a wide
+//! gradient shows 256 flat bands (15 px each across a 4K canvas). Colours are now mixed per
+//! pixel in floating point (the same alpha weighting as `ColorBgra.Blend`) and dithered to 8
+//! bits with interleaved gradient noise, which removes the bands without visible grain.
+//!
 //! paint.net 5 additions, built from its docs (`GradientTool.html`), not from source: the
 //! two spiral types and the Repeat Wrapped / Repeat Reflected modes. Their exact maths are
 //! unpublished; here a spiral's value is `angle / 2π + distance / length` around the start
@@ -54,6 +59,39 @@ fn color_blend(ca: ColorBgra, cb: ColorBgra, cb_alpha: u8) -> ColorBgra {
     ColorBgra::from_bgra(ch(ca.b, cb.b), ch(ca.g, cb.g), ch(ca.r, cb.r), total as u8)
 }
 
+/// `color_blend` at a continuous position `t` (0–1), unrounded: (b, g, r, a) in 0–255.
+fn color_mix(ca: ColorBgra, cb: ColorBgra, t: f32) -> [f32; 4] {
+    let ca_a = (1.0 - t) * ca.a as f32;
+    let cb_a = t * cb.a as f32;
+    let total = ca_a + cb_a;
+    if total <= 0.0 {
+        return [0.0; 4];
+    }
+    let ch = |a: u8, b: u8| (a as f32 * ca_a + b as f32 * cb_a) / total;
+    [ch(ca.b, cb.b), ch(ca.g, cb.g), ch(ca.r, cb.r), total]
+}
+
+fn alpha_only_table(g: &Gradient) -> bool {
+    g.alpha_only
+}
+
+/// Interleaved gradient noise (Jimenez 2014) in -0.5..0.5: an even, fine-grained dither
+/// that doesn't form patterns.
+#[inline]
+fn dither(x: u32, y: u32) -> f32 {
+    // Arguments are non-negative, so truncation is floor (`fract`/`round` are library calls
+    // on baseline x86-64 and tripled the gradient's cost).
+    let frac = |v: f32| v - (v as u32) as f32;
+    let v = 0.067_110_56 * x as f32 + 0.005_837_15 * y as f32;
+    frac(52.982_918 * frac(v)) - 0.5
+}
+
+#[inline]
+fn quantize(v: f32, d: f32) -> u8 {
+    // Round to nearest: +0.5 then truncate (the clamp keeps it non-negative).
+    (v + d + 0.5).clamp(0.0, 255.0) as u8
+}
+
 impl Gradient {
     /// 3.36 `ComputeAlphaOnlyValuesFromColors`.
     fn alphas(&self) -> (u8, u8) {
@@ -80,13 +118,26 @@ impl Gradient {
         op: GradientOp,
     ) {
         let (start_a, end_a) = self.alphas();
-        // `GradientRenderer.BeforeRender` tables.
-        let colors: Vec<ColorBgra> = (0..=255u8)
-            .map(|a| color_blend(self.start_color, self.end_color, a))
-            .collect();
-        let alphas: Vec<u8> = (0..=255i32)
-            .map(|a| (start_a as i32 + ((end_a as i32 - start_a as i32) * a) / 255) as u8)
-            .collect();
+        // A solid fill (start = end) is the end of 3.36's tables, exactly.
+        let solid_color = color_blend(self.start_color, self.end_color, 255);
+        let solid_alpha = end_a;
+        // Unrounded colours at 4096 positions (16× finer than 3.36's table, so the dither
+        // has nothing to band against).
+        const STEPS: usize = 4096;
+        let table: Vec<[f32; 4]> = if alpha_only_table(self) {
+            Vec::new()
+        } else {
+            (0..STEPS)
+                .map(|i| {
+                    color_mix(
+                        self.start_color,
+                        self.end_color,
+                        i as f32 / (STEPS - 1) as f32,
+                    )
+                })
+                .collect()
+        };
+        let step = |t: f32| ((t * (STEPS - 1) as f32) + 0.5) as usize;
         let solid = self.start == self.end;
         let lerp = Lerp::new(self);
         let op_mode = match op {
@@ -118,20 +169,40 @@ impl Gradient {
             } else {
                 Vec::new()
             };
-            let k = |i: usize| -> usize {
+            // Position along the gradient, unrounded (1 for a solid fill).
+            let t = |i: usize| -> f32 {
                 if solid {
-                    255
+                    1.0
                 } else {
-                    (lerp.at((x0 + i as u32) as f32, y as f32) * 255.0) as u8 as usize
+                    lerp.at((x0 + i as u32) as f32, y as f32).clamp(0.0, 1.0)
                 }
             };
             if alpha_only {
                 for (i, p) in row.iter_mut().enumerate() {
-                    let a = alphas[k(i)];
+                    let a = if solid {
+                        solid_alpha
+                    } else {
+                        let v = start_a as f32 + (end_a as f32 - start_a as f32) * t(i);
+                        quantize(v, dither(x0 + i as u32, y))
+                    };
                     *p = p.with_alpha(if op_mode.is_some() { scale(p.a, a) } else { a });
                 }
             } else {
-                let src: Vec<ColorBgra> = (0..n).map(|i| colors[k(i)]).collect();
+                let src: Vec<ColorBgra> = (0..n)
+                    .map(|i| {
+                        if solid {
+                            return solid_color;
+                        }
+                        let [b, g, r, a] = table[step(t(i))];
+                        let d = dither(x0 + i as u32, y);
+                        ColorBgra::from_bgra(
+                            quantize(b, d),
+                            quantize(g, d),
+                            quantize(r, d),
+                            quantize(a, d),
+                        )
+                    })
+                    .collect();
                 match op_mode {
                     Some(m) => m.apply_row(row, &src, 255),
                     None => row.copy_from_slice(&src),
@@ -343,9 +414,11 @@ mod tests {
         g(GradientType::Linear).render(&mut layer, &before, None, full, GradientOp::Overwrite);
         assert_eq!(layer.get(0, 0), ColorBgra::BLACK);
         assert_eq!(layer.get(100, 0), ColorBgra::WHITE);
-        assert_eq!(
-            layer.get(50, 0).r,
-            color_blend(ColorBgra::BLACK, ColorBgra::WHITE, 127).r
+        // Half way: t = 0.5 exactly, so 127.5 dithered to 127 or 128.
+        assert!(
+            matches!(layer.get(50, 0).r, 127 | 128),
+            "{:?}",
+            layer.get(50, 0)
         );
         // Transparency mode: alpha from primary alpha (255) to inverse secondary alpha (0).
         let mut t = g(GradientType::Linear);
@@ -374,6 +447,39 @@ mod tests {
         );
         assert_eq!(layer.get(11, 0), before.get(11, 0));
         assert_ne!(layer.get(10, 0), before.get(10, 0));
+    }
+
+    /// Across a 4096 px black-to-white gradient, 64 rows averaged per column follow the
+    /// ideal ramp to within a third of a level: no bands. 3.36's table truncated each pixel to
+    /// one of 256 steps, so its columns sit up to a whole level below the ramp.
+    #[test]
+    fn wide_gradients_do_not_band() {
+        let (w, h) = (4096u32, 64u32);
+        let full = Rect {
+            x: 0,
+            y: 0,
+            width: w,
+            height: h,
+        };
+        let before = Surface::new_transparent(w, h);
+        let mut layer = before.clone();
+        let mut grad = g(GradientType::Linear);
+        grad.end = [w as f32 - 1.0, 0.0];
+        grad.render(&mut layer, &before, None, full, GradientOp::Overwrite);
+        let mut worst_new = 0.0f32;
+        let mut worst_old = 0.0f32;
+        for x in 0..w {
+            let ideal = grad.lerp(x as f32, 0.0) * 255.0;
+            let mean = (0..h).map(|y| layer.get(x, y).r as f32).sum::<f32>() / h as f32;
+            worst_new = worst_new.max((mean - ideal).abs());
+            let old = color_blend(ColorBgra::BLACK, ColorBgra::WHITE, (ideal) as u8).r as f32;
+            worst_old = worst_old.max((old - ideal).abs());
+        }
+        assert!(
+            worst_new < 0.34,
+            "dithered columns off the ramp by {worst_new}"
+        );
+        assert!(worst_old > 0.9, "the 3.36 table was off by {worst_old}");
     }
 
     #[test]

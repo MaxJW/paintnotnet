@@ -15,7 +15,7 @@
 use pnn_core::{BlendMode, ColorBgra, Rect, Surface};
 
 use crate::adjustments::BrightnessContrast;
-use crate::blurs::{LocalHistogram, Separable, tent};
+use crate::blurs::{LocalHistogram, Separable};
 use crate::distort::{bilinear_clamped, perlin};
 use crate::framework::{ColorDefault, EffectDef, Env, PropDef, Renderer, Value, intensity};
 
@@ -415,10 +415,7 @@ pub fn def(name: &str) -> Option<EffectDef> {
             ],
             |v: &[Value], _, _| {
                 Box::new(SoftenPortrait {
-                    blur: Separable {
-                        r: (v[0].int() * 3).max(0) as usize,
-                        kernel: tent,
-                    },
+                    blur: Separable::gaussian((v[0].int() * 3).max(0) as usize),
                     bc: BrightnessContrast::new(v[1].int(), -v[1].int() / 2),
                     warmth: v[2].int(),
                 })
@@ -604,10 +601,7 @@ pub fn def(name: &str) -> Option<EffectDef> {
             |v: &[Value], _, _: &Env| {
                 let (dist, ang) = (v[1].int() as f64, v[2].float().to_radians());
                 Box::new(DropShadow {
-                    blur: Separable {
-                        r: v[0].int().max(0) as usize,
-                        kernel: tent,
-                    },
+                    blur: Separable::gaussian(v[0].int().max(0) as usize),
                     // Light from the angle; the shadow falls opposite (down-right at 45°).
                     offset: [
                         (dist * ang.cos()).round() as i64,

@@ -64,6 +64,32 @@ pub fn lerp_premultiplied(a: ColorBgra, b: ColorBgra, t: u8) -> ColorBgra {
     ColorBgra::from_bgra(ch(a.b, b.b), ch(a.g, b.g), ch(a.r, b.r), out_a as u8)
 }
 
+/// OKLab (L, a, b) of a colour, ignoring alpha (Björn Ottosson, 2020,
+/// https://bottosson.github.io/posts/oklab/). Distances in it follow how different colours
+/// look, unlike distances in sRGB.
+pub fn oklab(c: ColorBgra) -> [f32; 3] {
+    static LIN: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
+    let lin = LIN.get_or_init(|| {
+        std::array::from_fn(|i| {
+            let v = i as f32 / 255.0;
+            if v <= 0.04045 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        })
+    });
+    let (r, g, b) = (lin[c.r as usize], lin[c.g as usize], lin[c.b as usize]);
+    let l = (0.412_221_47 * r + 0.536_332_55 * g + 0.051_445_995 * b).cbrt();
+    let m = (0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b).cbrt();
+    let s = (0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b).cbrt();
+    [
+        0.210_454_26 * l + 0.793_617_8 * m - 0.004_072_047 * s,
+        1.977_998_5 * l - 2.428_592_2 * m + 0.450_593_7 * s,
+        0.025_904_037 * l + 0.782_771_77 * m - 0.808_675_77 * s,
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

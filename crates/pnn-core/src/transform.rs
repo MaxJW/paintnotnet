@@ -543,6 +543,18 @@ pub fn draw_transformed(
             a,
         ]
     };
+    // How much the map shrinks: the smaller singular value of its linear part. Shrinking
+    // below half size point-sampled aliases (moiré, shimmering edges), so then every output
+    // pixel averages `sub` × `sub` samples; Nearest Neighbor stays crisp on purpose.
+    let (p, q, r, t) = (m[0], m[1], m[3], m[4]);
+    let e = (p * p + q * q + r * r + t * t) / 2.0;
+    let det = (p * t - q * r).abs();
+    let min_scale = (e - (e * e - det * det).max(0.0).sqrt()).max(0.0).sqrt();
+    let sub = if sampling == Sampling::NearestNeighbor || min_scale >= 0.999 {
+        1
+    } else {
+        ((1.0 / min_scale.max(1e-3)).ceil() as usize).clamp(1, 8)
+    };
     let rows: Vec<(i64, Vec<ColorBgra>)> = (y0..y1)
         .into_par_iter()
         .map(|y| {
@@ -558,52 +570,77 @@ pub fn draw_transformed(
                     row.push(c);
                     continue;
                 }
-                let q = apply(&inv, [x as f64 + 0.5, y as f64 + 0.5]);
-                let acc = match sampling {
-                    Sampling::NearestNeighbor => fetch(q[0].floor() as i64, q[1].floor() as i64),
-                    Sampling::Bilinear => {
-                        let (fx, fy) = (q[0] - 0.5, q[1] - 0.5);
-                        let (ix, iy) = (fx.floor() as i64, fy.floor() as i64);
-                        let (tx, ty) = ((fx - ix as f64) as f32, (fy - iy as f64) as f32);
-                        let (a, b, c, d) = (
-                            fetch(ix, iy),
-                            fetch(ix + 1, iy),
-                            fetch(ix, iy + 1),
-                            fetch(ix + 1, iy + 1),
-                        );
-                        std::array::from_fn(|k| {
-                            let top = a[k] + (b[k] - a[k]) * tx;
-                            let bot = c[k] + (d[k] - c[k]) * tx;
-                            top + (bot - top) * ty
-                        })
-                    }
-                    Sampling::Bicubic => {
-                        let (fx, fy) = (q[0] - 0.5, q[1] - 0.5);
-                        let (ix, iy) = (fx.floor() as i64, fy.floor() as i64);
-                        let (tx, ty) = (fx - ix as f64, fy - iy as f64);
-                        let cr = |t: f64| -> [f32; 4] {
-                            // Catmull-Rom weights for offsets -1, 0, 1, 2.
-                            let t2 = t * t;
-                            let t3 = t2 * t;
-                            [
-                                (-0.5 * t3 + t2 - 0.5 * t) as f32,
-                                (1.5 * t3 - 2.5 * t2 + 1.0) as f32,
-                                (-1.5 * t3 + 2.0 * t2 + 0.5 * t) as f32,
-                                (0.5 * t3 - 0.5 * t2) as f32,
-                            ]
-                        };
-                        let (wx, wy) = (cr(tx), cr(ty));
-                        let mut acc = [0f32; 4];
-                        for (j, wyj) in wy.iter().enumerate() {
-                            for (i, wxi) in wx.iter().enumerate() {
-                                let p = fetch(ix + i as i64 - 1, iy + j as i64 - 1);
-                                for k in 0..4 {
-                                    acc[k] += p[k] * wxi * wyj;
+                let sample_at = |q: [f64; 2]| -> [f32; 4] {
+                    match sampling {
+                        Sampling::NearestNeighbor => {
+                            fetch(q[0].floor() as i64, q[1].floor() as i64)
+                        }
+                        Sampling::Bilinear => {
+                            let (fx, fy) = (q[0] - 0.5, q[1] - 0.5);
+                            let (ix, iy) = (fx.floor() as i64, fy.floor() as i64);
+                            let (tx, ty) = ((fx - ix as f64) as f32, (fy - iy as f64) as f32);
+                            let (a, b, c, d) = (
+                                fetch(ix, iy),
+                                fetch(ix + 1, iy),
+                                fetch(ix, iy + 1),
+                                fetch(ix + 1, iy + 1),
+                            );
+                            std::array::from_fn(|k| {
+                                let top = a[k] + (b[k] - a[k]) * tx;
+                                let bot = c[k] + (d[k] - c[k]) * tx;
+                                top + (bot - top) * ty
+                            })
+                        }
+                        Sampling::Bicubic => {
+                            let (fx, fy) = (q[0] - 0.5, q[1] - 0.5);
+                            let (ix, iy) = (fx.floor() as i64, fy.floor() as i64);
+                            let (tx, ty) = (fx - ix as f64, fy - iy as f64);
+                            let cr = |t: f64| -> [f32; 4] {
+                                // Catmull-Rom weights for offsets -1, 0, 1, 2.
+                                let t2 = t * t;
+                                let t3 = t2 * t;
+                                [
+                                    (-0.5 * t3 + t2 - 0.5 * t) as f32,
+                                    (1.5 * t3 - 2.5 * t2 + 1.0) as f32,
+                                    (-1.5 * t3 + 2.0 * t2 + 0.5 * t) as f32,
+                                    (0.5 * t3 - 0.5 * t2) as f32,
+                                ]
+                            };
+                            let (wx, wy) = (cr(tx), cr(ty));
+                            let mut acc = [0f32; 4];
+                            for (j, wyj) in wy.iter().enumerate() {
+                                for (i, wxi) in wx.iter().enumerate() {
+                                    let p = fetch(ix + i as i64 - 1, iy + j as i64 - 1);
+                                    for k in 0..4 {
+                                        acc[k] += p[k] * wxi * wyj;
+                                    }
                                 }
                             }
+                            acc
                         }
-                        acc
                     }
+                };
+                // Shrinking: average sub × sub samples (sub ≈ the shrink factor) so detail
+                // averages out instead of aliasing; one sample per pixel otherwise.
+                let acc = if sub == 1 {
+                    sample_at(apply(&inv, [x as f64 + 0.5, y as f64 + 0.5]))
+                } else {
+                    let mut sum = [0f32; 4];
+                    for sj in 0..sub {
+                        for si in 0..sub {
+                            let p = sample_at(apply(
+                                &inv,
+                                [
+                                    x as f64 + (si as f64 + 0.5) / sub as f64,
+                                    y as f64 + (sj as f64 + 0.5) / sub as f64,
+                                ],
+                            ));
+                            for k in 0..4 {
+                                sum[k] += p[k];
+                            }
+                        }
+                    }
+                    sum.map(|v| v / (sub * sub) as f32)
                 };
                 let a = acc[3].clamp(0.0, 255.0);
                 let un = |v: f32| {
@@ -639,6 +676,48 @@ pub fn draw_transformed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Shrinking a one-pixel checkerboard to a quarter must give an even grey: every output
+    /// pixel covers 16 source pixels, half black and half white. Point sampling (3.36's way,
+    /// and ours before Phase 15) picks single source pixels and keeps black/white aliasing.
+    #[test]
+    fn shrinking_averages_instead_of_aliasing() {
+        let n = 256u32;
+        let mut src = Surface::new_transparent(n, n);
+        for y in 0..n {
+            for x in 0..n {
+                let v = if (x + y) % 2 == 0 { 0 } else { 255 };
+                src.set(x, y, ColorBgra::from_rgba(v, v, v, 255));
+            }
+        }
+        let rect = crate::Rect {
+            x: 0,
+            y: 0,
+            width: n,
+            height: n,
+        };
+        // Quarter size, slightly rotated so no grid lines up.
+        let (c, s) = (0.25 * 0.2f64.cos(), 0.25 * 0.2f64.sin());
+        let m: Affine = [c, -s, 64.0, s, c, 64.0];
+        for sampling in [Sampling::Bilinear, Sampling::Bicubic] {
+            let mut dst = Surface::new_transparent(n, n);
+            draw_transformed(&mut dst, &src, rect, &m, sampling);
+            let mut worst = 0i32;
+            for y in 80..112 {
+                for x in 80..112 {
+                    worst = worst.max((dst.get(x, y).r as i32 - 128).abs());
+                }
+            }
+            assert!(worst <= 20, "{sampling:?}: grey varies by {worst}");
+        }
+        let mut dst = Surface::new_transparent(n, n);
+        draw_transformed(&mut dst, &src, rect, &m, Sampling::NearestNeighbor);
+        let spread = (80..112)
+            .flat_map(|y| (80..112).map(move |x| (x, y)))
+            .map(|(x, y)| dst.get(x, y).r)
+            .fold((255u8, 0u8), |(lo, hi), v| (lo.min(v), hi.max(v)));
+        assert_eq!(spread, (0, 255), "Nearest Neighbor stays point-sampled");
+    }
     use crate::BlendMode;
 
     fn numbered(w: u32, h: u32) -> Surface {

@@ -475,11 +475,28 @@ ours is better, and keep a test showing the difference.
 - Not done on the CPU, left for 15d: Radial and Zoom Blur, Julia, the remaining Mandelbrot cost, Dents and other
   Distort effects, Bokeh, Morphology: per-sample work dominates, and the CPU options left (rotate-and-blur Motion,
   periodicity checks) change results
-### 15c Accuracy
+### 15c ✅ Accuracy
 - Decisions (2026-10-14): the true Gaussian replaces the tent (no classic option); linear light is an option in the
   blurs, off by default; the wand and bucket compare in OKLab by default, RGB under More.
-- [ ] True Gaussian (same variance as the old radius) with a linear-light option; dithered high-precision
-      gradients; area-correct filtering when the move tools shrink; OKLab tolerance option for the wand and bucket
+- [x] **Gaussian:** a true Gaussian replaces 3.36's tent (a triangle) in Gaussian Blur, Drop Shadow and the three
+      effects built on it (Glow, Soften Portrait, Ink/Pencil Sketch). σ matches the tent's variance at the same radius
+      (radius keeps its meaning); small σ (≤ 8) is sampled exactly, larger σ is four Kovesi boxes (cost independent
+      of radius; each pass normalised so wide blurs can't overflow); final division rounds. Default radius 166 → 90 ms
+      at 4K; radius 150: 388 ms. Tests: the old tent's 2-D kernel is 15%+ off-round, the new one within 3%; σ within
+      3% of target and shape within 4% of the ideal curve for radii 1–120; radius 200 on 900 × 600 keeps a flat
+      colour exactly (debug build, overflow-checked)
+- [x] **Linear light** checkbox (off by default) in Gaussian, Motion, Zoom and Radial Blur: 16-bit linear averaging;
+      tests: across a black/white edge sRGB averaging gives 128, linear ≈ 188
+- [x] **Gradients:** per-pixel colour from a 4096-step float table (3.36: 256 entries) dithered to 8 bits with
+      interleaved gradient noise. Test: column averages of a 4096 px ramp stay within 0.34 of ideal (3.36's table:
+      off by 0.9+). 4K render 7 → 14 ms per gradient (rounding made branch-free; `round`/`fract` were library calls)
+- [x] **Shrinking in the move tools:** when the transform shrinks (smaller singular value < 1), each output pixel
+      averages up to 8 × 8 samples; Nearest Neighbor stays point-sampled. Test: a 1-pixel checkerboard at quarter size
+      gives grey within 20 levels (123 without the fix)
+- [x] **Wand and bucket tolerance:** OKLab distance by default (`Tolerance` in `pnn-core`; 0.96·t², calibrated so
+      50% reaches through greys as paint.net's does; 100% matches all), "Compare colors: As seen / RGB" under More.
+      Test: a dark-blue and a light-yellow step of equal RGB size: RGB treats them alike, OKLab matches the yellows only
+- Gradient UI tests now accept the dither's ±1 level at exact half-way pixels.
 ### 15d GPU and frame budget
 - [ ] wgpu compute for effects still slower than ~100 ms at 4K; 165 fps while painting, panning and previewing
 

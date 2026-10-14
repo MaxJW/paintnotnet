@@ -93,18 +93,22 @@ fn gradient_draws_stays_editable_and_commits_on_enter() {
     let s = &doc(&h).layer(0).surface;
     assert_eq!(s.get(5, 10), ColorBgra::BLACK);
     assert_eq!(s.get(10, 10), ColorBgra::BLACK);
-    assert_eq!(s.get(50, 70).r, 127, "half way");
+    // Half way is 127.5; the dither rounds it either way.
+    assert!(matches!(s.get(50, 70).r, 127 | 128), "half way");
     assert_eq!(s.get(90, 10), ColorBgra::WHITE);
     assert_eq!(history_names(&h).len(), n, "still editable");
     // Drag the end nub to x = 50.
     gradient_drag(&mut h, PointerButton::Primary, (90.0, 40.0), (50.0, 40.0));
     assert_eq!(doc(&h).layer(0).surface.get(50, 10), ColorBgra::WHITE);
-    assert_eq!(doc(&h).layer(0).surface.get(30, 10).r, 127);
+    assert!(matches!(doc(&h).layer(0).surface.get(30, 10).r, 127 | 128));
     assert_eq!(history_names(&h).len(), n, "nub edit doesn't commit");
     press(&mut h, Modifiers::NONE, Key::Enter);
     assert_eq!(history_names(&h).last().unwrap(), "Gradient");
     assert_eq!(history_names(&h).len(), n + 1);
-    assert_eq!(doc(&h).layer(0).surface.get(30, 10).r, 127, "kept");
+    assert!(
+        matches!(doc(&h).layer(0).surface.get(30, 10).r, 127 | 128),
+        "kept"
+    );
 }
 
 #[test]
@@ -181,7 +185,8 @@ fn gradient_transparency_mode_fades_alpha() {
 fn shift_snaps_the_gradient_to_15_degrees() {
     let mut h = harness();
     press(&mut h, Modifiers::NONE, Key::G);
-    // 5° off horizontal; Shift snaps it flat, so every column is one colour.
+    // 5° off horizontal; Shift snaps it flat, so every column is one colour (give or take
+    // the dither's one level).
     drag(
         &mut h,
         PointerButton::Primary,
@@ -190,7 +195,11 @@ fn shift_snaps_the_gradient_to_15_degrees() {
     );
     let s = &doc(&h).layer(0).surface;
     for x in [20, 50, 80] {
-        assert_eq!(s.get(x, 0), s.get(x, 79), "column {x}");
+        let (top, bottom) = (s.get(x, 0), s.get(x, 79));
+        assert!(
+            top.r.abs_diff(bottom.r) <= 1,
+            "column {x}: {top:?} vs {bottom:?}"
+        );
     }
     assert_ne!(s.get(20, 0), s.get(80, 0));
 }

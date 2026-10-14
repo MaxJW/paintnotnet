@@ -13,7 +13,7 @@
 use pnn_core::{BlendMode, ColorBgra, Rect, Surface};
 
 use crate::adjustments::BrightnessContrast;
-use crate::blurs::{LocalHistogram, Separable, tent};
+use crate::blurs::{LocalHistogram, Separable};
 use crate::distort::hash01;
 use crate::framework::{EffectDef, PropDef, Renderer, Value, intensity};
 
@@ -121,10 +121,7 @@ pub(crate) struct Glow {
 impl Glow {
     pub(crate) fn new(radius: i32, brightness: i32, contrast: i32) -> Self {
         Self {
-            blur: Separable {
-                r: radius.max(0) as usize,
-                kernel: tent,
-            },
+            blur: Separable::gaussian(radius.max(0) as usize),
             bc: BrightnessContrast::new(brightness, contrast),
         }
     }
@@ -505,10 +502,7 @@ pub fn def(name: &str) -> Option<EffectDef> {
             ],
             |v: &[Value], _, _| {
                 Box::new(PencilSketch {
-                    blur: Separable {
-                        r: v[0].int().max(0) as usize,
-                        kernel: tent,
-                    },
+                    blur: Separable::gaussian(v[0].int().max(0) as usize),
                     bc: BrightnessContrast::new(v[1].int(), -v[1].int()),
                 })
             },

@@ -669,6 +669,45 @@ pub fn colors_match(
     sum <= tol * tol * 4
 }
 
+/// How a flood fill decides which colours match the seed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Tolerance {
+    /// 0..=100 %.
+    pub pct: u8,
+    /// Weight colour differences by the seed's alpha (transparent pixels match each other).
+    pub premultiplied: bool,
+    /// Compare in OKLab (as the eye sees differences) instead of paint.net's RGB.
+    pub perceptual: bool,
+}
+
+/// paintnotnet's perceptual colour test: OKLab distance (colour weighted by the seed's alpha
+/// in premultiplied mode, plus the alpha difference), within 0.96·t². Calibrated so 50%
+/// reaches about as far through greys as paint.net's 50% (128 matches 202, not 210); 100%
+/// matches everything. Unlike RGB it treats a dark blue step as large and a light yellow
+/// step of the same RGB size as small, as they look.
+pub fn colors_match_perceptual(
+    seed_lab: [f32; 3],
+    seed: crate::ColorBgra,
+    c: crate::ColorBgra,
+    tolerance_pct: u8,
+    premultiplied: bool,
+) -> bool {
+    if tolerance_pct >= 100 {
+        return true;
+    }
+    let t = tolerance_pct as f32 / 100.0;
+    let limit = 0.96 * t * t;
+    let lab = crate::color::oklab(c);
+    let w = if premultiplied {
+        seed.a as f32 / 255.0
+    } else {
+        1.0
+    };
+    let d2 = (0..3).map(|k| (lab[k] - seed_lab[k]).powi(2)).sum::<f32>() * w * w;
+    let da = (seed.a as f32 - c.a as f32) / 255.0;
+    d2 + da * da <= limit * limit
+}
+
 /// Flood fill on `pixels` (row-major) from `seed`: contiguous (4-connected scanline fill) or
 /// global. Returns the matching stencil.
 pub fn flood_stencil(
@@ -676,13 +715,24 @@ pub fn flood_stencil(
     width: u32,
     height: u32,
     seed: (u32, u32),
-    tolerance_pct: u8,
-    premultiplied: bool,
+    tolerance: Tolerance,
     contiguous: bool,
 ) -> Vec<bool> {
     let (w, h) = (width as usize, height as usize);
     let target = pixels[seed.1 as usize * w + seed.0 as usize];
-    let matches = |i: usize| colors_match(target, pixels[i], tolerance_pct, premultiplied);
+    let target_lab = crate::color::oklab(target);
+    let Tolerance {
+        pct,
+        premultiplied,
+        perceptual,
+    } = tolerance;
+    let matches = |i: usize| {
+        if perceptual {
+            colors_match_perceptual(target_lab, target, pixels[i], pct, premultiplied)
+        } else {
+            colors_match(target, pixels[i], pct, premultiplied)
+        }
+    };
     let mut stencil = vec![false; w * h];
     if !contiguous {
         use rayon::prelude::*;
@@ -966,6 +1016,36 @@ mod tests {
         assert!(!colors_match(t1, t2, 0, false));
     }
 
+    /// OKLab tolerance: 50% reaches through greys about as far as paint.net's RGB 50%, and
+    /// tells apart what RGB can't: a dark blue step (clearly visible) and a light yellow step
+    /// (barely visible) of the same RGB size.
+    #[test]
+    fn perceptual_tolerance() {
+        let m = |a: ColorBgra, b: ColorBgra, pct: u8| {
+            colors_match_perceptual(crate::color::oklab(a), a, b, pct, true)
+        };
+        let grey = |v: u8| ColorBgra::from_rgba(v, v, v, 255);
+        assert!(m(grey(128), grey(200), 50) && !m(grey(128), grey(212), 50));
+        assert!(colors_match(grey(128), grey(200), 50, true));
+        let (blue1, blue2) = (
+            ColorBgra::from_rgba(0, 0, 40, 255),
+            ColorBgra::from_rgba(0, 0, 90, 255),
+        );
+        let (yellow1, yellow2) = (
+            ColorBgra::from_rgba(235, 235, 40, 255),
+            ColorBgra::from_rgba(235, 235, 90, 255),
+        );
+        // RGB sees the same step in both pairs.
+        assert_eq!(
+            colors_match(blue1, blue2, 30, true),
+            colors_match(yellow1, yellow2, 30, true)
+        );
+        // OKLab: the yellows match, the blues don't.
+        assert!(m(yellow1, yellow2, 30), "light yellows look alike");
+        assert!(!m(blue1, blue2, 30), "dark blues look different");
+        assert!(m(blue1, ColorBgra::WHITE, 100), "100% matches everything");
+    }
+
     #[test]
     fn contiguous_vs_global_flood() {
         // Two white areas separated by a black column.
@@ -974,9 +1054,31 @@ mod tests {
         for y in 0..3 {
             px[y * 5 + 2] = ColorBgra::BLACK;
         }
-        let c = flood_stencil(&px, w, h, (0, 0), 0, true, true);
+        let c = flood_stencil(
+            &px,
+            w,
+            h,
+            (0, 0),
+            Tolerance {
+                pct: 0,
+                premultiplied: true,
+                perceptual: false,
+            },
+            true,
+        );
         assert_eq!(c.iter().filter(|&&b| b).count(), 6);
-        let g = flood_stencil(&px, w, h, (0, 0), 0, true, false);
+        let g = flood_stencil(
+            &px,
+            w,
+            h,
+            (0, 0),
+            Tolerance {
+                pct: 0,
+                premultiplied: true,
+                perceptual: false,
+            },
+            false,
+        );
         assert_eq!(g.iter().filter(|&&b| b).count(), 12);
     }
 }
