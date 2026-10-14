@@ -9,8 +9,9 @@ the git branch `recreation` and tag `recreation-2026-10-13` keep that faithful p
 (Phase 5's feather feel still awaits your sign-off). From here `main` is **paintnotnet modern**: the user's own
 modernised paint.net, "keeping things vaguely in place" but with docked side panels instead of draggable windows, a
 glassy, great-looking UI, better tool controls (brush size first), super smooth performance, extra features, and better
-maths wherever something we copied (paint.net 3.36, BoltBait) can be done more accurately or faster. **Next:** Phase 13
-(design system and docked shell): design A chosen; 13a–13d done, 13e (motion) next. The recreation backlog (rest of the
+maths wherever something we copied (paint.net 3.36, BoltBait) can be done more accurately or faster. Phase 13
+(design system and docked shell) is done (2026-10-14): design A, docked glass shell, Lucide icons, motion. **Next:**
+Phase 14 (tool controls). The recreation backlog (rest of the
 BoltBait pack, Sketch Blur, comparing against the 5.1.12 release files) is parked below and done on the `recreation`
 branch only if wanted.
 
@@ -357,8 +358,19 @@ ours is better, and keep a test showing the difference.
   the Paintbrush hides the system cursor, Pan shows the grab hand; renders of the shell, File menu, Layers and
   History checked by eye, and of the drawn cursor enlarged. Not checked: the drawn cursor on the real desktop
   (needs a real pointer), the global menu's new icons in Plasma's panel.
-### 13e Motion
-- [ ] Short, consistent animations for islands, sections, menus and dialogs; never in the way of drawing
+### 13e ✅ Motion
+- [x] Durations are tokens (`theme::motion`: FAST 0.12 s for hover and egui's own fades of menus, popups and
+      dialogs; NORMAL 0.18 s for panels). Collapsing, expanding, showing or hiding a dock section makes the sections
+      glide to their new places; F5–F8 fade a panel in or out with a short slide (the glass fades with it, and a
+      fading-out panel takes no clicks); the options bar glides when the rail comes or goes; tool buttons and Layers
+      and History rows ease their hover highlight
+- [x] Never in the way of drawing: window resizes and splitter drags follow at once, the canvas's free area never
+      animates, and nothing animates while idle (repaints are requested only during a transition)
+- **Verified 2026-10-14:** a UI test at 60 fps steps: three frames after clicking History's title its height is
+  part way between open and collapsed, then exactly the title height; dragging the dock edge 40 pt widens it by
+  40 the next frame. A frame captured mid-collapse checked by eye. CI passes (317 tests).
+
+**Phase 13 done (2026-10-14).**
 
 ## Phase 14: Tool controls
 - [ ] Brush size: on-canvas resize gesture with a live outline and readout, a size slider with a stroke preview,

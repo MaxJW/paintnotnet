@@ -178,7 +178,14 @@ pub struct Panels {
     rail: Vec2,
     options_height: f32,
     colors_height: f32,
+    /// This frame's layout as drawn (animated); its `free` area is the final one.
     layout: Layout,
+    /// Where each panel was last drawn (a hidden panel fades out there).
+    last: [Rect; 4],
+    /// A panel was shown, hidden or collapsed: animate the layout until this time.
+    kick: bool,
+    animate_until: f64,
+    animating: bool,
     /// The layout settings changed (save them).
     changed: bool,
 }
@@ -201,6 +208,10 @@ impl Default for Panels {
                 sections: Vec::new(),
                 free: Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0)),
             },
+            last: [Rect::NOTHING; 4],
+            kick: false,
+            animate_until: 0.0,
+            animating: false,
             changed: false,
         }
     }
@@ -214,11 +225,13 @@ impl Panels {
     pub fn toggle(&mut self, panel: Panel) {
         self.visible[idx(panel)] = !self.visible[idx(panel)];
         self.changed = true;
+        self.kick = true;
     }
 
     pub fn set_visible(&mut self, panel: Panel, visible: bool) {
         self.visible[idx(panel)] = visible;
         self.changed = true;
+        self.kick = true;
     }
 
     pub fn collapsed(&self, panel: Panel) -> bool {
@@ -228,6 +241,7 @@ impl Panels {
     pub fn set_collapsed(&mut self, panel: Panel, collapsed: bool) {
         self.collapsed[idx(panel)] = collapsed;
         self.changed = true;
+        self.kick = true;
     }
 
     /// Ctrl+Shift+F5…F8: shown, expanded and at its original size.
@@ -241,6 +255,7 @@ impl Panels {
             Panel::Layers | Panel::Colors => self.dock_width = d.width,
         }
         self.changed = true;
+        self.kick = true;
     }
 
     /// Where `panel` was drawn last frame (`Rect::NOTHING` when hidden).
@@ -301,7 +316,11 @@ impl Panels {
     }
 
     /// Lay out the islands in `central` for this frame; returns the free canvas area.
-    pub fn arrange(&mut self, central: Rect) -> Rect {
+    ///
+    /// After a panel is shown, hidden or collapsed the islands glide to their new places
+    /// (`motion::NORMAL`); window resizes and splitter drags follow at once, and the free
+    /// area (where the canvas fits) never animates.
+    pub fn arrange(&mut self, ctx: &egui::Context, central: Rect) -> Rect {
         let input = LayoutInput {
             visible: self.visible,
             collapsed: self.collapsed,
@@ -311,8 +330,45 @@ impl Panels {
             colors_height: self.colors_height,
             history_height: self.history_height,
         };
-        self.layout = compute(central, &input);
+        let target = compute(central, &input);
+        let now = ctx.input(|i| i.time);
+        if std::mem::take(&mut self.kick) {
+            self.animate_until = now + f64::from(theme::motion::NORMAL) + 0.05;
+        }
+        self.animating = now < self.animate_until;
+        if self.animating {
+            ctx.request_repaint();
+        }
+        let time = if self.animating {
+            theme::motion::NORMAL
+        } else {
+            0.0
+        };
+        let anim = |key: (&str, &str), v: f32| {
+            ctx.animate_value_with_time(egui::Id::new(("panel_anim", key)), v, time)
+        };
+        let mut layout = target;
+        let o = layout.options;
+        layout.options = Rect::from_min_max(
+            pos2(anim(("options", "x0"), o.min.x), o.min.y),
+            pos2(anim(("options", "x1"), o.max.x), o.max.y),
+        );
+        for (p, r) in &mut layout.sections {
+            let y = anim((p.name(), "y"), r.min.y);
+            let h = anim((p.name(), "h"), r.height());
+            *r = Rect::from_min_size(pos2(r.min.x, y), vec2(r.width(), h));
+        }
+        self.layout = layout;
         self.layout.free
+    }
+
+    /// How visible `panel` is (0–1): fades in when shown, out when hidden.
+    fn fade(&self, ctx: &egui::Context, panel: Panel) -> f32 {
+        ctx.animate_bool_with_time(
+            egui::Id::new(("panel_fade", panel.name())),
+            self.visible(panel),
+            theme::motion::NORMAL,
+        )
     }
 
     /// The tool rail. `contents` gets the height available for the tools.
@@ -322,19 +378,31 @@ impl Panels {
         palette: &Palette,
         contents: impl FnOnce(&mut egui::Ui, f32),
     ) {
-        let Some(rail) = self.layout.rail else {
+        let fade = self.fade(ctx, Panel::Tools);
+        let Some(rail) = self
+            .layout
+            .rail
+            .or_else(|| (fade > 0.0).then_some(self.last[0]))
+        else {
             return;
         };
+        let visible = self.visible(Panel::Tools);
         let max_height = self.layout.free.max.y - rail.min.y;
         let margin = egui::Margin::symmetric(8, 8);
         let response = egui::Area::new(egui::Id::new("tool_rail"))
-            .fixed_pos(rail.min)
+            .fixed_pos(rail.min - vec2((1.0 - fade) * 8.0, 0.0))
             .constrain(false)
+            .interactable(visible)
             .show(ctx, |ui| {
+                ui.multiply_opacity(fade);
                 crate::glass::show(ui, island(palette).inner_margin(margin), "rail", |ui| {
                     contents(ui, max_height - margin.sum().y);
                 })
             });
+        if !visible {
+            return;
+        }
+        self.last[0] = response.response.rect;
         let size = response.response.rect.size();
         if (size - self.rail).length() > 0.5 {
             self.rail = size;
@@ -380,18 +448,32 @@ impl Panels {
         palette: &Palette,
         mut contents: impl FnMut(Panel, Part, &mut egui::Ui),
     ) {
-        let Some(dock) = self.layout.dock else {
-            return;
-        };
         let sections = self.layout.sections.clone();
-        for (panel, rect) in &sections {
-            let (panel, rect) = (*panel, *rect);
+        for panel in DOCK_ORDER {
+            let fade = self.fade(ctx, panel);
+            let visible = self.visible(panel);
+            let rect = match sections.iter().find(|(p, _)| *p == panel) {
+                Some((_, r)) => *r,
+                None if fade > 0.0 => self.last[idx(panel)],
+                None => continue,
+            };
             let collapsed = self.collapsed(panel);
+            let animating = self.animating;
             let mut toggle = false;
             let response = egui::Area::new(egui::Id::new(("dock", panel.name())))
-                .fixed_pos(rect.min)
+                .fixed_pos(rect.min + vec2((1.0 - fade) * 8.0, 0.0))
                 .constrain(false)
+                .interactable(visible)
                 .show(ctx, |ui| {
+                    ui.multiply_opacity(fade);
+                    if animating {
+                        // Contents appear as the section opens (the shadow may clip meanwhile).
+                        let clip = Rect::from_min_max(
+                            rect.min - vec2(GAP * 3.0, GAP * 3.0),
+                            pos2(rect.max.x + GAP * 3.0, rect.max.y),
+                        );
+                        ui.set_clip_rect(clip);
+                    }
                     crate::glass::show(ui, island(palette), ("dock", panel.name()), |ui| {
                         ui.set_width(rect.width());
                         // Colors sizes itself to its contents; the others fill their slot.
@@ -427,7 +509,11 @@ impl Panels {
             if toggle {
                 self.set_collapsed(panel, !collapsed);
             }
-            if panel == Panel::Colors && !collapsed {
+            if !visible {
+                continue;
+            }
+            self.last[idx(panel)] = rect;
+            if panel == Panel::Colors && !collapsed && !animating {
                 let h = response.response.rect.height();
                 if (h - self.colors_height).abs() > 0.5 {
                     self.colors_height = h;
@@ -435,7 +521,9 @@ impl Panels {
                 }
             }
         }
-        self.splitters(ctx, dock, &sections);
+        if let Some(dock) = self.layout.dock {
+            self.splitters(ctx, dock, &sections);
+        }
     }
 
     /// Drag handles: the dock's left edge (width) and the gap above History (its height).

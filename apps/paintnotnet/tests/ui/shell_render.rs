@@ -911,3 +911,64 @@ fn tools_draw_their_cursor_over_the_canvas() {
     h.step();
     assert_eq!(h.output().platform_output.cursor_icon, CursorIcon::Grab);
 }
+
+/// Collapsing a section glides over `motion::NORMAL` instead of jumping; dragging the dock's
+/// edge follows the pointer at once.
+#[test]
+fn collapsing_glides_but_dragging_does_not() {
+    use eframe::egui::{Event, Modifiers, PointerButton};
+    use paintnotnet::panels::HEADER;
+    let mut h = Harness::builder()
+        .with_size(vec2(1202.0, 867.0))
+        .with_step_dt(1.0 / 60.0)
+        .wgpu()
+        .build_eframe(|cc| PaintNotNetApp::new(cc, None, Vec::new()));
+    h.state_mut()
+        .workspace_mut()
+        .add(Document::new_blank(800, 600), None, None);
+    for _ in 0..4 {
+        h.step();
+    }
+    let open = h.state().panels().rect(Panel::History).height();
+    h.get_by_role_and_label(eframe::egui::accesskit::Role::Button, "History")
+        .click();
+    for _ in 0..4 {
+        h.step();
+    }
+    let midway = h.state().panels().rect(Panel::History).height();
+    if let Ok(dir) = std::env::var("PNN_RENDER_DUMP")
+        && let Ok(image) = h.render()
+    {
+        image.save(format!("{dir}/shell-collapsing.png")).unwrap();
+    }
+    assert!(
+        midway > HEADER + 1.0 && midway < open - 1.0,
+        "part way after 3 frames: {open} → {midway}"
+    );
+    for _ in 0..20 {
+        h.step();
+    }
+    assert_eq!(h.state().panels().rect(Panel::History).height(), HEADER);
+
+    let layers = h.state().panels().rect(Panel::Layers);
+    let grab = eframe::egui::pos2(layers.min.x - 2.0, layers.center().y);
+    h.event(Event::PointerMoved(grab));
+    h.step();
+    h.event(Event::PointerButton {
+        pos: grab,
+        button: PointerButton::Primary,
+        pressed: true,
+        modifiers: Modifiers::NONE,
+    });
+    h.step();
+    h.event(Event::PointerMoved(grab - vec2(40.0, 0.0)));
+    h.step();
+    h.step();
+    let wider = h.state().panels().rect(Panel::Layers);
+    assert!(
+        (wider.width() - layers.width() - 40.0).abs() < 1.5,
+        "width follows the drag at once: {} → {}",
+        layers.width(),
+        wider.width()
+    );
+}

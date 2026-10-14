@@ -38,6 +38,7 @@ fn glass_shape(
     radius: CornerRadius,
     area: Rect,
     palette: &Palette,
+    opacity: f32,
 ) -> Shape {
     let ppp = ctx.pixels_per_point();
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -65,6 +66,7 @@ fn glass_shape(
         ],
         radius: px(radius.average()),
         saturation: SATURATION,
+        opacity,
         ..Default::default()
     };
     Shape::Callback(egui_wgpu::Callback::new_paint_callback(
@@ -100,7 +102,7 @@ pub fn show<R>(
     if let Some(slot) = slot {
         let rect = response.response.rect;
         let palette = theme::palette(ui.ctx());
-        let glass = glass_shape(ui.ctx(), id, rect, radius, area, &palette);
+        let glass = glass_shape(ui.ctx(), id, rect, radius, area, &palette, ui.opacity());
         let border = Shape::rect_stroke(rect, radius, stroke, egui::StrokeKind::Inside);
         ui.painter().set(slot, Shape::Vec(vec![glass, border]));
     }
@@ -128,7 +130,7 @@ pub fn window<R>(
     let palette = theme::palette(ctx);
     let shapes = vec![
         Shape::Rect(shadow.as_shape(rect, radius)),
-        glass_shape(ctx, id, rect, radius, area, &palette),
+        glass_shape(ctx, id, rect, radius, area, &palette, 1.0),
         Shape::rect_stroke(rect, radius, stroke, egui::StrokeKind::Inside),
     ];
     ctx.layer_painter(response.response.layer_id)

@@ -14,7 +14,7 @@ struct Params {
     radius: f32,            // corner radius, px
     saturation: f32,        // 1 = unchanged
     srgb_target: f32,       // 1 = framebuffer is sRGB, so work in linear values
-    _pad: f32,
+    opacity: f32,           // 0–1, panels fading in and out
 };
 
 @group(0) @binding(0) var<uniform> glass: Params;
@@ -94,5 +94,6 @@ fn fs_glass(in: VsOut) -> @location(0) vec4<f32> {
         c = srgb_to_linear(c);
     }
     // Premultiplied, as egui blends.
-    return vec4(c * coverage, coverage);
+    let a = coverage * glass.opacity;
+    return vec4(c * a, a);
 }

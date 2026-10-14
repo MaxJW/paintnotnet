@@ -35,7 +35,8 @@ pub struct GlassUniforms {
     pub saturation: f32,
     /// Filled in by the renderer.
     pub srgb_target: f32,
-    pub _pad: f32,
+    /// 0–1, for panels fading in and out.
+    pub opacity: f32,
 }
 
 struct Pass {

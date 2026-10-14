@@ -109,8 +109,12 @@ fn tool_button(
             egui::Stroke::new(1.0, palette.selection_stroke),
             egui::StrokeKind::Inside,
         );
-    } else if response.hovered() {
-        ui.painter().rect_filled(rect, radius, palette.hover);
+    } else {
+        let hover = hover_amount(ui, &response);
+        if hover > 0.0 {
+            ui.painter()
+                .rect_filled(rect, radius, palette.hover.gamma_multiply(hover));
+        }
     }
     let tint = if selected || response.hovered() {
         palette.text
@@ -261,7 +265,7 @@ pub fn layers(
                         egui::Stroke::new(2.0, palette.accent),
                     );
                 }
-                row_background(ui, rect, selected, response.hovered(), palette);
+                row_background(ui, rect, selected, &response, palette);
                 let check_rect = Rect::from_center_size(
                     pos2(rect.min.x + 15.0, rect.center().y),
                     vec2(18.0, 18.0),
@@ -390,8 +394,23 @@ fn icon_button(
     .clicked()
 }
 
+/// How much of the hover highlight to show (eases in and out).
+fn hover_amount(ui: &egui::Ui, response: &egui::Response) -> f32 {
+    ui.ctx().animate_bool_with_time(
+        response.id.with("hover"),
+        response.hovered(),
+        crate::theme::motion::FAST,
+    )
+}
+
 /// Rounded row highlight for the current item, or the hovered one.
-fn row_background(ui: &egui::Ui, rect: Rect, selected: bool, hovered: bool, palette: &Palette) {
+fn row_background(
+    ui: &egui::Ui,
+    rect: Rect,
+    selected: bool,
+    response: &egui::Response,
+    palette: &Palette,
+) {
     let radius = crate::theme::radius::CONTROL + 1;
     if selected {
         ui.painter().rect(
@@ -401,8 +420,12 @@ fn row_background(ui: &egui::Ui, rect: Rect, selected: bool, hovered: bool, pale
             egui::Stroke::new(1.0, palette.selection_stroke),
             egui::StrokeKind::Inside,
         );
-    } else if hovered {
-        ui.painter().rect_filled(rect, radius, palette.hover);
+    } else {
+        let hover = hover_amount(ui, response);
+        if hover > 0.0 {
+            ui.painter()
+                .rect_filled(rect, radius, palette.hover.gamma_multiply(hover));
+        }
     }
 }
 
@@ -440,7 +463,7 @@ pub fn history(
                         &entry.name,
                     )
                 });
-                row_background(ui, rect, selected, response.hovered(), palette);
+                row_background(ui, rect, selected, &response, palette);
                 let undone = i > current;
                 let tint = if undone {
                     palette.faint_text

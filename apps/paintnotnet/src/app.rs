@@ -1733,7 +1733,7 @@ impl eframe::App for PaintNotNetApp {
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
                 let rect = ui.max_rect();
-                let free = panels.arrange(rect);
+                let free = panels.arrange(ui.ctx(), rect);
                 match self.workspace.active_mut() {
                     Some(tab) => canvas::show(ui, tab, &mut self.canvas, free, gpu),
                     None => {
