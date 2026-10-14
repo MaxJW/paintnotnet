@@ -37,6 +37,8 @@ zvariant = "5.15"
 wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system"] }
 wayland-protocols-plasma = { version = "0.3", features = ["client"] }
+# Raising the window for a file opened from the desktop (xdg-activation).
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 
 rayon = "1.12.0"
 bytemuck = { version = "1.25.2", features = ["derive"] }

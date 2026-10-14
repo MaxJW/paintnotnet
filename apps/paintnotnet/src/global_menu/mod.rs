@@ -13,17 +13,13 @@
 //! Only Plasma on Wayland is supported; on X11 or other desktops the window keeps its own
 //! menu bar.
 
-mod wayland;
-
 use std::collections::HashMap;
-use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Key};
-use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 use serde::{Deserialize, Serialize};
 use zvariant::{OwnedValue, Type, Value};
 
@@ -404,9 +400,6 @@ pub struct GlobalMenu {
     conn: zbus::blocking::Connection,
     model: Arc<Mutex<Model>>,
     picked: Receiver<Command>,
-    /// Never dropped: it borrows winit's Wayland display, which may be gone by the time the
-    /// app is dropped (see [`wayland::AppMenu`]).
-    wayland: ManuallyDrop<wayland::AppMenu>,
     /// Whether Plasma's menu registrar is running (checked on a background thread).
     registrar: Arc<AtomicBool>,
     linked: bool,
@@ -415,19 +408,16 @@ pub struct GlobalMenu {
 
 impl GlobalMenu {
     /// Export the menu and get ready to link it to the window. `None` (with a log line)
-    /// unless this is a Wayland window on a compositor with KDE's appmenu protocol and a
+    /// unless the window's Wayland compositor has KDE's appmenu protocol (`link`) and a
     /// session bus is reachable.
-    pub fn new(cc: &eframe::CreationContext) -> Option<Self> {
-        let (Ok(display), Ok(window)) = (cc.display_handle(), cc.window_handle()) else {
+    pub fn new(
+        cc: &eframe::CreationContext,
+        link: Option<&crate::wayland::WindowLink>,
+    ) -> Option<Self> {
+        if !link.is_some_and(|l| l.has_appmenu()) {
+            log::info!("global menu: no Wayland appmenu protocol, keeping the menu bar");
             return None;
-        };
-        let (RawDisplayHandle::Wayland(d), RawWindowHandle::Wayland(w)) =
-            (display.as_raw(), window.as_raw())
-        else {
-            log::info!("global menu: not a Wayland window, keeping the menu bar");
-            return None;
-        };
-        let wayland = wayland::AppMenu::connect(d.display, w.surface)?;
+        }
         let model = Arc::new(Mutex::new(Model::default()));
         let (tx, rx) = channel();
         let server = DbusMenu {
@@ -446,7 +436,6 @@ impl GlobalMenu {
             conn,
             model,
             picked: rx,
-            wayland: ManuallyDrop::new(wayland),
             registrar,
             linked: false,
             last_build: None,
@@ -460,7 +449,13 @@ impl GlobalMenu {
 
     /// Call every frame: links or unlinks the window, refreshes the exported state, and
     /// returns the commands picked from the desktop's menu.
-    pub fn update(&mut self, wanted: bool, menus: &[Menu], cx: &MenuContext) -> Vec<Command> {
+    pub fn update(
+        &mut self,
+        link: &mut crate::wayland::WindowLink,
+        wanted: bool,
+        menus: &[Menu],
+        cx: &MenuContext,
+    ) -> Vec<Command> {
         let want = wanted && self.registrar.load(Ordering::Relaxed);
         if self.last_build.is_none_or(|t| t.elapsed() >= REFRESH) {
             self.last_build = Some(Instant::now());
@@ -490,11 +485,11 @@ impl GlobalMenu {
             if want {
                 let name = self.conn.unique_name().map(|n| n.to_string());
                 match name {
-                    Some(name) => self.wayland.set_address(&name, PATH),
+                    Some(name) => link.set_menu_address(&name, PATH),
                     None => self.linked = false,
                 }
             } else {
-                self.wayland.clear();
+                link.clear_menu();
             }
         }
         self.picked.try_iter().collect()

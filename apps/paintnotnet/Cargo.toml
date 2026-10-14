@@ -20,6 +20,7 @@ zvariant.workspace = true
 wayland-client.workspace = true
 wayland-backend.workspace = true
 wayland-protocols-plasma.workspace = true
+wayland-protocols.workspace = true
 rayon.workspace = true
 cosmic-text.workspace = true
 serde.workspace = true

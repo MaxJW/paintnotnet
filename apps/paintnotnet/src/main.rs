@@ -15,11 +15,29 @@ fn main() -> ExitCode {
     )
     .init();
 
-    let (smoke, files) = match parse_args(std::env::args().skip(1)) {
+    let Args {
+        smoke,
+        files,
+        new_window,
+    } = match parse_args(std::env::args().skip(1)) {
         Ok(parsed) => parsed,
         Err(message) => {
-            eprintln!("{message}\nusage: paintnotnet [--smoke-test SECONDS] [FILE]...");
+            eprintln!(
+                "{message}\nusage: paintnotnet [--new-window] [--smoke-test SECONDS] [FILE]..."
+            );
             return ExitCode::from(2);
+        }
+    };
+    // One window: a running paintnotnet takes the files. Smoke tests run alone unless
+    // PNN_SMOKE_ONE_WINDOW=1 (to test the handoff with a window that closes itself).
+    let smoke_alone = smoke.is_some() && std::env::var_os("PNN_SMOKE_ONE_WINDOW").is_none();
+    let instance = if new_window || smoke_alone {
+        None
+    } else {
+        match paintnotnet::single_instance::start(&files) {
+            paintnotnet::single_instance::Start::HandedOver => return ExitCode::SUCCESS,
+            paintnotnet::single_instance::Start::First(i) => Some(i),
+            paintnotnet::single_instance::Start::Alone => None,
         }
     };
 
@@ -62,7 +80,14 @@ fn main() -> ExitCode {
                     let config = paintnotnet::config::Config::load(&path);
                     app.set_config(&cc.egui_ctx, config, Some(path));
                 }
-                app.set_global_menu(paintnotnet::global_menu::GlobalMenu::new(cc));
+                let link = paintnotnet::wayland::WindowLink::new(cc);
+                let menu = paintnotnet::global_menu::GlobalMenu::new(cc, link.as_ref());
+                app.set_window_link(link);
+                app.set_global_menu(menu);
+            }
+            if let Some(i) = instance {
+                i.set_context(&cc.egui_ctx);
+                app.set_instance(i);
             }
             Ok(Box::new(app))
         }),
@@ -76,13 +101,20 @@ fn main() -> ExitCode {
     }
 }
 
-fn parse_args(
-    mut args: impl Iterator<Item = String>,
-) -> Result<(Option<SmokeTest>, Vec<PathBuf>), String> {
+struct Args {
+    smoke: Option<SmokeTest>,
+    files: Vec<PathBuf>,
+    /// Open a window of our own even if paintnotnet is already running.
+    new_window: bool,
+}
+
+fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut smoke = None;
     let mut files = Vec::new();
+    let mut new_window = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--new-window" => new_window = true,
             "--smoke-test" => {
                 let value = args
                     .next()
@@ -98,5 +130,9 @@ fn parse_args(
             file => files.push(PathBuf::from(file)),
         }
     }
-    Ok((smoke, files))
+    Ok(Args {
+        smoke,
+        files,
+        new_window,
+    })
 }

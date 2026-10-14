@@ -2832,6 +2832,7 @@ dependencies = [
  "toml",
  "wayland-backend",
  "wayland-client",
+ "wayland-protocols",
  "wayland-protocols-plasma",
  "zbus",
  "zvariant",

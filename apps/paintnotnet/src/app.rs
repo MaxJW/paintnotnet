@@ -103,6 +103,11 @@ pub struct PaintNotNetApp {
     pub(crate) config_path: Option<std::path::PathBuf>,
     /// KDE Plasma global menu export (`None` off Plasma Wayland and in tests).
     pub(crate) global_menu: Option<crate::global_menu::GlobalMenu>,
+    /// The window's Wayland objects (global menu link, activation). Never dropped: it
+    /// borrows winit's display, which may be gone by the time the app is dropped.
+    pub(crate) window_link: Option<std::mem::ManuallyDrop<crate::wayland::WindowLink>>,
+    /// Receives files from later launches (`single_instance`).
+    pub(crate) instance: Option<crate::single_instance::Instance>,
     pub(crate) settings_open: Option<crate::settings_ui::SettingsState>,
     pub(crate) palette: Option<crate::settings_ui::PaletteState>,
     /// The adjustment/effect dialog in progress.
@@ -193,6 +198,8 @@ impl PaintNotNetApp {
             config: crate::config::Config::default(),
             config_path: None,
             global_menu: None,
+            window_link: None,
+            instance: None,
             settings_open: None,
             palette: None,
             effect: None,
@@ -521,6 +528,35 @@ impl PaintNotNetApp {
         self.global_menu = menu;
     }
 
+    /// The window's Wayland objects (made by `main`).
+    pub fn set_window_link(&mut self, link: Option<crate::wayland::WindowLink>) {
+        self.window_link = link.map(std::mem::ManuallyDrop::new);
+    }
+
+    /// Take files from later launches (`single_instance`).
+    pub fn set_instance(&mut self, instance: crate::single_instance::Instance) {
+        self.instance = Some(instance);
+    }
+
+    /// Open files handed over by later launches and raise the window for them.
+    fn take_handoffs(&mut self, ctx: &egui::Context) {
+        let Some(instance) = &self.instance else {
+            return;
+        };
+        for handoff in instance.take() {
+            self.files.open_paths(handoff.paths);
+            let activated = handoff.activation_token.as_deref().is_some_and(|token| {
+                self.window_link
+                    .as_ref()
+                    .is_some_and(|link| link.activate(token))
+            });
+            if !activated {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+        }
+    }
+
     /// Whether the menus are showing in the desktop's global menu instead of the window.
     pub fn global_menu_active(&self) -> bool {
         self.global_menu.as_ref().is_some_and(|g| g.active())
@@ -541,7 +577,11 @@ impl PaintNotNetApp {
             checked: &checked,
             last_effect: self.last_effect_name(),
         };
-        let picked = global.update(self.config.global_menu, &menus::menus(), &cx);
+        let Some(link) = self.window_link.as_deref_mut() else {
+            self.global_menu = Some(global);
+            return;
+        };
+        let picked = global.update(link, self.config.global_menu, &menus::menus(), &cx);
         self.global_menu = Some(global);
         if !modal_open {
             for c in picked {
@@ -1678,6 +1718,7 @@ impl eframe::App for PaintNotNetApp {
         let ctx = ui.ctx().clone();
         self.run_autosave(now);
         self.modifiers = ctx.input(|i| i.modifiers);
+        self.take_handoffs(&ctx);
         self.handle_file_events();
 
         let modal_open = self.modal.is_some()

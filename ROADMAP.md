@@ -564,11 +564,19 @@ Supersedes PLAN.md §5 ("No .pdn support needed"): the user now wants .pdn suppo
       the real program (the user's 5.1.12, e.g. under Wine); until then, saves as .pdn carry no promise of opening in
       5.x
 - [ ] Layers, names, opacity, visibility, blend modes, DPI round-trip; paint.net-only blend modes map 1:1
-- [ ] **One window:** opening files while paintnotnet runs (Dolphin, the launcher, the command line) sends them to the
-      running window as new tabs instead of starting a second one, over D-Bus (`zbus`, already used by the global menu;
-      a well-known name on the session bus, the second process hands over its paths and exits); the running window
-      asks to be raised with the launcher's activation token (`XDG_ACTIVATION_TOKEN`; KWin may still refuse focus, to be
-      checked). `--new-window` keeps the old behaviour
+- [x] **One window** (`single_instance.rs`): the first window owns `org.paintnotnet.PaintNotNet` on the session bus;
+      a later launch (Dolphin, the launcher, a terminal) calls its `Open` with its files (made absolute) and its
+      `XDG_ACTIVATION_TOKEN`, then exits; the window opens them as tabs and asks to be raised with that token over
+      `xdg_activation_v1` (else winit's focus request). A launch without files just raises the window. No session
+      bus or no answer: a window of its own; `--new-window` always. As 3.36 (`MainForm.cs` hands a second instance's
+      file to `AppWorkspace.OpenFileInNewWorkspace`, which opens it again even if it is already open); unlike 3.36 a
+      file arriving while a dialog is open is still opened, not dropped. The Wayland join moved from the global menu
+      to `wayland.rs` (`WindowLink`), shared by both, so the `unsafe` stays two calls
+- **Verified 2026-10-14:** unit test on the real session bus (a second start hands over relative + absolute paths and
+  the token, and a bare raise request); live: a window running, a second `paintnotnet file.png` exited at once
+  (status 0) and the file opened as a second tab (screenshot); in a normal run the global menu still exports and
+  the Plasma panel showed paintnotnet's menus; File › Exit clicked over D-Bus closed it. **Not checked:** the raise
+  itself with a real launcher token (Dolphin's "Open with") on KWin; the user should try it
 - [ ] `.desktop`/PKGBUILD: `.pdn` in MimeType; shared-mime-info defines no type for `*.pdn` (checked: not in this
       system's `/usr/share/mime/globs2`), so ship a MIME XML (`image/x-paintnet`, glob `*.pdn`, magic `PDN3`)
 
