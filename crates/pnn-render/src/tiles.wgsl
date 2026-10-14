@@ -1,11 +1,11 @@
-// Composite tiles to display textures on the GPU: premultiply each uploaded tile into the
-// chunk's level 0, then build its mip chain with a 2×2 box filter, (sum + 2) / 4 per channel
-// on premultiplied bytes, as `display_tile` did on the CPU.
+// Composite tiles to display textures: premultiply each composited tile (`composite.wgsl`'s
+// output) into the chunk's level 0, then build its mip chain with a 2×2 box filter,
+// (sum + 2) / 4 per channel on premultiplied bytes, as `display_tile` did on the CPU.
 
 struct TileOrigin {
     x: u32,          // texel origin in the chunk (level 0)
     y: u32,
-    empty: u32,      // 1 = fully transparent (no raw data uploaded)
+    slot: u32,       // the tile's place in the composite buffer
     _pad: u32,
 };
 
@@ -42,16 +42,13 @@ fn premultiply(@builtin(global_invocation_id) id: vec3<u32>) {
     if (id.x >= TILE || id.y >= TILE || px.x >= dims.x || px.y >= dims.y) {
         return;
     }
-    var c = vec4<u32>(0u);
-    if (t.empty == 0u) {
-        let v = raw[id.z * TILE * TILE + id.y * TILE + id.x];
-        let b = v & 0xffu;
-        let g = (v >> 8u) & 0xffu;
-        let r = (v >> 16u) & 0xffu;
-        let a = v >> 24u;
-        // (c·a + 127) / 255, as the CPU did.
-        c = vec4<u32>((r * a + 127u) / 255u, (g * a + 127u) / 255u, (b * a + 127u) / 255u, a);
-    }
+    let v = raw[t.slot * TILE * TILE + id.y * TILE + id.x];
+    let b = v & 0xffu;
+    let g = (v >> 8u) & 0xffu;
+    let r = (v >> 16u) & 0xffu;
+    let a = v >> 24u;
+    // (c·a + 127) / 255, as the CPU did.
+    let c = vec4<u32>((r * a + 127u) / 255u, (g * a + 127u) / 255u, (b * a + 127u) / 255u, a);
     textureStore(level0, vec2<i32>(px), bytes(c));
 }
 

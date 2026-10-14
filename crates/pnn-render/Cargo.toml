@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 pnn-core.workspace = true
 pnn-effects.workspace = true
+pnn-tools.workspace = true
 wgpu.workspace = true
 egui-wgpu.workspace = true
 egui.workspace = true

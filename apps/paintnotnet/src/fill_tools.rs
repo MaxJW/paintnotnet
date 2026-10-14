@@ -47,8 +47,10 @@ pub struct GradientSession {
     pub end: [f32; 2],
     swap: bool,
     grip: Option<Grip>,
-    /// What was last rendered, to re-render when colours or options change.
+    /// What the layer holds, to re-render when colours or options change.
     rendered: Option<(Gradient, GradientOp)>,
+    /// What is on screen: `rendered`, or what the GPU draws while the nubs move.
+    shown: Option<(Gradient, GradientOp)>,
 }
 
 impl PaintNotNetApp {
@@ -194,19 +196,20 @@ impl PaintNotNetApp {
         )
     }
 
-    /// Re-render the live gradient if its points, colours or options changed.
+    /// Show the live gradient's current points, colours and options.
     pub(crate) fn refresh_gradient(&mut self) {
-        crate::diagnostics::timed("gradient", || self.refresh_gradient_now())
+        crate::diagnostics::timed("gradient", || self.refresh_gradient_now(false))
     }
 
-    fn refresh_gradient_now(&mut self) {
+    /// While the gradient keeps changing (a nub or a colour being dragged) the GPU draws it
+    /// over the layer's pre-gradient pixels and the layer is left alone; once it holds still
+    /// for a frame, or with `bake`, it is rendered into the layer.
+    fn refresh_gradient_now(&mut self, bake: bool) {
         let Some(session) = self.gradient.as_ref() else {
             return;
         };
         let spec = self.gradient_spec(session);
-        if session.rendered == Some(spec) {
-            return;
-        }
+        let gpu = self.gpu_preview;
         let Some(session) = self.gradient.as_mut() else {
             return;
         };
@@ -214,6 +217,26 @@ impl PaintNotNetApp {
             self.gradient = None;
             return;
         };
+        if session.rendered == Some(spec) {
+            session.shown = Some(spec);
+            tab.gpu.preview = None;
+            return;
+        }
+        if gpu && !bake && session.shown != Some(spec) {
+            if session.rendered.take().is_some() {
+                // The layer holds an earlier render: the GPU draws over what was there before.
+                let before = session.before.clone();
+                tab.doc
+                    .modify_layer(session.layer, None, |l| l.surface = before);
+            }
+            tab.gpu.preview = Some(crate::canvas::GradientPreview {
+                layer: tab.doc.layer(session.layer).id(),
+                shader: spec.0.shader(spec.1),
+                selection: session.selection.clone(),
+            });
+            session.shown = Some(spec);
+            return;
+        }
         let (w, h) = (tab.doc.width(), tab.doc.height());
         let r = Rect {
             x: 0,
@@ -226,6 +249,8 @@ impl PaintNotNetApp {
             spec.0.render(&mut l.surface, before, selection, r, spec.1)
         });
         session.rendered = Some(spec);
+        session.shown = Some(spec);
+        tab.gpu.preview = None;
     }
 
     pub(crate) fn gradient_event(&mut self, event: ToolEvent) {
@@ -283,6 +308,7 @@ impl PaintNotNetApp {
                     swap: button == ToolButton::Secondary,
                     grip: Some(Grip::New),
                     rendered: None,
+                    shown: None,
                 });
                 self.refresh_gradient();
             }
@@ -307,10 +333,10 @@ impl PaintNotNetApp {
                         Some(Grip::Start) => s.start = p,
                         _ => s.end = p,
                     }
-                    // Keep the constrained points once the drag ends.
-                    self.refresh_gradient();
+                    // The drag ended: into the layer; keep the constrained points.
+                    self.refresh_gradient_now(true);
                     if let Some(s) = self.gradient.as_mut()
-                        && let Some((g, _)) = s.rendered
+                        && let Some((g, _)) = s.shown
                     {
                         (s.start, s.end) = (g.start, g.end);
                         s.grip = None;
@@ -322,7 +348,7 @@ impl PaintNotNetApp {
 
     /// Bake the live gradient into history (Enter, new gradient, tool or document change).
     pub(crate) fn commit_gradient(&mut self) {
-        self.refresh_gradient();
+        self.refresh_gradient_now(true);
         let Some(s) = self.gradient.take() else {
             return;
         };
@@ -339,6 +365,7 @@ impl PaintNotNetApp {
         if let Some(tab) = self.workspace.tab_mut(s.key) {
             tab.doc
                 .modify_layer(s.layer, None, |l| l.surface = s.before.clone());
+            tab.gpu.preview = None;
         }
         true
     }
@@ -349,7 +376,7 @@ impl PaintNotNetApp {
         if self.workspace.active().map(|t| t.key) != Some(s.key) {
             return None;
         }
-        let (g, _) = s.rendered?;
+        let (g, _) = s.shown?;
         Some([
             [g.start[0] as f64, g.start[1] as f64],
             [g.end[0] as f64, g.end[1] as f64],

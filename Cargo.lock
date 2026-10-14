@@ -3065,6 +3065,7 @@ dependencies = [
  "naga",
  "pnn-core",
  "pnn-effects",
+ "pnn-tools",
  "pollster 0.4.0",
  "rayon",
  "wgpu",

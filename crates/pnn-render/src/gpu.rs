@@ -9,10 +9,10 @@ use std::collections::HashMap;
 
 use bytemuck::{Pod, Zeroable};
 use egui_wgpu::wgpu;
-use pnn_core::{ColorBgra, TILE_SIZE, Tile, TileCoord};
+use pnn_core::{TILE_SIZE, TileCoord};
 
 /// Chunk edge in tiles.
-const CHUNK_TILES: u32 = 16;
+use crate::layers::CHUNK_TILES;
 const CHUNK_PX: u32 = CHUNK_TILES * TILE_SIZE;
 /// Mip levels kept per tile: 256, 128, …, 1.
 const TILE_MIPS: u32 = 9;
@@ -61,6 +61,8 @@ struct GpuCanvas {
     /// View parameters for drawing into the glass backdrop.
     backdrop_buffer: wgpu::Buffer,
     backdrop_bind_group: wgpu::BindGroup,
+    /// The layers and their composite (`layers`).
+    store: crate::layers::LayerStore,
 }
 
 /// Lives in egui-wgpu's `callback_resources`. One per window.
@@ -72,7 +74,8 @@ pub struct CanvasRenderer {
     linear: wgpu::Sampler,
     srgb_target: bool,
     canvases: HashMap<u64, GpuCanvas>,
-    uploader: crate::tile_upload::TileUploader,
+    display: crate::display::TileDisplay,
+    compositor: crate::layers::GpuCompositor,
     pub(crate) glass: crate::glass::Glass,
 }
 
@@ -186,7 +189,8 @@ impl CanvasRenderer {
             chunk_layout,
             srgb_target: target_format.is_srgb(),
             canvases: HashMap::new(),
-            uploader: crate::tile_upload::TileUploader::new(device),
+            display: crate::display::TileDisplay::new(device),
+            compositor: crate::layers::GpuCompositor::new(device),
             glass: crate::glass::Glass::new(device, target_format),
         }
     }
@@ -227,7 +231,7 @@ impl CanvasRenderer {
                     mip_level_count: mips,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
-                    // Written by compute passes (`tile_upload`), which can't write BGRA.
+                    // Written by compute passes (`display`), which can't write BGRA.
                     format: wgpu::TextureFormat::Rgba8Unorm,
                     usage: wgpu::TextureUsages::TEXTURE_BINDING
                         | wgpu::TextureUsages::COPY_DST
@@ -328,39 +332,57 @@ impl CanvasRenderer {
                 view_bind_group,
                 backdrop_buffer,
                 backdrop_bind_group,
+                store: crate::layers::LayerStore::new(device, width, height),
             },
         );
         true
     }
 
-    /// Show changed composite tiles (`None`: fully transparent): uploaded as they are, then
-    /// premultiplied and mip-mapped on the GPU (see `tile_upload`).
-    pub fn upload_tiles(
-        &self,
+    /// Composite `dirty` tiles of `layers` (bottom first) on the GPU and show them. Layer
+    /// tiles the GPU doesn't have yet are uploaded first (see `layers`).
+    pub fn composite(
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         key: u64,
-        tiles: &[(TileCoord, Option<&Tile<ColorBgra>>)],
+        layers: &[crate::LayerInput<'_>],
+        dirty: &[TileCoord],
     ) {
-        let Some(canvas) = self.canvases.get(&key) else {
+        let Some(canvas) = self.canvases.get_mut(&key) else {
             return;
         };
-        let mut by_chunk: HashMap<usize, Vec<crate::tile_upload::TileJob<'_>>> = HashMap::new();
-        for &(c, tile) in tiles {
-            let i = ((c.ty / CHUNK_TILES) * canvas.chunks_x + c.tx / CHUNK_TILES) as usize;
-            by_chunk
-                .entry(i)
-                .or_default()
-                .push(crate::tile_upload::TileJob {
+        if dirty.is_empty() {
+            return;
+        }
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("composite"),
+        });
+        let chunks = self.compositor.composite(
+            device,
+            queue,
+            &mut encoder,
+            &mut canvas.store,
+            layers,
+            dirty,
+        );
+        for (i, tiles) in chunks {
+            let jobs: Vec<crate::display::TileJob> = tiles
+                .iter()
+                .map(|&(c, slot)| crate::display::TileJob {
                     x: (c.tx % CHUNK_TILES) * TILE_SIZE,
                     y: (c.ty % CHUNK_TILES) * TILE_SIZE,
-                    tile,
-                });
+                    slot,
+                })
+                .collect();
+            self.display.display(
+                device,
+                &mut encoder,
+                &canvas.chunks[i].mip_views,
+                &canvas.store.acc[i],
+                &jobs,
+            );
         }
-        for (i, jobs) in by_chunk {
-            self.uploader
-                .upload(device, queue, &canvas.chunks[i].mip_views, &jobs);
-        }
+        queue.submit([encoder.finish()]);
     }
 
     /// Write one tile of selection coverage for the feather preview (`None` = unselected).

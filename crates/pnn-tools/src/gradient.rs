@@ -219,6 +219,66 @@ impl Gradient {
     }
 }
 
+/// A gradient as plain numbers, for drawing it on the GPU (`pnn-render`'s compositor draws
+/// the live gradient while its nubs are dragged): the same constants `Gradient::render`
+/// computes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GradientShader {
+    /// Index in [`GradientType::ALL`].
+    pub kind: u32,
+    /// 0 no repeat, 1 wrapped, 2 reflected.
+    pub repeat: u32,
+    pub start: [f32; 2],
+    pub dtdx: f32,
+    pub dtdy: f32,
+    pub inv_len: f32,
+    pub offset: f32,
+    /// Start = end: a solid fill.
+    pub solid: bool,
+    pub alpha_only: bool,
+    pub start_a: u8,
+    pub end_a: u8,
+    pub start_color: ColorBgra,
+    pub end_color: ColorBgra,
+    pub solid_color: ColorBgra,
+    /// How it lands on the layer: blended in this mode, or (`None`) overwriting.
+    pub op: Option<BlendMode>,
+}
+
+impl Gradient {
+    pub fn shader(&self, op: GradientOp) -> GradientShader {
+        let lerp = Lerp::new(self);
+        let (start_a, end_a) = self.alphas();
+        GradientShader {
+            kind: GradientType::ALL
+                .iter()
+                .position(|&k| k == self.kind)
+                .unwrap_or(0) as u32,
+            repeat: match self.repeat {
+                GradientRepeat::NoRepeat => 0,
+                GradientRepeat::Wrapped => 1,
+                GradientRepeat::Reflected => 2,
+            },
+            start: lerp.start,
+            dtdx: lerp.dtdx,
+            dtdy: lerp.dtdy,
+            inv_len: lerp.inv_len,
+            offset: lerp.offset,
+            solid: self.start == self.end,
+            alpha_only: self.alpha_only,
+            start_a,
+            end_a,
+            start_color: self.start_color,
+            end_color: self.end_color,
+            solid_color: color_blend(self.start_color, self.end_color, 255),
+            op: match op {
+                GradientOp::Blend(m) => Some(m),
+                GradientOp::Overwrite => None,
+            },
+        }
+    }
+}
+
 /// The per-gradient constants of `Gradient::lerp` (3.36's `BeforeRender`).
 struct Lerp {
     kind: GradientType,

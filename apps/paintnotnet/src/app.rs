@@ -109,6 +109,9 @@ pub struct PaintNotNetApp {
     pub(crate) effect: Option<crate::effect_runner::EffectSession>,
     /// Effects with an exact GPU port render there (`None`: no wgpu, or `PNN_GPU_EFFECTS=0`).
     pub(crate) gpu_effects: Option<std::sync::Arc<pnn_render::GpuEffects>>,
+    /// Live previews (the gradient while its nubs move) are drawn by the GPU compositor
+    /// (`false`: no wgpu, or `PNN_GPU_PREVIEW=0`).
+    pub(crate) gpu_preview: bool,
     /// Last applied effect and its settings, for Repeat (Ctrl+F).
     pub(crate) last_applied: Option<(
         crate::effect_runner::EffectRef,
@@ -194,6 +197,8 @@ impl PaintNotNetApp {
             palette: None,
             effect: None,
             gpu_effects,
+            gpu_preview: cc.wgpu_render_state.is_some()
+                && std::env::var("PNN_GPU_PREVIEW").as_deref() != Ok("0"),
             last_applied: None,
             synced_selection: 0,
             resize_base: None,
@@ -935,6 +940,20 @@ impl PaintNotNetApp {
         let started = *smoke.started.get_or_insert(now);
         let elapsed = now - started;
         let duration = smoke.duration;
+        // PNN_SMOKE_LAYERS=<n>: stack n copies of the image over it first (blend modes in
+        // turn, half opacity), to measure compositing.
+        if let Ok(n) = std::env::var("PNN_SMOKE_LAYERS")
+            && elapsed.is_zero()
+            && let Some(tab) = self.workspace.active_mut()
+        {
+            let base = tab.doc.layer(0).clone();
+            for i in 0..n.parse::<usize>().unwrap_or(0) {
+                let mut l = pnn_core::Layer::new(format!("Layer {}", i + 2), base.surface.clone());
+                l.blend_mode = pnn_core::BlendMode::ALL[(i + 1) % pnn_core::BlendMode::ALL.len()];
+                l.opacity = 128;
+                tab.doc.insert_layer(tab.doc.layers().len(), l);
+            }
+        }
         // PNN_SMOKE_FEATHER=1: drag the feather radius every frame on a large selection with
         // the preview overlay on (the live-slider case), instead of sweeping the view.
         if std::env::var_os("PNN_SMOKE_FEATHER").is_some() {

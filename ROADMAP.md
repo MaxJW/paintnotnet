@@ -512,10 +512,23 @@ ours is better, and keep a test showing the difference.
       one by one on one thread (`TiledBuffer::slots_in`); Normal blending skips the arithmetic for opaque and (over
       non-transparent) fully transparent sources, exactly (tested over 40 000 random pairs). Gradient render 16.5 →
       12 ms; live gradient 29 → 53 fps
-- [ ] **GPU compositor:** layers live on the GPU as tile textures and are blended there (every 3.36 blend mode and
-      layer opacity, the same rounding as `pnn-core`'s blend ops, tested against the CPU compositor); a change uploads
-      only the changed layer's tiles. The CPU compositor stays for saving, flattening and as the fallback. Goal: the
-      live gradient (now 53 fps: ~12 ms render + ~4 ms upload) and whole-image previews at 165 fps
+- [x] **GPU compositor** (`pnn-render/src/layers.rs`, `composite.wgsl`): every layer's tiles live on the GPU (per
+      chunk, tile after tile) and changed tiles are composited there with 3.36's integer blend maths for all 14 modes
+      and layer opacity; the display pass (`display.rs`, was `tile_upload.rs`) premultiplies and mip-maps from the
+      composite. A change uploads only changed tiles of changed layers; property changes upload nothing. The CPU
+      compositor stays for saving, flattening and thumbnails. Tests: GPU = CPU pixel for pixel for every mode at three
+      opacity combinations with a hidden layer and absent tiles across two chunks; incremental updates after
+      painting, a blend-mode change, reorder, hide and delete
+- [x] **Live gradient on the GPU:** while a nub (or a colour) keeps changing, the compositor draws the gradient per
+      pixel from the layer's pre-gradient tiles (`GradientShader` from `pnn-tools`: every type, repeat mode, colour
+      and transparency mode, blend or overwrite, soft selection) and the layer is left alone; when the drag ends,
+      pauses for a frame, or on Finish, the CPU renders it into the layer once. Its f32 maths may differ from the
+      CPU's by a level or two at a few pixels: tested over 252 combinations (worst: 51 of 312 000 pixels, none by
+      more than 2). UI test (offscreen wgpu): mid-drag the layer is untouched and the screen shows the gradient; on
+      release the layer has it and matches what was shown. `PNN_GPU_PREVIEW=0` turns it off
+- Measured (release, 4K, 165 Hz): live gradient 54 → 165 fps for every type (0.2 ms CPU per frame); Posterize
+  preview 158 → 163 fps. With six layers (`PNN_SMOKE_LAYERS=5`, blend modes in turn): idle, live gradient and a
+  300 px brush 165 fps; Posterize preview 159, Zoom Blur 143. (The old CPU compositor wasn't measured with layers.)
 - [x] **Effects on the GPU** (`pnn-render/src/effects.rs`, `effects.wgsl`): Motion, Zoom and Radial Blur ported
       exactly (3.36's fixed point in i32/u32; bilinear weights in f32 as the CPU does). An effect offers a `GpuJob`
       (`Renderer::gpu`); the app wraps its renderer so the first tile renders the whole bounds on the GPU (row bands,

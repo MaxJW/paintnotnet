@@ -46,7 +46,8 @@ impl Rendered {
     }
 }
 
-fn render(zoom: f64, grid: bool) -> Option<Rendered> {
+/// The app showing `test_doc()` at `zoom`, nothing covering the canvas.
+fn setup(zoom: f64, grid: bool) -> Harness<'static, PaintNotNetApp> {
     let mut h = Harness::builder()
         .with_size(vec2(640.0, 480.0))
         .wgpu()
@@ -76,6 +77,15 @@ fn render(zoom: f64, grid: bool) -> Option<Rendered> {
     }
     h.step();
     h.step();
+    h
+}
+
+fn render(zoom: f64, grid: bool) -> Option<Rendered> {
+    let mut h = setup(zoom, grid);
+    capture(&mut h, zoom, grid)
+}
+
+fn capture(h: &mut Harness<'static, PaintNotNetApp>, zoom: f64, grid: bool) -> Option<Rendered> {
     let image = match h.render() {
         Ok(image) => image,
         Err(e) => {
@@ -175,4 +185,91 @@ fn no_grid_below_200_percent() {
     let Some(r) = render(1.0, true) else { return };
     assert_eq!(r.image_px(10, 10), [220, 40, 40]);
     assert_eq!(r.image_px(11, 10), [220, 40, 40]);
+}
+
+/// While a gradient's nub is dragged, the GPU draws it and the layer is untouched; on
+/// release it is rendered into the layer, and the screen still shows the same.
+#[test]
+fn live_gradient_draws_on_the_gpu_then_lands_in_the_layer() {
+    use eframe::egui::{Event, Modifiers, PointerButton, Pos2};
+    let zoom = 4.0;
+    let mut h = setup(zoom, false);
+    {
+        let s = h.state_mut().settings_mut();
+        s.primary = ColorBgra::from_rgba(250, 200, 40, 255);
+        s.secondary = ColorBgra::from_rgba(40, 60, 160, 255);
+        s.gradient_type = pnn_tools::GradientType::Linear;
+    }
+    h.state_mut().set_tool(pnn_tools::ToolKind::Gradient);
+    h.step();
+    let to_screen = |h: &Harness<'_, PaintNotNetApp>, x: f64, y: f64| {
+        let rect = h.state().canvas().rect.unwrap();
+        let view = h.state().workspace().active().unwrap().view.unwrap();
+        let s = view.image_to_screen([x, y], [rect.width() as f64, rect.height() as f64]);
+        Pos2::new(rect.min.x + s[0] as f32, rect.min.y + s[1] as f32)
+    };
+    let press = |pressed, pos| Event::PointerButton {
+        pos,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    let start = to_screen(&h, 4.0, 24.0);
+    h.event(Event::PointerMoved(start));
+    h.step();
+    h.event(press(true, start));
+    h.step();
+    for x in [20.0, 40.0, 60.0] {
+        h.event(Event::PointerMoved(to_screen(&h, x, 24.0)));
+        h.step();
+    }
+    // The canvas handles a move after the frame's gradient refresh: one more frame shows it.
+    h.step();
+    let layer_px = |h: &Harness<'_, PaintNotNetApp>, x, y| {
+        h.state()
+            .workspace()
+            .active()
+            .unwrap()
+            .doc
+            .layer(0)
+            .surface
+            .get(x, y)
+    };
+    // Mid-drag: the layer still holds the red block, the screen shows the gradient.
+    assert_eq!(layer_px(&h, 10, 10), RED, "layer untouched while dragging");
+    let Some(mid) = capture(&mut h, zoom, false) else {
+        return;
+    };
+    assert_ne!(
+        mid.image_px(10, 10),
+        [220, 40, 40],
+        "the GPU draws the gradient"
+    );
+    let near = |a: [u8; 3], b: ColorBgra| {
+        a.iter()
+            .zip([b.r, b.g, b.b])
+            .all(|(&x, y)| x.abs_diff(y) <= 2)
+    };
+    // Release: the gradient is rendered into the layer, and the screen agrees with it.
+    h.event(press(false, to_screen(&h, 60.0, 24.0)));
+    h.step();
+    h.step();
+    let baked = layer_px(&h, 10, 10);
+    assert_ne!(baked, RED, "the gradient is in the layer after release");
+    let Some(after) = capture(&mut h, zoom, false) else {
+        return;
+    };
+    for (x, y) in [(10, 10), (30, 20), (55, 40)] {
+        let want = layer_px(&h, x, y);
+        assert!(
+            near(after.image_px(x, y), want),
+            "({x},{y}) shows the layer"
+        );
+        // The GPU's drawing mid-drag matched the CPU's render (±2 levels).
+        assert!(
+            near(mid.image_px(x, y), want),
+            "({x},{y}) mid-drag matched: {:?} vs {want:?}",
+            mid.image_px(x, y)
+        );
+    }
 }

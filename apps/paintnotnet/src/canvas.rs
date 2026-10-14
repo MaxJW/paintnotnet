@@ -109,14 +109,31 @@ pub struct CanvasState {
     zoom_wheel: f32,
 }
 
-/// Per-tab GPU bookkeeping: which composite tile revisions are on the GPU.
+/// Per-tab GPU bookkeeping: which document tile revisions the GPU has composited.
 #[derive(Default)]
 pub struct GpuSync {
     revisions: Vec<u64>,
+    /// The live gradient, drawn by the GPU over its layer's pixels while the nubs move (the
+    /// document gets it once they stop; see `fill_tools`).
+    pub preview: Option<GradientPreview>,
+    /// What the GPU last drew of `preview`: (layer, gradient, selection identity).
+    shown_preview: Option<(
+        pnn_core::LayerId,
+        pnn_tools::gradient::GradientShader,
+        usize,
+    )>,
     /// Which mask the overlay textures hold (0 = none uploaded).
     overlay_revision: u64,
     /// Identity of each uploaded overlay tile (0 = empty), to upload only what changed.
     overlay_tiles: Vec<usize>,
+}
+
+/// A live gradient for the GPU compositor to draw on `layer`.
+#[derive(Clone)]
+pub struct GradientPreview {
+    pub layer: pnn_core::LayerId,
+    pub shader: pnn_tools::gradient::GradientShader,
+    pub selection: Option<std::sync::Arc<pnn_core::Mask>>,
 }
 
 pub fn surround_color(ui: &egui::Ui) -> egui::Color32 {
@@ -705,43 +722,61 @@ fn sync_overlay(
 }
 
 fn sync_gpu(gpu: &egui_wgpu::RenderState, tab: &mut DocumentTab) {
-    crate::diagnostics::timed("composite", || tab.compositor.update(&tab.doc));
     let (w, h) = (tab.doc.width(), tab.doc.height());
-    let recreated = {
-        let mut renderer = gpu.renderer.write();
-        let Some(canvas) = renderer.callback_resources.get_mut::<CanvasRenderer>() else {
-            return;
-        };
-        canvas.ensure_canvas(&gpu.device, tab.key, w, h)
+    let mut renderer = gpu.renderer.write();
+    let Some(canvas) = renderer.callback_resources.get_mut::<CanvasRenderer>() else {
+        return;
     };
-    let (tx, ty) = (tab.compositor.tiles_x(), tab.compositor.tiles_y());
+    let recreated = canvas.ensure_canvas(&gpu.device, tab.key, w, h);
+    let (tx, ty) = (tab.doc.tiles_x(), tab.doc.tiles_y());
     let sync = &mut tab.gpu;
     if recreated || sync.revisions.len() != (tx * ty) as usize {
         sync.revisions = vec![0; (tx * ty) as usize];
         sync.overlay_revision = 0;
         sync.overlay_tiles.clear();
     }
+    let doc = &tab.doc;
+    // A new or changed live gradient (or its end) redraws everything.
+    let preview = sync.preview.as_ref().map(|p| {
+        let selection = p
+            .selection
+            .as_ref()
+            .map_or(0, |m| std::sync::Arc::as_ptr(m) as usize);
+        (p.layer, p.shader, selection)
+    });
+    let all = preview != sync.shown_preview;
+    sync.shown_preview = preview;
     let stale: Vec<TileCoord> = (0..ty)
         .flat_map(|ty| (0..tx).map(move |tx| TileCoord { tx, ty }))
-        .filter(|&c| tab.compositor.tile_revision(c) != sync.revisions[(c.ty * tx + c.tx) as usize])
+        .filter(|&c| all || doc.tile_revision(c) != sync.revisions[(c.ty * tx + c.tx) as usize])
         .collect();
     if stale.is_empty() {
         return;
     }
-    let compositor = &tab.compositor;
-    let sync = &mut tab.gpu;
-    let renderer = gpu.renderer.read();
-    if let Some(canvas) = renderer.callback_resources.get::<CanvasRenderer>() {
-        let tiles: Vec<_> = stale
-            .iter()
-            .map(|&c| (c, compositor.tile(c).map(|t| &**t)))
-            .collect();
-        crate::diagnostics::timed("upload", || {
-            canvas.upload_tiles(&gpu.device, &gpu.queue, tab.key, &tiles)
-        });
-        for &c in &stale {
-            sync.revisions[(c.ty * tx + c.tx) as usize] = compositor.tile_revision(c);
-        }
+    let layers: Vec<pnn_render::LayerInput<'_>> = doc
+        .layers()
+        .iter()
+        .map(|l| pnn_render::LayerInput {
+            id: l.id(),
+            shown: l.visible && l.opacity > 0,
+            mode: l.blend_mode,
+            opacity: l.opacity,
+            surface: &l.surface,
+            gradient: sync
+                .preview
+                .as_ref()
+                .filter(|p| p.layer == l.id())
+                .map(|p| pnn_render::LayerGradient {
+                    shader: p.shader,
+                    selection: p.selection.as_ref(),
+                }),
+        })
+        .collect();
+    crate::diagnostics::timed("composite", || {
+        canvas.composite(&gpu.device, &gpu.queue, tab.key, &layers, &stale)
+    });
+    for &c in &stale {
+        sync.revisions[(c.ty * tx + c.tx) as usize] = doc.tile_revision(c);
     }
 }
 
