@@ -9,9 +9,9 @@ the git branch `recreation` and tag `recreation-2026-10-13` keep that faithful p
 (Phase 5's feather feel still awaits your sign-off). From here `main` is **paintnotnet modern**: the user's own
 modernised paint.net, "keeping things vaguely in place" but with docked side panels instead of draggable windows, a
 glassy, great-looking UI, better tool controls (brush size first), super smooth performance, extra features, and better
-maths wherever something we copied (paint.net 3.36, BoltBait) can be done more accurately or faster. Phase 13
-(design system and docked shell) is done (2026-10-14): design A, docked glass shell, Lucide icons, motion. **Next:**
-Phase 14 (tool controls). The recreation backlog (rest of the
+maths wherever something we copied (paint.net 3.36, BoltBait) can be done more accurately or faster. Phases 13
+(design system and docked shell) and 14 (tool controls) are done (2026-10-14). **Next:** Phase 15 (better maths,
+accuracy and speed). The recreation backlog (rest of the
 BoltBait pack, Sketch Blur, comparing against the 5.1.12 release files) is parked below and done on the `recreation`
 branch only if wanted.
 
@@ -420,8 +420,24 @@ ours is better, and keep a test showing the difference.
 - The global menu's two `unsafe` calls stay: the appmenu request must name winit's own `wl_surface` on winit's own
   connection (Wayland objects belong to one connection), and winit only hands those out as raw pointers. There is
   no safe route on Wayland today; they stay confined to `global_menu/wayland.rs`.
-### 14c Colour picker
-- [ ] The chosen picker in the Colors panel: hex entry, OKLCH / HSV / RGB sliders, alpha, recent colours, palette
+### 14c ✅ Colour picker (square + hue strip)
+- [x] Colors panel: overlapping primary/secondary swatches (click to make active; swap and reset kept), hex entry
+      (RRGGBB or RRGGBBAA), a saturation/value square drawn from exact HSV samples, hue and alpha strips; left
+      button edits the active colour, right button the other one (as paint.net's wheel did)
+- [x] Three sliders with gradient tracks and typed values, switched in the title row between **OKLCH** (default;
+      lightness, chroma, hue as the eye sees them; out-of-gamut choices keep lightness and hue and lose chroma, as
+      CSS Color 4 does), HSV and RGB. Hue survives greys in both HSV and OKLCH
+- [x] Recent colours: the last 10 colours picked anywhere (this panel, the Color Picker tool, X, the palette),
+      added when a drag ends; click for the active colour, right-click for the other. Kept for the session only
+- [x] Palette: two rows, "All" shows the rest; add-colour and palettes menu as before
+- [—] The wheel and its paint.net modifier keys (Ctrl = hue only, Shift = snap hue to 15°…) went with it
+- **Verified 2026-10-14:** OKLab unit tests against published values for white, red and blue, a round trip over
+  an 8-step RGB grid (±1), gamut mapping keeps lightness and hue; recent-colour rules; UI tests: dragging the square
+  from black to 75%/75% gives (191, 48, 48), a click a third along the hue strip gives (48, 191, 48) and adds it to
+  Recent, a right-drag edits only the secondary, the title row switches OKLCH/HSV/RGB sliders; render checked by
+  eye. CI passes (326 tests).
+
+**Phase 14 done (2026-10-14).**
 
 ## Phase 15: Better maths, accuracy and speed (audit of everything built so far)
 - [ ] Audit each tool and effect: what paint.net 3.36 / BoltBait does, known weaknesses, the better method, cost; record

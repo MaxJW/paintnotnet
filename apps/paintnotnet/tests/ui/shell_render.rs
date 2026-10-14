@@ -82,8 +82,8 @@ fn docked_shell_matches_design_a() {
         h.step();
     }
     let image = h.render().expect("render");
-    let empty_layers = h.state().panels().rect(Panel::Layers).center_bottom() - vec2(0.0, 30.0);
-    let glass = image.get_pixel(empty_layers.x as u32, empty_layers.y as u32);
+    let empty_history = h.state().panels().rect(Panel::History).center_bottom() - vec2(0.0, 20.0);
+    let glass = image.get_pixel(empty_history.x as u32, empty_history.y as u32);
     let weak = paintnotnet::theme::Palette::dark().weak_text;
     let ratio = contrast(
         [glass[0], glass[1], glass[2]],

@@ -1274,7 +1274,7 @@ impl PaintNotNetApp {
         let colors = &mut self.colors;
         let workspace_tabs = &mut self.workspace;
         panels.show_dock(ctx, &palette, |panel, part, ui| match (panel, part) {
-            (Panel::Colors, Part::Actions) => colors.actions(ui),
+            (Panel::Colors, Part::Actions) => colors.actions(ui, icons),
             (Panel::Colors, Part::Body) => colors.ui(ui, settings, icons),
             (Panel::Layers, Part::Actions) => {
                 if let Some(c) = windows::layers_actions(ui, icons, &enabled) {

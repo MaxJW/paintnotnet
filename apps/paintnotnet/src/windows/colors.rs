@@ -1,17 +1,16 @@
-//! The Colors window: primary/secondary swatches, colour wheel, "More >>" RGB/HSV/hex/alpha
-//! controls, and the palette.
-//!
-//! Wheel geometry follows paint.net 3.36 `ColorWheel.cs` (MIT, see NOTICE): hue 0° (red) at
-//! 3 o'clock increasing clockwise, saturation = distance from the centre. Modifier
-//! behaviour is from the 5.x shortcut table: Ctrl = hue only, Alt = saturation only,
-//! Shift = saturation with hue snapped to 15°, Ctrl+Shift = hue snapped to 15°.
+//! The Colors panel (design A, picker style chosen 2026-10-14): primary and secondary
+//! swatches, a saturation/value square with hue and alpha strips, OKLCH / HSV / RGB sliders,
+//! hex entry, recent colours and the palette. Left button edits the active colour, right
+//! button the other one, as paint.net's wheel did.
 
 use eframe::egui::{self, Color32, Mesh, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
 use pnn_core::ColorBgra;
 use pnn_tools::{ActiveColor, ToolSettings};
 
+use super::oklch::{self, Lch, MAX_CHROMA};
 use crate::icons::{Icon, Icons};
 use crate::palette::DEFAULT_PALETTE;
+use crate::theme;
 
 /// Hue in degrees [0, 360), saturation and value in [0, 1].
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -96,80 +95,73 @@ pub fn from_hex(s: &str, alpha: u8) -> Option<ColorBgra> {
     }
 }
 
-/// Wheel modifier behaviour from the shortcut table.
-pub fn wheel_pick(
-    current: Hsv,
-    angle_deg: f32,
-    radius_frac: f32,
-    ctrl: bool,
-    alt: bool,
-    shift: bool,
-) -> Hsv {
-    let snap = |h: f32| ((h / 15.0).round() * 15.0).rem_euclid(360.0);
-    let hue = angle_deg.rem_euclid(360.0);
-    let sat = radius_frac.clamp(0.0, 1.0);
-    match (ctrl, alt, shift) {
-        (true, _, true) => Hsv {
-            h: snap(hue),
-            ..current
-        },
-        (true, _, false) => Hsv { h: hue, ..current },
-        (false, true, _) => Hsv { s: sat, ..current },
-        (false, false, true) => Hsv {
-            h: snap(hue),
-            s: sat,
-            ..current
-        },
-        (false, false, false) => Hsv {
-            h: hue,
-            s: sat,
-            ..current
-        },
-    }
+/// Which three sliders the panel shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SliderMode {
+    #[default]
+    Oklch,
+    Hsv,
+    Rgb,
 }
 
+/// How many recent colours are kept.
+const RECENT: usize = 10;
+const SQUARE_HEIGHT: f32 = 140.0;
+const STRIP: f32 = 14.0;
+
 pub struct ColorsState {
+    /// The palette shows all its rows (else two).
     pub more: bool,
+    pub mode: SliderMode,
     palette: Vec<ColorBgra>,
     /// Hue/saturation survive greys and black: keep the last HSV per slot.
     hsv: [Hsv; 2],
     hsv_of: [ColorBgra; 2],
+    /// Hue survives greys in OKLCH too.
+    lch: [Lch; 2],
+    lch_of: [ColorBgra; 2],
     hex: String,
     hex_of: Option<ColorBgra>,
     /// "Add color to palette" armed: the next swatch click stores the active colour.
     adding: bool,
+    /// Colours picked recently, newest first.
+    recent: Vec<ColorBgra>,
+    /// The colours last seen, to notice new picks (from here, the picker tool, X…).
+    seen: Option<[ColorBgra; 2]>,
+    /// A drag on the square, a strip or a slider is in progress (its colour isn't recent yet).
+    dragging: bool,
 }
 
 impl Default for ColorsState {
     fn default() -> Self {
+        let black = Hsv {
+            h: 0.0,
+            s: 0.0,
+            v: 0.0,
+        };
         Self {
             more: false,
+            mode: SliderMode::default(),
             palette: DEFAULT_PALETTE
                 .iter()
                 .map(|&c| ColorBgra::from_u32(c))
                 .collect(),
-            hsv: [
-                Hsv {
-                    h: 0.0,
-                    s: 0.0,
-                    v: 0.0,
-                },
-                Hsv {
-                    h: 0.0,
-                    s: 0.0,
-                    v: 1.0,
-                },
-            ],
+            hsv: [black, Hsv { v: 1.0, ..black }],
             hsv_of: [ColorBgra::BLACK, ColorBgra::WHITE],
+            lch: [
+                oklch::to_lch(ColorBgra::BLACK),
+                oklch::to_lch(ColorBgra::WHITE),
+            ],
+            lch_of: [ColorBgra::BLACK, ColorBgra::WHITE],
             hex: String::new(),
             hex_of: None,
             adding: false,
+            recent: Vec::new(),
+            seen: None,
+            dragging: false,
         }
     }
 }
-
-const WHEEL: f32 = 150.0;
-const SWATCH: f32 = 11.0;
 
 impl ColorsState {
     fn slot(settings: &ToolSettings, inactive: bool) -> usize {
@@ -219,22 +211,78 @@ impl ColorsState {
         self.hsv_of[slot] = c;
     }
 
-    /// Title-row button: "More" shows the RGB, HSV and alpha sliders under the wheel.
-    pub fn actions(&mut self, ui: &mut egui::Ui) {
-        let label = if self.more { "Less" } else { "More" };
-        if ui
-            .add(egui::Button::new(label).min_size(vec2(52.0, 24.0)))
-            .on_hover_text("Show or hide the RGB, HSV and alpha sliders")
-            .clicked()
-        {
-            self.more = !self.more;
+    fn lch(&mut self, settings: &ToolSettings, slot: usize) -> Lch {
+        let c = Self::color(settings, slot);
+        if c != self.lch_of[slot] {
+            let fresh = oklch::to_lch(c);
+            let old = self.lch[slot];
+            self.lch[slot] = Lch {
+                h: if fresh.c < 1e-3 { old.h } else { fresh.h },
+                ..fresh
+            };
+            self.lch_of[slot] = c;
         }
+        self.lch[slot]
+    }
+
+    fn set_lch(&mut self, settings: &mut ToolSettings, slot: usize, lch: Lch) {
+        let a = Self::color(settings, slot).a;
+        let c = oklch::from_lch(lch, a);
+        Self::set(settings, slot, c);
+        self.lch[slot] = lch;
+        self.lch_of[slot] = c;
+    }
+
+    /// Title-row controls: which sliders to show.
+    pub fn actions(&mut self, ui: &mut egui::Ui, icons: &Icons) {
+        let palette = theme::palette(ui.ctx());
+        crate::controls::segmented(
+            ui,
+            icons,
+            &mut self.mode,
+            &[
+                // Right to left in the title row.
+                (
+                    SliderMode::Rgb,
+                    crate::controls::Seg::Text("RGB"),
+                    "RGB sliders",
+                ),
+                (
+                    SliderMode::Hsv,
+                    crate::controls::Seg::Text("HSV"),
+                    "HSV sliders",
+                ),
+                (
+                    SliderMode::Oklch,
+                    crate::controls::Seg::Text("OKLCH"),
+                    "OKLCH sliders: lightness, chroma and hue as the eye sees them",
+                ),
+            ],
+            &palette,
+        );
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, settings: &mut ToolSettings, icons: &Icons) {
+        let palette = theme::palette(ui.ctx());
         let width = ui.available_width();
+        let pointer_down = ui.input(|i| i.pointer.any_down());
+        if !pointer_down {
+            self.dragging = false;
+        }
         ui.horizontal(|ui| {
             self.swatches(ui, settings, icons);
+            ui.add_space(4.0);
+            self.hex_field(ui, settings, &palette);
+        });
+        self.square(ui, settings, width);
+        self.hue_strip(ui, settings, width);
+        self.alpha_strip(ui, settings, width);
+        ui.add_space(2.0);
+        self.sliders(ui, settings, &palette);
+        ui.add_space(2.0);
+        self.recent_row(ui, settings, &palette);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Palette").color(palette.weak_text));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 ui.menu_image_button(icons.image(Icon::Palettes), |ui| {
@@ -261,36 +309,90 @@ impl ColorsState {
                 {
                     self.adding = !self.adding;
                 }
+                let label = if self.more { "Fewer" } else { "All" };
+                if ui
+                    .add(egui::Button::new(label).frame_when_inactive(false))
+                    .on_hover_text("Show all of the palette, or two rows")
+                    .clicked()
+                {
+                    self.more = !self.more;
+                }
             });
         });
-        let wheel = (width - 8.0).clamp(96.0, WHEEL);
-        ui.vertical_centered(|ui| self.wheel(ui, settings, wheel));
         self.palette_grid(ui, settings, width);
-        if self.more {
-            ui.add_space(4.0);
-            ui.separator();
-            self.more_panel(ui, settings);
+        self.note_recent(settings);
+    }
+
+    /// Remember colours that were picked (once a drag has finished).
+    fn note_recent(&mut self, settings: &ToolSettings) {
+        let now = [settings.primary, settings.secondary];
+        let Some(seen) = self.seen else {
+            self.seen = Some(now);
+            return;
+        };
+        if self.dragging {
+            return;
+        }
+        for (c, old) in now.into_iter().zip(seen) {
+            if c != old {
+                self.recent.retain(|&r| r != c);
+                self.recent.insert(0, c);
+                self.recent.truncate(RECENT);
+            }
+        }
+        self.seen = Some(now);
+    }
+
+    /// The colours picked recently, newest first.
+    pub fn recent(&self) -> &[ColorBgra] {
+        &self.recent
+    }
+
+    fn hex_field(
+        &mut self,
+        ui: &mut egui::Ui,
+        settings: &mut ToolSettings,
+        palette: &theme::Palette,
+    ) {
+        let slot = Self::slot(settings, false);
+        let c = Self::color(settings, slot);
+        if self.hex_of != Some(c) {
+            self.hex = to_hex(c);
+            self.hex_of = Some(c);
+        }
+        ui.label(egui::RichText::new("#").color(palette.faint_text));
+        let response = ui
+            .add(
+                egui::TextEdit::singleline(&mut self.hex)
+                    .desired_width(66.0)
+                    .font(egui::TextStyle::Monospace),
+            )
+            .on_hover_text("Hex: RRGGBB, or RRGGBBAA with alpha");
+        if response.lost_focus()
+            && let Some(parsed) = from_hex(&self.hex, c.a)
+        {
+            Self::set(settings, slot, parsed);
         }
     }
 
     fn swatches(&mut self, ui: &mut egui::Ui, settings: &mut ToolSettings, icons: &Icons) {
-        let (rect, _) = ui.allocate_exact_size(vec2(58.0, 52.0), Sense::hover());
-        let primary = Rect::from_min_size(rect.min + vec2(4.0, 2.0), vec2(30.0, 30.0));
-        let secondary = Rect::from_min_size(rect.min + vec2(20.0, 18.0), vec2(30.0, 30.0));
+        let (rect, _) = ui.allocate_exact_size(vec2(58.0, 46.0), Sense::hover());
+        let primary = Rect::from_min_size(rect.min + vec2(2.0, 2.0), vec2(30.0, 30.0));
+        let secondary = Rect::from_min_size(rect.min + vec2(18.0, 14.0), vec2(30.0, 30.0));
         let draw = |ui: &egui::Ui, r: Rect, c: ColorBgra, active: bool| {
-            checker(ui, r.shrink(1.0));
-            ui.painter().rect_filled(r.shrink(1.0), 0.0, to_color32(c));
+            checker(ui, r);
+            ui.painter().rect_filled(r, 6.0, to_color32(c));
             ui.painter().rect_stroke(
                 r,
-                0.0,
-                Stroke::new(1.0, ui.visuals().text_color()),
+                6.0,
+                Stroke::new(1.0, Color32::from_black_alpha(140)),
                 egui::StrokeKind::Inside,
             );
             if active {
                 ui.painter().rect_stroke(
-                    r.expand(1.5),
-                    0.0,
-                    Stroke::new(1.0, ui.visuals().selection.stroke.color),
+                    r.expand(2.0),
+                    8.0,
+                    Stroke::new(1.5, ui.visuals().text_color()),
                     egui::StrokeKind::Outside,
                 );
             }
@@ -318,102 +420,390 @@ impl ColorsState {
                 ui.interact(secondary, ui.id().with("secondary"), Sense::click()),
             )
         };
-        let (p, s) = (
-            p.on_hover_text("Primary color"),
-            s.on_hover_text("Secondary color"),
-        );
-        if p.clicked() {
+        if p.on_hover_text("Primary color").clicked() {
             settings.active_color = ActiveColor::Primary;
         }
-        if s.clicked() {
+        if s.on_hover_text("Secondary color").clicked() {
             settings.active_color = ActiveColor::Secondary;
         }
-        let swap = Rect::from_min_size(pos2(rect.max.x - 14.0, rect.min.y), vec2(14.0, 14.0));
-        ui.painter().image(
-            icons.texture(Icon::Swap).id(),
-            swap,
-            Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
-            icons.tint(),
-        );
-        if ui
-            .interact(swap, ui.id().with("swap"), Sense::click())
-            .on_hover_text("Swap colors (X)")
-            .clicked()
-        {
+        let tint = icons.tint();
+        let small = |at: Pos2, icon: Icon, id: &str, tip: &str| {
+            let r = Rect::from_min_size(at, vec2(14.0, 14.0));
+            ui.painter().image(
+                icons.texture(icon).id(),
+                r,
+                Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
+                tint,
+            );
+            ui.interact(r.expand(2.0), ui.id().with(id), Sense::click())
+                .on_hover_text(tip)
+                .clicked()
+        };
+        if small(
+            pos2(rect.max.x - 12.0, rect.min.y),
+            Icon::Swap,
+            "swap",
+            "Swap colors (X)",
+        ) {
             settings.swap_colors();
         }
-        let reset = Rect::from_min_size(pos2(rect.min.x, rect.max.y - 14.0), vec2(14.0, 14.0));
-        ui.painter().image(
-            icons.texture(Icon::Reset).id(),
-            reset,
-            Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
-            icons.tint(),
-        );
-        if ui
-            .interact(reset, ui.id().with("reset"), Sense::click())
-            .on_hover_text("Reset to black and white")
-            .clicked()
-        {
+        if small(
+            pos2(rect.min.x, rect.max.y - 12.0),
+            Icon::Reset,
+            "reset",
+            "Reset to black and white",
+        ) {
             settings.primary = ColorBgra::BLACK;
             settings.secondary = ColorBgra::WHITE;
         }
     }
 
-    fn wheel(&mut self, ui: &mut egui::Ui, settings: &mut ToolSettings, size: f32) {
-        let (rect, response) = ui.allocate_exact_size(vec2(size, size), Sense::click_and_drag());
-        let center = rect.center();
-        let radius = size / 2.0 - 1.0;
-        // Hue/saturation disc at full value, as paint.net draws it.
+    /// Which slot a drag on a picker edits: right button = the inactive colour.
+    fn drag_slot(
+        &mut self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        settings: &ToolSettings,
+    ) -> Option<usize> {
+        let active = response.dragged()
+            || response.clicked()
+            || response.secondary_clicked()
+            || response.drag_started();
+        if !active {
+            return None;
+        }
+        self.dragging |= response.dragged() || response.drag_started();
+        let secondary = ui.input(|i| i.pointer.button_down(egui::PointerButton::Secondary))
+            || response.secondary_clicked();
+        Some(Self::slot(settings, secondary))
+    }
+
+    /// Saturation (across) and value (down) for the current hue.
+    fn square(&mut self, ui: &mut egui::Ui, settings: &mut ToolSettings, width: f32) {
+        let (rect, response) =
+            ui.allocate_exact_size(vec2(width, SQUARE_HEIGHT), Sense::click_and_drag());
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Saturation and value")
+        });
+        if let Some(slot) = self.drag_slot(ui, &response, settings)
+            && let Some(p) = response.interact_pointer_pos()
+        {
+            let hsv = self.hsv(settings, slot);
+            let s = ((p.x - rect.min.x) / rect.width()).clamp(0.0, 1.0);
+            let v = 1.0 - ((p.y - rect.min.y) / rect.height()).clamp(0.0, 1.0);
+            self.set_hsv(settings, slot, Hsv { s, v, ..hsv });
+        }
+        let slot = Self::slot(settings, false);
+        let hsv = self.hsv(settings, slot);
+        // A grid of exact HSV colours (a 4-corner gradient would bend the hue).
+        let (nx, ny) = (24, 16);
         let mut mesh = Mesh::default();
-        mesh.colored_vertex(center, Color32::WHITE);
-        let n = 120;
-        for i in 0..=n {
-            let h = i as f32 / n as f32 * 360.0;
-            let t = h.to_radians();
-            let c = hsv_to_rgb(Hsv { h, s: 1.0, v: 1.0 }, 255);
-            mesh.colored_vertex(center + vec2(t.cos(), t.sin()) * radius, to_color32(c));
-            if i > 0 {
-                mesh.add_triangle(0, i, i + 1);
+        for j in 0..=ny {
+            for i in 0..=nx {
+                let (s, v) = (i as f32 / nx as f32, 1.0 - j as f32 / ny as f32);
+                let p = pos2(
+                    rect.min.x + rect.width() * s,
+                    rect.min.y + rect.height() * (1.0 - v),
+                );
+                mesh.colored_vertex(p, to_color32(hsv_to_rgb(Hsv { h: hsv.h, s, v }, 255)));
+            }
+        }
+        for j in 0..ny {
+            for i in 0..nx {
+                let k = j * (nx + 1) + i;
+                mesh.add_triangle(k, k + 1, k + nx + 1);
+                mesh.add_triangle(k + 1, k + nx + 2, k + nx + 1);
             }
         }
         ui.painter().add(Shape::mesh(mesh));
-        ui.painter().circle_stroke(
-            center,
-            radius,
-            Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
+        let m = pos2(
+            rect.min.x + rect.width() * hsv.s,
+            rect.min.y + rect.height() * (1.0 - hsv.v),
         );
+        marker(ui, m, 6.0);
+    }
 
-        let pointer = response.interact_pointer_pos();
-        let button_inactive = ui.input(|i| i.pointer.button_down(egui::PointerButton::Secondary));
-        if (response.dragged()
-            || response.clicked()
-            || response.secondary_clicked()
-            || response.drag_started())
-            && let Some(p) = pointer
+    fn hue_strip(&mut self, ui: &mut egui::Ui, settings: &mut ToolSettings, width: f32) {
+        let (rect, response) = ui.allocate_exact_size(vec2(width, STRIP), Sense::click_and_drag());
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, "Hue"));
+        if let Some(slot) = self.drag_slot(ui, &response, settings)
+            && let Some(p) = response.interact_pointer_pos()
         {
-            let slot = Self::slot(settings, button_inactive || response.secondary_clicked());
-            let d = p - center;
-            let angle = d.y.atan2(d.x).to_degrees();
-            let frac = d.length() / radius;
-            let m = ui.input(|i| i.modifiers);
-            let current = self.hsv(settings, slot);
-            let picked = wheel_pick(current, angle, frac, m.ctrl, m.alt, m.shift);
-            self.set_hsv(settings, slot, picked);
+            let hsv = self.hsv(settings, slot);
+            let h = ((p.x - rect.min.x) / rect.width()).clamp(0.0, 0.9999) * 360.0;
+            self.set_hsv(settings, slot, Hsv { h, ..hsv });
         }
-        // Selector on the active colour.
+        let stops: Vec<Color32> = (0..=12)
+            .map(|i| {
+                to_color32(hsv_to_rgb(
+                    Hsv {
+                        h: i as f32 * 30.0,
+                        s: 1.0,
+                        v: 1.0,
+                    },
+                    255,
+                ))
+            })
+            .collect();
+        gradient(ui, rect, &stops);
+        let hsv = self.hsv(settings, Self::slot(settings, false));
+        pill(ui, rect, hsv.h / 360.0);
+    }
+
+    fn alpha_strip(&mut self, ui: &mut egui::Ui, settings: &mut ToolSettings, width: f32) {
+        let (rect, response) = ui.allocate_exact_size(vec2(width, STRIP), Sense::click_and_drag());
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, "Alpha"));
+        if let Some(slot) = self.drag_slot(ui, &response, settings)
+            && let Some(p) = response.interact_pointer_pos()
+        {
+            let mut c = Self::color(settings, slot);
+            c.a = (((p.x - rect.min.x) / rect.width()).clamp(0.0, 1.0) * 255.0).round() as u8;
+            Self::set(settings, slot, c);
+        }
+        let c = Self::color(settings, Self::slot(settings, false));
+        checker(ui, rect);
+        gradient(
+            ui,
+            rect,
+            &[to_color32(c.with_alpha(0)), to_color32(c.with_alpha(255))],
+        );
+        pill(ui, rect, f32::from(c.a) / 255.0);
+    }
+
+    fn sliders(
+        &mut self,
+        ui: &mut egui::Ui,
+        settings: &mut ToolSettings,
+        palette: &theme::Palette,
+    ) {
         let slot = Self::slot(settings, false);
-        let hsv = self.hsv(settings, slot);
-        let t = hsv.h.to_radians();
-        let p = center + vec2(t.cos(), t.sin()) * hsv.s * (radius - 1.0);
-        ui.painter()
-            .circle_stroke(p, 4.0, Stroke::new(1.5, Color32::BLACK));
-        ui.painter()
-            .circle_stroke(p, 2.5, Stroke::new(1.0, Color32::WHITE));
+        let c = Self::color(settings, slot);
+        match self.mode {
+            SliderMode::Hsv => {
+                let hsv = self.hsv(settings, slot);
+                let rainbow: Vec<Color32> = (0..=12)
+                    .map(|i| {
+                        to_color32(hsv_to_rgb(
+                            Hsv {
+                                h: i as f32 * 30.0,
+                                s: 1.0,
+                                v: 1.0,
+                            },
+                            255,
+                        ))
+                    })
+                    .collect();
+                let ends = |a: Hsv, b: Hsv| {
+                    vec![
+                        to_color32(hsv_to_rgb(a, 255)),
+                        to_color32(hsv_to_rgb(b, 255)),
+                    ]
+                };
+                let mut v = [hsv.h, hsv.s * 100.0, hsv.v * 100.0];
+                let changed = [
+                    self.slider_row(ui, "H", &mut v[0], 0.0..=360.0, "°", &rainbow, palette),
+                    self.slider_row(
+                        ui,
+                        "S",
+                        &mut v[1],
+                        0.0..=100.0,
+                        "%",
+                        &ends(Hsv { s: 0.0, ..hsv }, Hsv { s: 1.0, ..hsv }),
+                        palette,
+                    ),
+                    self.slider_row(
+                        ui,
+                        "V",
+                        &mut v[2],
+                        0.0..=100.0,
+                        "%",
+                        &ends(Hsv { v: 0.0, ..hsv }, Hsv { v: 1.0, ..hsv }),
+                        palette,
+                    ),
+                ];
+                if changed.iter().any(|&c| c) {
+                    let h = Hsv {
+                        h: v[0].min(359.99),
+                        s: v[1] / 100.0,
+                        v: v[2] / 100.0,
+                    };
+                    self.set_hsv(settings, slot, h);
+                }
+            }
+            SliderMode::Rgb => {
+                let mut rgb = [c.r, c.g, c.b].map(f32::from);
+                let mut any = false;
+                for (i, name) in ["R", "G", "B"].into_iter().enumerate() {
+                    let (mut lo, mut hi) = (c.with_alpha(255), c.with_alpha(255));
+                    set_ch(&mut lo, i, 0);
+                    set_ch(&mut hi, i, 255);
+                    any |= self.slider_row(
+                        ui,
+                        name,
+                        &mut rgb[i],
+                        0.0..=255.0,
+                        "",
+                        &[to_color32(lo), to_color32(hi)],
+                        palette,
+                    );
+                }
+                if any {
+                    let byte = |v: f32| v.round().clamp(0.0, 255.0) as u8;
+                    Self::set(
+                        settings,
+                        slot,
+                        ColorBgra::from_rgba(byte(rgb[0]), byte(rgb[1]), byte(rgb[2]), c.a),
+                    );
+                }
+            }
+            SliderMode::Oklch => {
+                let lch = self.lch(settings, slot);
+                let sample = |f: &dyn Fn(f32) -> Lch| -> Vec<Color32> {
+                    (0..=10)
+                        .map(|i| to_color32(oklch::from_lch(f(i as f32 / 10.0), 255)))
+                        .collect()
+                };
+                let l_track = sample(&|t| Lch { l: t, ..lch });
+                let c_track = sample(&|t| Lch {
+                    c: t * MAX_CHROMA,
+                    ..lch
+                });
+                let h_track = sample(&|t| Lch {
+                    h: t * 360.0,
+                    ..lch
+                });
+                let mut v = [lch.l * 100.0, lch.c, lch.h];
+                let changed = [
+                    self.slider_row(ui, "L", &mut v[0], 0.0..=100.0, "%", &l_track, palette),
+                    self.slider_row(ui, "C", &mut v[1], 0.0..=MAX_CHROMA, "", &c_track, palette),
+                    self.slider_row(ui, "H", &mut v[2], 0.0..=360.0, "°", &h_track, palette),
+                ];
+                if changed.iter().any(|&c| c) {
+                    self.set_lch(
+                        settings,
+                        slot,
+                        Lch {
+                            l: v[0] / 100.0,
+                            c: v[1],
+                            h: v[2].rem_euclid(360.0),
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    /// "K [gradient track ○] value": returns whether `value` changed.
+    #[allow(clippy::too_many_arguments)]
+    fn slider_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        key: &str,
+        value: &mut f32,
+        range: std::ops::RangeInclusive<f32>,
+        unit: &str,
+        stops: &[Color32],
+        palette: &theme::Palette,
+    ) -> bool {
+        let mut changed = false;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            let (k, _) = ui.allocate_exact_size(vec2(12.0, 20.0), Sense::hover());
+            ui.painter().text(
+                k.left_center(),
+                egui::Align2::LEFT_CENTER,
+                key,
+                egui::FontId::new(theme::text::BODY, theme::medium()),
+                palette.weak_text,
+            );
+            const FIELD: f32 = 54.0;
+            let width = (ui.available_width() - FIELD - 8.0).max(60.0);
+            let (rect, response) =
+                ui.allocate_exact_size(vec2(width, 20.0), Sense::click_and_drag());
+            let label = format!("{key} slider");
+            response
+                .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, &label));
+            let (lo, hi) = (*range.start(), *range.end());
+            if (response.dragged() || response.clicked())
+                && let Some(p) = response.interact_pointer_pos()
+            {
+                self.dragging |= response.dragged();
+                let t = ((p.x - rect.min.x) / rect.width()).clamp(0.0, 1.0);
+                *value = lo + (hi - lo) * t;
+                changed = true;
+            }
+            let track = Rect::from_center_size(rect.center(), vec2(rect.width(), 8.0));
+            gradient(ui, track, stops);
+            let t = ((*value - lo) / (hi - lo)).clamp(0.0, 1.0);
+            let c = pos2(track.min.x + track.width() * t, track.center().y);
+            ui.painter().circle(
+                c,
+                7.0,
+                Color32::from_rgb(0xf2, 0xf4, 0xf7),
+                Stroke::new(1.0, Color32::from_black_alpha(90)),
+            );
+            let decimals = if hi - lo < 1.0 {
+                3
+            } else if hi - lo <= 40.0 {
+                1
+            } else {
+                0
+            };
+            let field = ui.add_sized(
+                [FIELD, 20.0],
+                egui::DragValue::new(value)
+                    .range(range.clone())
+                    .speed((hi - lo) / 300.0)
+                    .fixed_decimals(decimals)
+                    .suffix(unit),
+            );
+            changed |= field.changed();
+        });
+        changed
+    }
+
+    fn recent_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        settings: &mut ToolSettings,
+        palette: &theme::Palette,
+    ) {
+        if self.recent.is_empty() {
+            return;
+        }
+        ui.label(egui::RichText::new("Recent").color(palette.weak_text));
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 5.0;
+            for (i, &c) in self.recent.clone().iter().enumerate() {
+                let (r, response) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+                checker(ui, r);
+                ui.painter().rect_filled(r, 6.0, to_color32(c));
+                ui.painter().rect_stroke(
+                    r,
+                    6.0,
+                    Stroke::new(1.0, palette.window_border),
+                    egui::StrokeKind::Inside,
+                );
+                let response = response.on_hover_text(format!("#{}", to_hex(c)));
+                response.widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::WidgetType::Button,
+                        true,
+                        format!("Recent color {}", i + 1),
+                    )
+                });
+                if response.clicked() {
+                    settings.set_active_color_value(c);
+                } else if response.secondary_clicked() {
+                    settings.set_inactive_color_value(c);
+                }
+            }
+        });
     }
 
     fn palette_grid(&mut self, ui: &mut egui::Ui, settings: &mut ToolSettings, width: f32) {
         let rows = if self.more { 6 } else { 2 };
-        let swatch = ((width - 1.0) / 16.0).floor().clamp(SWATCH, 2.0 * SWATCH);
+        let swatch = ((width - 1.0) / 16.0).floor();
         let (rect, _) = ui.allocate_exact_size(
             vec2(16.0 * swatch + 1.0, rows as f32 * swatch + 1.0),
             Sense::hover(),
@@ -428,11 +818,11 @@ impl ColorsState {
             ui.painter().rect_filled(r.shrink(1.0), 2.0, to_color32(c));
             let response = ui
                 .interact(r, ui.id().with(("swatch", i)), Sense::click())
-                .on_hover_text(to_hex(c));
+                .on_hover_text(format!("#{}", to_hex(c)));
             if response.hovered() {
                 ui.painter().rect_stroke(
                     r,
-                    0.0,
+                    2.0,
                     Stroke::new(1.0, ui.visuals().text_color()),
                     egui::StrokeKind::Inside,
                 );
@@ -449,148 +839,6 @@ impl ColorsState {
             }
         }
     }
-
-    fn more_panel(&mut self, ui: &mut egui::Ui, settings: &mut ToolSettings) {
-        let slot = Self::slot(settings, false);
-        let mut c = Self::color(settings, slot);
-        ui.label(egui::RichText::new("RGB").strong());
-        let mut changed_rgb = false;
-        for (label, ch) in [("R:", 0usize), ("G:", 1), ("B:", 2)] {
-            ui.horizontal(|ui| {
-                ui.label(label);
-                let mut v = [c.r, c.g, c.b][ch];
-                let lo = {
-                    let mut k = c;
-                    set_ch(&mut k, ch, 0);
-                    k
-                };
-                let hi = {
-                    let mut k = c;
-                    set_ch(&mut k, ch, 255);
-                    k
-                };
-                if gradient_slider(
-                    ui,
-                    &mut v,
-                    &[
-                        to_color32(lo.with_alpha(255)),
-                        to_color32(hi.with_alpha(255)),
-                    ],
-                ) | ui
-                    .add(egui::DragValue::new(&mut v).range(0..=255))
-                    .changed()
-                {
-                    set_ch(&mut c, ch, v);
-                    changed_rgb = true;
-                }
-            });
-        }
-        if changed_rgb {
-            Self::set(settings, slot, c);
-        }
-        ui.horizontal(|ui| {
-            ui.label("Hex:");
-            if self.hex_of != Some(c) {
-                self.hex = to_hex(c);
-                self.hex_of = Some(c);
-            }
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut self.hex)
-                    .desired_width(80.0)
-                    .font(egui::TextStyle::Monospace),
-            );
-            if response.lost_focus()
-                && let Some(parsed) = from_hex(&self.hex, c.a)
-            {
-                Self::set(settings, slot, parsed);
-            }
-        });
-        ui.add_space(4.0);
-        ui.label(egui::RichText::new("HSV").strong());
-        let mut hsv = self.hsv(settings, slot);
-        let mut changed_hsv = false;
-        ui.horizontal(|ui| {
-            ui.label("H:");
-            let mut hv = (hsv.h / 360.0 * 255.0).round() as u8;
-            let rainbow: Vec<Color32> = (0..=6)
-                .map(|i| {
-                    to_color32(hsv_to_rgb(
-                        Hsv {
-                            h: i as f32 * 60.0,
-                            s: 1.0,
-                            v: 1.0,
-                        },
-                        255,
-                    ))
-                })
-                .collect();
-            if gradient_slider(ui, &mut hv, &rainbow) {
-                hsv.h = hv as f32 / 255.0 * 360.0;
-                changed_hsv = true;
-            }
-            let mut h = hsv.h.round() as u16;
-            if ui
-                .add(egui::DragValue::new(&mut h).range(0..=360))
-                .changed()
-            {
-                hsv.h = h as f32;
-                changed_hsv = true;
-            }
-        });
-        for (label, which) in [("S:", 0), ("V:", 1)] {
-            ui.horizontal(|ui| {
-                ui.label(label);
-                let val = if which == 0 { hsv.s } else { hsv.v };
-                let mut b = (val * 255.0).round() as u8;
-                let ends = if which == 0 {
-                    [
-                        hsv_to_rgb(Hsv { s: 0.0, ..hsv }, 255),
-                        hsv_to_rgb(Hsv { s: 1.0, ..hsv }, 255),
-                    ]
-                } else {
-                    [
-                        hsv_to_rgb(Hsv { v: 0.0, ..hsv }, 255),
-                        hsv_to_rgb(Hsv { v: 1.0, ..hsv }, 255),
-                    ]
-                };
-                let mut pct = (val * 100.0).round() as u8;
-                let slid = gradient_slider(ui, &mut b, &[to_color32(ends[0]), to_color32(ends[1])]);
-                let typed = ui
-                    .add(egui::DragValue::new(&mut pct).range(0..=100))
-                    .changed();
-                if slid || typed {
-                    let v = if typed {
-                        pct as f32 / 100.0
-                    } else {
-                        b as f32 / 255.0
-                    };
-                    if which == 0 {
-                        hsv.s = v
-                    } else {
-                        hsv.v = v
-                    }
-                    changed_hsv = true;
-                }
-            });
-        }
-        if changed_hsv {
-            self.set_hsv(settings, slot, hsv);
-        }
-        ui.add_space(4.0);
-        ui.label(egui::RichText::new("Opacity - Alpha").strong());
-        ui.horizontal(|ui| {
-            let mut c = Self::color(settings, slot);
-            let mut a = c.a;
-            let ends = [to_color32(c.with_alpha(0)), to_color32(c.with_alpha(255))];
-            if gradient_slider(ui, &mut a, &ends)
-                | ui.add(egui::DragValue::new(&mut a).range(0..=255))
-                    .changed()
-            {
-                c.a = a;
-                Self::set(settings, slot, c);
-            }
-        });
-    }
 }
 
 fn set_ch(c: &mut ColorBgra, ch: usize, v: u8) {
@@ -601,19 +849,14 @@ fn set_ch(c: &mut ColorBgra, ch: usize, v: u8) {
     }
 }
 
-/// paint.net-style colour slider: a gradient bar with a triangle marker. Returns true when
-/// the user changed the value.
-fn gradient_slider(ui: &mut egui::Ui, value: &mut u8, stops: &[Color32]) -> bool {
-    let width = (ui.available_width() - 64.0).max(96.0);
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 14.0), Sense::click_and_drag());
-    let bar = Rect::from_min_max(rect.min, pos2(rect.max.x, rect.max.y - 4.0));
-    checker(ui, bar);
+/// A horizontal gradient through `stops` filling `rect`.
+fn gradient(ui: &egui::Ui, rect: Rect, stops: &[Color32]) {
     let mut mesh = Mesh::default();
     let n = stops.len().max(2) - 1;
     for (i, &c) in stops.iter().enumerate() {
-        let x = bar.min.x + bar.width() * i as f32 / n as f32;
-        mesh.colored_vertex(pos2(x, bar.min.y), c);
-        mesh.colored_vertex(pos2(x, bar.max.y), c);
+        let x = rect.min.x + rect.width() * i as f32 / n as f32;
+        mesh.colored_vertex(pos2(x, rect.min.y), c);
+        mesh.colored_vertex(pos2(x, rect.max.y), c);
         if i > 0 {
             let k = (i as u32) * 2;
             mesh.add_triangle(k - 2, k - 1, k);
@@ -622,32 +865,41 @@ fn gradient_slider(ui: &mut egui::Ui, value: &mut u8, stops: &[Color32]) -> bool
     }
     ui.painter().add(Shape::mesh(mesh));
     ui.painter().rect_stroke(
-        bar,
-        0.0,
-        Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
+        rect,
+        2.0,
+        Stroke::new(1.0, Color32::from_black_alpha(60)),
         egui::StrokeKind::Inside,
     );
-    let x = bar.min.x + bar.width() * (*value as f32 / 255.0);
-    let tri = vec![
-        pos2(x, rect.max.y - 5.0),
-        pos2(x - 4.0, rect.max.y),
-        pos2(x + 4.0, rect.max.y),
-    ];
-    ui.painter().add(Shape::convex_polygon(
-        tri,
-        ui.visuals().text_color(),
-        Stroke::NONE,
-    ));
-    if (response.dragged() || response.clicked())
-        && let Some(p) = response.interact_pointer_pos()
-    {
-        let v = (((p.x - bar.min.x) / bar.width()).clamp(0.0, 1.0) * 255.0).round() as u8;
-        if v != *value {
-            *value = v;
-            return true;
-        }
-    }
-    false
+}
+
+/// The ring marking a point on the square.
+fn marker(ui: &egui::Ui, at: Pos2, r: f32) {
+    ui.painter().circle_stroke(
+        at,
+        r + 1.0,
+        Stroke::new(1.0, Color32::from_black_alpha(140)),
+    );
+    ui.painter()
+        .circle_stroke(at, r, Stroke::new(2.0, Color32::WHITE));
+}
+
+/// The upright pill marking a position (0–1) along a strip.
+fn pill(ui: &egui::Ui, strip: Rect, t: f32) {
+    let x = strip.min.x + strip.width() * t.clamp(0.0, 1.0);
+    let r = Rect::from_center_size(pos2(x, strip.center().y), vec2(8.0, strip.height() + 4.0));
+    ui.painter().rect(
+        r,
+        4.0,
+        Color32::TRANSPARENT,
+        Stroke::new(2.0, Color32::WHITE),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter().rect_stroke(
+        r.expand(1.0),
+        5.0,
+        Stroke::new(1.0, Color32::from_black_alpha(140)),
+        egui::StrokeKind::Inside,
+    );
 }
 
 fn checker(ui: &egui::Ui, r: Rect) {
@@ -708,39 +960,32 @@ mod tests {
     }
 
     #[test]
-    fn wheel_modifiers_follow_paint_net() {
-        let cur = Hsv {
-            h: 100.0,
-            s: 0.5,
-            v: 0.8,
-        };
-        let plain = wheel_pick(cur, 37.0, 0.9, false, false, false);
-        assert_eq!((plain.h, plain.s, plain.v), (37.0, 0.9, 0.8));
-        let ctrl = wheel_pick(cur, 37.0, 0.9, true, false, false);
-        assert_eq!((ctrl.h, ctrl.s), (37.0, 0.5), "Ctrl: hue only");
-        let alt = wheel_pick(cur, 37.0, 0.9, false, true, false);
-        assert_eq!((alt.h, alt.s), (100.0, 0.9), "Alt: saturation only");
-        let shift = wheel_pick(cur, 37.0, 0.9, false, false, true);
-        assert_eq!(
-            (shift.h, shift.s),
-            (30.0, 0.9),
-            "Shift: saturation, hue snapped to 15°"
-        );
-        let ctrl_shift = wheel_pick(cur, 37.0, 0.9, true, false, true);
-        assert_eq!(
-            (ctrl_shift.h, ctrl_shift.s),
-            (30.0, 0.5),
-            "Ctrl+Shift: hue snapped"
-        );
-        assert_eq!(wheel_pick(cur, -90.0, 2.0, false, false, false).h, 270.0);
-    }
-
-    #[test]
     fn default_palette_starts_like_paint_net() {
         let s = ColorsState::default();
         assert_eq!(s.palette.len(), 96);
         assert_eq!(s.palette[0], ColorBgra::BLACK);
         assert_eq!(s.palette[2], ColorBgra::from_rgba(255, 0, 0, 255));
         assert_eq!(s.palette[16], ColorBgra::WHITE);
+    }
+
+    #[test]
+    fn picks_become_recent_after_the_drag_ends() {
+        let mut s = ColorsState::default();
+        let mut settings = ToolSettings::default();
+        s.note_recent(&settings);
+        assert!(s.recent().is_empty(), "the starting colours aren't picks");
+        settings.primary = ColorBgra::from_rgba(255, 0, 0, 255);
+        s.dragging = true;
+        s.note_recent(&settings);
+        assert!(s.recent().is_empty(), "not while dragging");
+        s.dragging = false;
+        s.note_recent(&settings);
+        assert_eq!(s.recent(), &[settings.primary]);
+        for i in 0..20u8 {
+            settings.primary = ColorBgra::from_rgba(i, i, i, 255);
+            s.note_recent(&settings);
+        }
+        assert_eq!(s.recent().len(), RECENT);
+        assert_eq!(s.recent()[0], ColorBgra::from_rgba(19, 19, 19, 255));
     }
 }

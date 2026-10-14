@@ -5,6 +5,7 @@ mod adjust_ui;
 mod canvas_render;
 mod canvas_view_ui;
 mod clipboard_ui;
+mod colors_ui;
 mod common;
 mod diagnostics_chord;
 mod dialog_ui;

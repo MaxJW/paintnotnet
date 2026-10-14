@@ -1,6 +1,7 @@
 //! Contents of the docked panels: the tool rail, Layers, History and (in `colors`) Colors.
 
 pub mod colors;
+pub mod oklch;
 
 use std::time::{Duration, Instant};
 
