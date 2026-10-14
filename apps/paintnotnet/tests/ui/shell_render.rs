@@ -906,6 +906,35 @@ fn tools_draw_their_cursor_over_the_canvas() {
     {
         image.save(format!("{dir}/shell-cursor.png")).unwrap();
     }
+    // Alt + right-drag shows the resize HUD at the press point and hides the cursor.
+    use eframe::egui::{Modifiers, PointerButton};
+    let at = canvas.center();
+    h.event(Event::ModifiersChanged(Modifiers::ALT));
+    h.event(Event::PointerButton {
+        pos: at,
+        button: PointerButton::Secondary,
+        pressed: true,
+        modifiers: Modifiers::ALT,
+    });
+    h.step();
+    h.event(Event::PointerMoved(at + vec2(330.0, -20.0)));
+    h.step();
+    h.step();
+    assert_eq!(h.output().platform_output.cursor_icon, CursorIcon::None);
+    if let Ok(dir) = std::env::var("PNN_RENDER_DUMP")
+        && let Ok(image) = h.render()
+    {
+        image.save(format!("{dir}/shell-resize-hud.png")).unwrap();
+    }
+    h.event(Event::PointerButton {
+        pos: at + vec2(330.0, -20.0),
+        button: PointerButton::Secondary,
+        pressed: false,
+        modifiers: Modifiers::ALT,
+    });
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.step();
+
     h.state_mut().set_tool(pnn_tools::ToolKind::Pan);
     h.step();
     h.step();

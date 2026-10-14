@@ -115,6 +115,8 @@ pub struct PaintNotNetApp {
     )>,
     /// Selection revision the toolbar's feather fields were last synced from.
     pub(crate) synced_selection: u64,
+    /// Brush width and hardness when the Alt + right-drag resize started.
+    pub(crate) resize_base: Option<(f32, u8)>,
 }
 
 impl PaintNotNetApp {
@@ -186,6 +188,7 @@ impl PaintNotNetApp {
             effect: None,
             last_applied: None,
             synced_selection: 0,
+            resize_base: None,
         }
     }
 
@@ -1211,7 +1214,9 @@ impl PaintNotNetApp {
         let mut action = None;
         panels.show_options(ctx, &palette, |ui| {
             ui.horizontal_wrapped(|ui| {
-                quick = toolbar::row1(ui, &self.icons, &availability, &checked);
+                quick = crate::controls::group(ui, "quick buttons", |ui| {
+                    toolbar::row1(ui, &self.icons, &availability, &checked)
+                });
                 ui.separator();
                 action = toolbar::row2(
                     ui,
@@ -1507,6 +1512,29 @@ impl CommandState {
 }
 
 impl PaintNotNetApp {
+    /// Alt + right-drag on the canvas: sideways scales the brush (100 pt doubles or halves
+    /// it), up and down change its hardness (2 pt per percent).
+    fn brush_resize(&mut self) {
+        let Some(r) = self.canvas.resize else {
+            self.resize_base = None;
+            return;
+        };
+        if r.started || self.resize_base.is_none() {
+            self.resize_base = Some((self.settings.brush_width, self.settings.hardness));
+        }
+        let Some((width, hardness)) = self.resize_base else {
+            return;
+        };
+        let scaled = width * 2f32.powf(r.delta.x / 100.0);
+        self.settings.brush_width = crate::controls::round_width(
+            scaled.clamp(pnn_tools::MIN_BRUSH_WIDTH, pnn_tools::MAX_BRUSH_WIDTH),
+        );
+        if self.canvas.brush.is_some_and(|b| b.hardness.is_some()) {
+            let h = f32::from(hardness) - r.delta.y / 2.0;
+            self.settings.hardness = h.round().clamp(0.0, 100.0) as u8;
+        }
+    }
+
     /// The toolbar's feather fields edit the current selection live (one history step when
     /// the edit ends) and show the feather of whatever is selected.
     fn toolbar_feather(&mut self) {
@@ -1697,6 +1725,24 @@ impl eframe::App for PaintNotNetApp {
         self.canvas.vector_handles = self.vector_handles();
         self.canvas.handles = self.move_handles();
         self.canvas.gradient_nubs = self.gradient_nubs();
+        // Tools with a width can be resized with Alt + right-drag; brushes have a hardness too.
+        let brushes = matches!(
+            self.tool,
+            ToolKind::Paintbrush | ToolKind::Eraser | ToolKind::CloneStamp
+        );
+        self.canvas.brush = matches!(
+            self.tool,
+            ToolKind::Paintbrush
+                | ToolKind::Eraser
+                | ToolKind::CloneStamp
+                | ToolKind::Recolor
+                | ToolKind::LineCurve
+                | ToolKind::Shapes
+        )
+        .then(|| canvas::BrushInfo {
+            width: self.settings.brush_width,
+            hardness: brushes.then(|| f32::from(self.settings.hardness) / 100.0),
+        });
         self.canvas.brush_outline = matches!(
             self.tool,
             ToolKind::Paintbrush | ToolKind::Eraser | ToolKind::Recolor | ToolKind::CloneStamp
@@ -1750,6 +1796,7 @@ impl eframe::App for PaintNotNetApp {
             self.save_config();
         }
         self.panels = panels;
+        self.brush_resize();
         let tool_events = std::mem::take(&mut self.canvas.events);
         if self.modal.is_none() && self.doc_dialog.is_none() {
             self.tool_events(tool_events);

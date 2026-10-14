@@ -1,7 +1,7 @@
 //! Tool bar: row 1 (common commands) and row 2 (tool choice + the active tool's options),
 //! following paint.net 5's `Toolbar.html` and screenshots.
 
-use eframe::egui::{self, Rect, Sense, vec2};
+use eframe::egui::{self, vec2};
 use pnn_core::BlendMode;
 use pnn_tools::*;
 
@@ -116,14 +116,6 @@ pub enum Row2Action {
     Finish,
 }
 
-/// Brush width presets offered by the dropdown and the mouse wheel.
-const WIDTH_PRESETS: &[f32] = &[
-    1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 20.0, 25.0,
-    30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0, 75.0, 80.0, 85.0, 90.0, 95.0, 100.0,
-    125.0, 150.0, 175.0, 200.0, 225.0, 250.0, 275.0, 300.0, 325.0, 350.0, 375.0, 400.0, 425.0,
-    450.0, 475.0, 500.0, 1000.0, 2000.0,
-];
-
 pub fn row2(
     ui: &mut egui::Ui,
     tool: ToolKind,
@@ -215,8 +207,7 @@ fn options(
             sep(ui);
             flood_mode(ui, s, icons);
             sep(ui);
-            ui.label("Tolerance:");
-            pct_bar(ui, &mut s.tolerance, palette);
+            crate::controls::percent(ui, "Tolerance", &mut s.tolerance, palette);
             sep(ui);
             sampling(ui, s);
             sep(ui);
@@ -244,12 +235,12 @@ fn options(
         PaintBucket => {
             flood_mode(ui, s, icons);
             sep(ui);
-            ui.label("Tolerance:");
-            pct_bar(ui, &mut s.tolerance, palette);
+            crate::controls::percent(ui, "Tolerance", &mut s.tolerance, palette);
             sep(ui);
             sampling(ui, s);
             sep(ui);
             fill_style(ui, s);
+            crate::controls::opacity(ui, s, palette);
             sep(ui);
             antialiasing(ui, s, icons);
             blend(ui, s, icons);
@@ -325,14 +316,15 @@ fn options(
             blend(ui, s, icons);
         }
         Paintbrush | Eraser | CloneStamp => {
-            brush_size(ui, s, icons);
+            crate::controls::brush_size(ui, s, palette);
             sep(ui);
-            ui.label("Hardness:");
-            pct_bar(ui, &mut s.hardness, palette);
+            crate::controls::percent(ui, "Hardness", &mut s.hardness, palette);
+            if tool == Paintbrush {
+                crate::controls::opacity(ui, s, palette);
+            }
             if tool != CloneStamp {
                 sep(ui);
-                ui.label("Spacing:");
-                pct_bar(ui, &mut s.spacing, palette);
+                crate::controls::percent(ui, "Spacing", &mut s.spacing, palette);
             }
             sep(ui);
             ui.checkbox(&mut s.smoothing, "Smoothing");
@@ -346,7 +338,11 @@ fn options(
                 blend(ui, s, icons);
             }
         }
-        Pencil => blend(ui, s, icons),
+        Pencil => {
+            crate::controls::opacity(ui, s, palette);
+            sep(ui);
+            blend(ui, s, icons);
+        }
         ColorPicker => {
             sampling(ui, s);
             sep(ui);
@@ -384,10 +380,9 @@ fn options(
                 });
         }
         Recolor => {
-            brush_size(ui, s, icons);
+            crate::controls::brush_size(ui, s, palette);
             sep(ui);
-            ui.label("Tolerance:");
-            pct_bar(ui, &mut s.tolerance, palette);
+            crate::controls::percent(ui, "Tolerance", &mut s.tolerance, palette);
             sep(ui);
             antialiasing(ui, s, icons);
         }
@@ -445,6 +440,8 @@ fn options(
                 }
             }
             sep(ui);
+            crate::controls::opacity(ui, s, palette);
+            sep(ui);
             antialiasing(ui, s, icons);
             blend(ui, s, icons);
         }
@@ -475,7 +472,8 @@ fn options(
                 }
                 sep(ui);
             }
-            brush_size(ui, s, icons);
+            crate::controls::brush_size(ui, s, palette);
+            crate::controls::opacity(ui, s, palette);
             sep(ui);
             if tool == LineCurve {
                 for (c, label, hint) in [
@@ -825,141 +823,4 @@ fn blend(ui: &mut egui::Ui, s: &mut ToolSettings, icons: &Icons) {
     })
     .0
     .on_hover_text(format!("Blend mode: {text}"));
-}
-
-/// "Brush size: ⊟ [ 2 ⏷] ⊞" — mouse wheel over the box steps through presets.
-fn brush_size(ui: &mut egui::Ui, s: &mut ToolSettings, icons: &Icons) {
-    ui.label("Brush size:");
-    if icon_button(
-        ui,
-        icons,
-        Icon::Minus,
-        "Decrease brush size ([)",
-        true,
-        false,
-    )
-    .clicked()
-    {
-        s.nudge_brush_width(-1.0);
-    }
-    let response = ui.add(
-        egui::DragValue::new(&mut s.brush_width)
-            .range(MIN_BRUSH_WIDTH..=MAX_BRUSH_WIDTH)
-            .speed(0.25)
-            .max_decimals(1),
-    );
-    if response.hovered() {
-        let scroll = wheel_steps(ui);
-        if scroll != 0.0 {
-            s.brush_width = step_preset(s.brush_width, scroll > 0.0);
-        }
-    }
-    egui::ComboBox::from_id_salt("brush_presets")
-        .selected_text("")
-        .width(14.0)
-        .show_ui(ui, |ui| {
-            for &w in WIDTH_PRESETS {
-                if ui
-                    .selectable_label(s.brush_width == w, format!("{w}"))
-                    .clicked()
-                {
-                    s.brush_width = w;
-                }
-            }
-        });
-    if icon_button(
-        ui,
-        icons,
-        Icon::Plus,
-        "Increase brush size (])",
-        true,
-        false,
-    )
-    .clicked()
-    {
-        s.nudge_brush_width(1.0);
-    }
-}
-
-/// Mouse-wheel notches this frame (+ = up), for wheel-adjustable toolbar controls.
-fn wheel_steps(ui: &egui::Ui) -> f32 {
-    ui.input(|i| {
-        i.events
-            .iter()
-            .filter_map(|e| match e {
-                egui::Event::MouseWheel { delta, .. } => Some(delta.y.signum()),
-                _ => None,
-            })
-            .sum()
-    })
-}
-
-fn step_preset(current: f32, up: bool) -> f32 {
-    if up {
-        WIDTH_PRESETS
-            .iter()
-            .copied()
-            .find(|&w| w > current)
-            .unwrap_or(MAX_BRUSH_WIDTH)
-    } else {
-        WIDTH_PRESETS
-            .iter()
-            .rev()
-            .copied()
-            .find(|&w| w < current)
-            .unwrap_or(MIN_BRUSH_WIDTH)
-    }
-}
-
-/// paint.net's percentage bar: "⊟ [████ 75%     ] ⊞". Drag or click to set; wheel steps 1%.
-fn pct_bar(ui: &mut egui::Ui, value: &mut u8, palette: &Palette) {
-    if ui.small_button("−").clicked() {
-        *value = value.saturating_sub(1);
-    }
-    let (rect, response) = ui.allocate_exact_size(vec2(120.0, 22.0), Sense::click_and_drag());
-    let rounding = crate::theme::radius::SMALL;
-    ui.painter().rect_filled(rect, rounding, palette.list);
-    let filled = Rect::from_min_size(
-        rect.min,
-        vec2(rect.width() * *value as f32 / 100.0, rect.height()),
-    );
-    ui.painter()
-        .rect_filled(filled, rounding, palette.accent_alpha(0.45));
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        format!("{value}%"),
-        egui::FontId::monospace(crate::theme::text::MONO),
-        palette.text,
-    );
-    if (response.dragged() || response.clicked())
-        && let Some(p) = response.interact_pointer_pos()
-    {
-        *value = (((p.x - rect.min.x) / rect.width()).clamp(0.0, 1.0) * 100.0).round() as u8;
-    }
-    if response.hovered() {
-        let scroll = wheel_steps(ui);
-        if scroll > 0.0 {
-            *value = (*value + 1).min(100);
-        } else if scroll < 0.0 {
-            *value = value.saturating_sub(1);
-        }
-    }
-    if ui.small_button("+").clicked() {
-        *value = (*value + 1).min(100);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn brush_presets_step() {
-        assert_eq!(step_preset(2.0, true), 3.0);
-        assert_eq!(step_preset(15.0, true), 20.0);
-        assert_eq!(step_preset(17.0, false), 15.0);
-        assert_eq!(step_preset(1.0, false), 1.0);
-        assert_eq!(step_preset(2000.0, true), 2000.0);
-    }
 }

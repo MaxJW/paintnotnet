@@ -373,10 +373,32 @@ ours is better, and keep a test showing the difference.
 **Phase 13 done (2026-10-14).**
 
 ## Phase 14: Tool controls
-- [ ] Brush size: on-canvas resize gesture with a live outline and readout, a size slider with a stroke preview,
-      quick presets, keyboard steps; the same for hardness and opacity where tools have them
-- [ ] Toolbar redesign per tool: grouped, fewer dropdowns, live previews of settings
-- [ ] Colour picking: a modern picker in the Colors panel (wheel + square, hex, OKLCH sliders, recent colours)
+- Decisions (2026-10-14): the on-canvas brush gesture is **Alt + right-drag** (sideways = size, up/down = hardness;
+  Photoshop's gesture; free on every tool, and Plasma 6 moves windows with Meta, not Alt). The Colors picker style
+  is being chosen from two interactive mockups (square + hue strip, or hue ring around a square) on the design
+  canvas. "Opacity" in the toolbar is the active colour's alpha, as paint.net treats opacity (no second setting).
+### 14a ✅ Brush controls
+- [x] Size (`controls.rs`): a preview square showing the brush's size, hardness and colour; a logarithmic slider
+      over 1–2000 px (half way ≈ 45 px, so small sizes get most of the travel); a typed value; presets 2, 5, 10,
+      25, 50, 100; the mouse wheel over the slider steps through paint.net's preset list; [ ] and Ctrl+[ ] kept.
+      Hardness, Spacing and Tolerance are compact sliders with typed values; **Opacity** (the active colour's
+      alpha) is shown for Paintbrush, Pencil, Line/Curve, Shapes, Text and Paint Bucket
+- [x] Alt + right-drag on the canvas (Paintbrush, Eraser, Clone Stamp, Recolor, Line/Curve, Shapes): 100 pt sideways
+      doubles or halves the width, 2 pt up or down is 1% hardness (brushes only); the cursor hides and a HUD at
+      the press point shows the brush at its true size, a ring where the hard core ends, and the values. Nothing
+      is painted and no history step is made
+- [x] Toolbar groups wrap as a unit (`controls::group`, using last frame's width), so a label never ends up on a
+      different line from its control; this is the first piece of 14b
+- [x] Fixed: a window short enough to leave the canvas no room made the scrollbar maths panic (`View::scrollbar`)
+- **Verified 2026-10-14:** unit tests for the size scale (round trip, ends, half way), preset stepping and the
+  degenerate viewport; UI test: Alt + right-drag 100 pt right and 40 pt up turns 2 px / 75% into 4 px / 95% with
+  no history step; the HUD rendered mid-drag (20 px, Hardness 85%) and the cursor hidden; all 119 UI tests pass.
+  Not checked on the real desktop (needs a real pointer).
+### 14b Toolbar redesign per tool
+- [ ] Controls grouped so a label never wraps away from its control; segmented buttons instead of dropdowns where
+      there are few choices; live previews of settings; rarely used options behind a "More" popover
+### 14c Colour picker
+- [ ] The chosen picker in the Colors panel: hex entry, OKLCH / HSV / RGB sliders, alpha, recent colours, palette
 
 ## Phase 15: Better maths, accuracy and speed (audit of everything built so far)
 - [ ] Audit each tool and effect: what paint.net 3.36 / BoltBait does, known weaknesses, the better method, cost; record

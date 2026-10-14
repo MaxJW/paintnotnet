@@ -167,7 +167,8 @@ impl View {
         let total = self.scroll_length(axis, image, viewport)?;
         let visible = viewport[axis] / total;
         let start = self.center[axis] * self.zoom / total;
-        Some((start.clamp(0.0, 1.0 - visible), visible))
+        // A degenerate viewport (no room left for the canvas) must not panic.
+        Some((start.clamp(0.0, (1.0 - visible).max(0.0)), visible))
     }
 }
 
@@ -177,6 +178,18 @@ mod tests {
 
     const IMG: [f64; 2] = [8000.0, 6000.0];
     const VP: [f64; 2] = [1600.0, 1000.0];
+
+    #[test]
+    fn scrollbar_survives_a_viewport_with_no_room() {
+        let v = View {
+            zoom: 4.0,
+            center: [50.0, 40.0],
+            fit_to_window: false,
+        };
+        // The panels can leave the canvas no height at all (a very short window).
+        let (start, len) = v.scrollbar(1, [100.0, 80.0], [800.0, -20.0]).unwrap();
+        assert!(start.is_finite() && len.is_finite());
+    }
 
     #[test]
     fn preset_stepping_matches_paint_net() {

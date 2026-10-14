@@ -50,6 +50,24 @@ pub enum ToolCursor {
     Drawn(egui::TextureId),
 }
 
+/// The active tool's brush, for the Alt + right-drag resize gesture.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BrushInfo {
+    /// Width in image px.
+    pub width: f32,
+    /// 0–1, for tools with a hardness.
+    pub hardness: Option<f32>,
+}
+
+/// Alt + right-drag on the canvas resizes the brush: how far the pointer has moved since the
+/// button went down (screen points; right = bigger, up = harder).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BrushResize {
+    pub delta: Vec2,
+    /// First frame of the gesture.
+    pub started: bool,
+}
+
 #[derive(Default)]
 pub struct CanvasState {
     /// Tool input gathered this frame (taken by the app).
@@ -83,6 +101,12 @@ pub struct CanvasState {
     pub rect: Option<Rect>,
     /// What the wheel does (Settings).
     pub wheel: crate::config::MouseWheel,
+    /// The active tool's brush (set by the app; `None` for tools without a width).
+    pub brush: Option<BrushInfo>,
+    /// The Alt + right-drag resize in progress (read by the app).
+    pub resize: Option<BrushResize>,
+    /// Where the resize gesture started (screen).
+    resize_anchor: Option<egui::Pos2>,
     zoom_wheel: f32,
 }
 
@@ -159,6 +183,9 @@ pub fn show(
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
     } else if space_held && response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+    } else if state.resize_anchor.is_some() {
+        // The resize HUD stands in for the cursor.
+        ui.ctx().set_cursor_icon(egui::CursorIcon::None);
     } else if let Some(cursor) = state.tool_cursor
         && (response.hovered() || state.tool_button.is_some())
     {
@@ -266,7 +293,31 @@ pub fn show(
                         PointerButton::Secondary => ToolButton::Secondary,
                         _ => continue,
                     };
-                    if pressed && state.tool_button.is_none() && over_canvas && area.contains(pos) {
+                    let on_canvas = over_canvas && area.contains(pos);
+                    if pressed
+                        && b == ToolButton::Secondary
+                        && modifiers.alt
+                        && state.brush.is_some()
+                        && state.tool_button.is_none()
+                        && on_canvas
+                    {
+                        // Alt + right-drag resizes the brush instead of painting.
+                        state.resize_anchor = Some(pos);
+                        state.resize = Some(BrushResize {
+                            delta: Vec2::ZERO,
+                            started: true,
+                        });
+                    } else if !pressed
+                        && b == ToolButton::Secondary
+                        && state.resize_anchor.is_some()
+                    {
+                        state.resize_anchor = None;
+                        state.resize = None;
+                    } else if pressed
+                        && state.tool_button.is_none()
+                        && state.resize_anchor.is_none()
+                        && on_canvas
+                    {
                         state.tool_button = Some(b);
                         state.events.push(ToolEvent::Down {
                             pos: to_img(pos),
@@ -276,6 +327,14 @@ pub fn show(
                     } else if !pressed && state.tool_button == Some(b) {
                         state.tool_button = None;
                         state.events.push(ToolEvent::Up { pos: to_img(pos) });
+                    }
+                }
+                egui::Event::PointerMoved(pos) if state.resize_anchor.is_some() => {
+                    if let Some(anchor) = state.resize_anchor {
+                        state.resize = Some(BrushResize {
+                            delta: pos - anchor,
+                            started: false,
+                        });
                     }
                 }
                 egui::Event::PointerMoved(pos) if state.tool_button.is_some() => {
@@ -482,6 +541,7 @@ pub fn show(
     }
     // The brush outline around the pointer (paint.net's `BrushPreviewRenderer`).
     if let (Some(d), Some(cur)) = (state.brush_outline, state.cursor)
+        && state.resize_anchor.is_none()
         && ui.rect_contains_pointer(area)
     {
         let sp = view.image_to_screen(cur, vp);
@@ -495,6 +555,9 @@ pub fn show(
             painter.circle_stroke(c, r + 1.0, egui::Stroke::new(1.0, egui::Color32::WHITE));
             painter.circle_stroke(c, r, egui::Stroke::new(1.0, egui::Color32::BLACK));
         }
+    }
+    if let (Some(anchor), Some(brush)) = (state.resize_anchor, state.brush) {
+        resize_hud(ui, anchor, brush, view.zoom / ppp);
     }
     // Last, so they sit over the image (it now runs under them).
     scrollbars(ui, full, canvas_rect, tab, ppp);
@@ -510,6 +573,63 @@ pub fn show(
             dpi,
             state.cursor,
         );
+    }
+}
+
+/// Alt + right-drag: the brush at its true size where the drag started, a ring where its hard
+/// core ends, and the values beside it.
+fn resize_hud(ui: &egui::Ui, anchor: egui::Pos2, brush: BrushInfo, scale: f64) {
+    let painter = ui.ctx().layer_painter(egui::LayerId::new(
+        egui::Order::Tooltip,
+        egui::Id::new("brush_resize"),
+    ));
+    let r = ((brush.width as f64 / 2.0 * scale) as f32).max(1.0);
+    let outline = |radius: f32, alpha: u8| {
+        painter.circle_stroke(
+            anchor,
+            radius + 1.0,
+            egui::Stroke::new(1.0, egui::Color32::from_black_alpha(alpha)),
+        );
+        painter.circle_stroke(
+            anchor,
+            radius,
+            egui::Stroke::new(1.0, egui::Color32::from_white_alpha(alpha)),
+        );
+    };
+    outline(r, 230);
+    if let Some(h) = brush.hardness
+        && h < 0.995
+    {
+        outline((r * h).max(0.5), 140);
+    }
+    painter.circle_filled(anchor, 2.0, egui::Color32::WHITE);
+    let palette = crate::theme::palette(ui.ctx());
+    let mut text = format!("{} px", fmt_width(brush.width));
+    if let Some(h) = brush.hardness {
+        text.push_str(&format!("  ·  Hardness {:.0}%", h * 100.0));
+    }
+    let galley = painter.layout_no_wrap(
+        text,
+        egui::FontId::monospace(crate::theme::text::BODY),
+        palette.text,
+    );
+    let at = anchor + vec2(r.min(400.0) + 14.0, -galley.size().y / 2.0 - 6.0);
+    let chip = Rect::from_min_size(at, galley.size() + vec2(20.0, 12.0));
+    painter.rect(
+        chip,
+        crate::theme::radius::CONTROL,
+        palette.window.gamma_multiply(0.92),
+        egui::Stroke::new(1.0, palette.window_border),
+        egui::StrokeKind::Inside,
+    );
+    painter.galley(chip.min + vec2(10.0, 6.0), galley, palette.text);
+}
+
+fn fmt_width(w: f32) -> String {
+    if w >= 10.0 || w.fract() == 0.0 {
+        format!("{w:.0}")
+    } else {
+        format!("{w:.1}")
     }
 }
 

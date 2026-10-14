@@ -7,6 +7,7 @@ pub mod canvas;
 pub mod clipboard;
 pub mod commands;
 pub mod config;
+pub mod controls;
 pub mod diagnostics;
 pub mod dialogs;
 pub mod doc_dialogs;

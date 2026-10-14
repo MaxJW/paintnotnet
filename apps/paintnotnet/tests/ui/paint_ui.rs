@@ -141,3 +141,32 @@ fn switching_tools_mid_stroke_commits_it() {
     assert_eq!(history_names(&h).last().unwrap(), "Paintbrush");
     assert_eq!(doc(&h).layer(0).surface.get(30, 40), ColorBgra::BLACK);
 }
+
+/// Alt + right-drag resizes the brush instead of painting: 100 pt to the right doubles it,
+/// 40 pt up adds 20% hardness.
+#[test]
+fn alt_right_drag_resizes_the_brush_without_painting() {
+    let mut h = harness();
+    h.state_mut().set_tool(ToolKind::Paintbrush);
+    h.step();
+    let (width, hardness) = (
+        h.state().settings().brush_width,
+        h.state().settings().hardness,
+    );
+    let history = history_names(&h);
+    // The harness shows the image at 400%: 25 image px right = 100 pt, 10 up = 40 pt.
+    drag(
+        &mut h,
+        PointerButton::Secondary,
+        Modifiers::ALT,
+        &[(50.0, 40.0), (60.0, 36.0), (75.0, 30.0)],
+    );
+    let s = h.state().settings();
+    assert!(
+        (s.brush_width - width * 2.0).abs() < 0.051,
+        "{width} → {}",
+        s.brush_width
+    );
+    assert_eq!(s.hardness, hardness + 20);
+    assert_eq!(history_names(&h), history, "nothing painted");
+}
