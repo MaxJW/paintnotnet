@@ -553,17 +553,25 @@ ours is better, and keep a test showing the difference.
 
 ## Phase 16: .pdn files and one window — requested 2026-10-14
 Supersedes PLAN.md §5 ("No .pdn support needed"): the user now wants .pdn support.
-- [ ] **Read .pdn.** What is known: a file is `PDN3`, a 24-bit little-endian length, an XML header (`<pdnImage width
-      height layers savedWithVersion>` with a PNG thumbnail), then the `Document` object written with .NET's
-      BinaryFormatter (NRBF), layer pixels in gzip-compressed chunks. Port the layout from 3.36's `Document.cs` and
-      layer serialization in `reference/OpenPDN` (authoritative for 3.x); an NRBF reader in Rust (pypdn, MIT, is a
-      reference: read-only Python, tested on 3.5 and 4.21 files). Not known: whether 5.x changed the NRBF body. A
-      third-party reader found 5.108/5.109 files' headers unchanged, which says nothing about the body. Needs real
-      files saved by 5.x (from the user, or public samples) before 5.x support can be claimed; never decompile
-- [ ] **Write .pdn** (Save As › paint.net image): 3.36's layout. Whether paint.net 5.x opens it must be checked with
-      the real program (the user's 5.1.12, e.g. under Wine); until then, saves as .pdn carry no promise of opening in
-      5.x
-- [ ] Layers, names, opacity, visibility, blend modes, DPI round-trip; paint.net-only blend modes map 1:1
+- [x] **Read .pdn** (`pnn-io/src/pdn/`): `PDN3`, 24-bit header length, XML header, then `00 01` + the document in
+      .NET's binary serialization + each pixel block's data, or a gzipped document (`1f 8b`, also paint.net ≤ 2.0
+      files without a header), as 3.36's `Document.FromStream` and `MemoryBlock` (deferred, gzip or raw chunks) read
+      them. `nrbf.rs` reads .NET's format from Microsoft's open specification [MS-NRBF]. Layers, names, visibility,
+      opacity, blend mode (from the blend-op class), DPI (from the EXIF resolution paint.net keeps in its metadata);
+      files are found by content (`PDN3`), so a renamed file opens too. Malformed files fail with a message (sizes,
+      chunk numbers and lengths are checked before anything is allocated or copied)
+- [x] **Write .pdn** (Save As › paint.net image; Ctrl+S on a .pdn keeps layers): the records a paint.net 4.21 file
+      has, in .NET's order (traced from a 4.21 file and compared: same classes, members, member types, libraries
+      and record kinds; we write 3 EXIF tags where 4.21 wrote 4, and no spare list capacity), pixel blocks in
+      256 KiB gzip chunks compressed in parallel, a 256 px PNG thumbnail in the header as 3.36 makes it.
+      `savedWithVersion` is 4.21's. **Not checked:** whether paint.net 4.x/5.x opens our files (no paint.net was
+      run); until it is, saving as .pdn makes no promise for paint.net
+- **Verified 2026-10-14:** pypdn's paint.net 4.21 test files (MIT; github.com/addisonElliott/pypdn `tests/data`,
+  not committed; `PNN_PDN_SAMPLES=<dir>` runs the test) load with the right size, layers, names, opacity, blend
+  mode and DPI, and each of the 13 blend modes' layer over the background flattens **pixel for pixel** to pypdn's
+  expected PNG (who made those PNGs isn't stated: paint.net or pypdn). Round trip of 14 layers (every mode, hidden
+  layers, opacities, a non-ASCII name, 300 DPI, several chunks) is exact; UI test: Ctrl+S on a .pdn saves layers
+  and reads back; a .pdn opened in the running app (screenshot). Still unknown: paint.net 5.x files (none tried)
 - [x] **One window** (`single_instance.rs`): the first window owns `org.paintnotnet.PaintNotNet` on the session bus;
       a later launch (Dolphin, the launcher, a terminal) calls its `Open` with its files (made absolute) and its
       `XDG_ACTIVATION_TOKEN`, then exits; the window opens them as tabs and asks to be raised with that token over
@@ -577,8 +585,11 @@ Supersedes PLAN.md §5 ("No .pdn support needed"): the user now wants .pdn suppo
   (status 0) and the file opened as a second tab (screenshot); in a normal run the global menu still exports and
   the Plasma panel showed paintnotnet's menus; File › Exit clicked over D-Bus closed it. **Not checked:** the raise
   itself with a real launcher token (Dolphin's "Open with") on KWin; the user should try it
-- [ ] `.desktop`/PKGBUILD: `.pdn` in MimeType; shared-mime-info defines no type for `*.pdn` (checked: not in this
-      system's `/usr/share/mime/globs2`), so ship a MIME XML (`image/x-paintnet`, glob `*.pdn`, magic `PDN3`)
+- [x] `.desktop`/PKGBUILD/`xtask install-desktop`: `image/x-paintnet` in MimeType and our own MIME definition
+      (`packaging/paintnotnet-mime.xml`: glob `*.pdn`, magic `PDN3`; shared-mime-info has none). Checked with
+      `update-mime-database` in a scratch data dir: `gio` reports `image/x-paintnet` for a .pdn and for one renamed
+      to .bin. The installed copy isn't updated yet (`cargo xtask install-desktop --force` overwrites it)
+- [ ] Left: paint.net 5.x files (needs real ones), and opening our .pdn in real paint.net (needs the user)
 
 ## Phase 17: Remove Background (local AI) — requested 2026-10-13
 - [ ] Effects › Object › Remove Background: BiRefNet (MIT; the model BRIA's RMBG-2.0 is built on) run with ONNX Runtime,
