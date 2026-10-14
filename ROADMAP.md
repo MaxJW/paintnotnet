@@ -452,15 +452,23 @@ ours is better, and keep a test showing the difference.
   New Image checked by eye; all 122 UI tests pass.
 
 ## Phase 15: Better maths, accuracy and speed (audit of everything built so far)
-- [ ] Audit each tool and effect: what paint.net 3.36 / BoltBait does, known weaknesses, the better method, cost; record
-      results here and fix in order of visible benefit
-- [ ] Candidates already known: Gaussian Blur is 3.36's tent-kernel approximation (→ true Gaussian, e.g. recursive or
-      box-cascade, optionally in linear light); live gradient on 4K runs about 30 fps and Motion Blur at distance 200 on
-      4K takes about 6 s (→ GPU compute); blending and antialiasing happen on 8-bit sRGB values (→ linear-light option,
-      higher precision); resampling in Resize / Rotate / transforms (→ Lanczos / Mitchell, supersampled); magic wand
-      tolerance in RGB (→ perceptual colour distance, e.g. OKLab)
-- [ ] Effects on the GPU (wgpu compute) where previews at 4K aren't instant; target: every slider live at 4K
-- [ ] Frame-time budget: keep 165 fps on this machine's 165 Hz display while painting, panning and previewing
+### 15a ✅ Audit
+- [x] `pnn-effects` bench example: every adjustment and effect at defaults or at a fraction of each slider's range
+      (`BENCH_AT`), rendered as the app renders (256 px tiles in parallel) on a 4K image
+- [x] `framework::render_rect` renders in tiles like the app (it went row by row, which made separable blurs redo
+      their vertical pass per row in tests and benchmarks)
+- [x] Findings and plan in `docs/phase15-audit.md`: slow at 4K (75% sliders) are Mandelbrot 5.6 s, Motion Blur
+      4.9 s, Radial Blur 4.0 s, Outline / Median / Reduce Noise / Dents ~2.5 s, Julia 2.4 s, Surface Blur, Bokeh,
+      Morphology 1.1–1.4 s; accuracy: Gaussian is 3.36's tent, gradients band (256-entry table), shrinking a
+      selection aliases, wand tolerance is RGB; linear-light blending not recommended as a default
+### 15b Speed on the CPU
+- [ ] Constant-time local histograms (Median, Reduce Noise, Outline, Surface Blur); Motion Blur independent of
+      distance; Morphology (van Herk / Gil–Werman); faster Mandelbrot / Julia; Radial Blur; Dents
+### 15c Accuracy
+- [ ] True Gaussian (same variance as the old radius) with a linear-light option; dithered high-precision
+      gradients; area-correct filtering when the move tools shrink; OKLab tolerance option for the wand and bucket
+### 15d GPU and frame budget
+- [ ] wgpu compute for effects still slower than ~100 ms at 4K; 165 fps while painting, panning and previewing
 
 ## Phase 16: Remove Background (local AI) — requested 2026-10-13
 - [ ] Effects › Object › Remove Background: BiRefNet (MIT; the model BRIA's RMBG-2.0 is built on) run with ONNX Runtime,

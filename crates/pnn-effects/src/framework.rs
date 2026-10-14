@@ -304,15 +304,40 @@ impl EffectDef {
     }
 }
 
-/// Render `rect` of the effect into `dst` rows (row-major, `rect.width` wide). Used for tests
-/// and synchronous application; the app renders tile by tile instead.
+/// Render `rect` of the effect (row-major, `rect.width` wide) in parallel 256 px tiles, the
+/// way the app renders: effects that share work across rows (separable blurs) do it once per
+/// tile, not once per row. Used by tests, benchmarks and synchronous application.
 pub fn render_rect(r: &dyn Renderer, src: &Surface, rect: Rect) -> Vec<ColorBgra> {
     use rayon::prelude::*;
+    let t = pnn_core::TILE_SIZE;
     let w = rect.width as usize;
+    let tiles: Vec<Rect> = (0..rect.height.div_ceil(t))
+        .flat_map(|ty| {
+            (0..rect.width.div_ceil(t)).map(move |tx| Rect {
+                x: rect.x + tx * t,
+                y: rect.y + ty * t,
+                width: t.min(rect.width - tx * t),
+                height: t.min(rect.height - ty * t),
+            })
+        })
+        .collect();
+    let rendered: Vec<(Rect, Vec<ColorBgra>)> = tiles
+        .into_par_iter()
+        .map(|tile| {
+            let mut out = vec![ColorBgra::TRANSPARENT; (tile.width * tile.height) as usize];
+            r.render_rect(src, tile, &mut out);
+            (tile, out)
+        })
+        .collect();
     let mut out = vec![ColorBgra::TRANSPARENT; w * rect.height as usize];
-    out.par_chunks_mut(w.max(1))
-        .enumerate()
-        .for_each(|(j, row)| r.render_row(src, rect.x, rect.y + j as u32, row));
+    for (tile, pixels) in rendered {
+        let tw = tile.width as usize;
+        for (j, row) in pixels.chunks(tw.max(1)).enumerate() {
+            let y = (tile.y - rect.y) as usize + j;
+            let x = (tile.x - rect.x) as usize;
+            out[y * w + x..y * w + x + tw].copy_from_slice(row);
+        }
+    }
     out
 }
 

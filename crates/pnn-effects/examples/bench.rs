@@ -2,13 +2,14 @@
 //! way the app applies one (renderer built once, rows rendered in parallel).
 //!
 //! `cargo run --release -p pnn-effects --example bench [filter]` prints a Markdown table,
-//! slowest first. Phase 15 uses it to rank what to speed up.
+//! slowest first. Phase 15 uses it to rank what to speed up. `BENCH_AT=0.75` sets every
+//! number property to 75% of its range instead of its default (the slow end of sliders).
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use pnn_core::{ColorBgra, Mask, Rect, Surface};
-use pnn_effects::framework::{EffectDef, Env, render_rect};
+use pnn_effects::framework::{EffectDef, Env, PropKind, Value, render_rect};
 use pnn_effects::{Adjustment, Category, adjustments, effect_def, effects_in};
 
 const W: u32 = 3840;
@@ -73,6 +74,26 @@ fn selection() -> (Mask, Vec<Vec<[f64; 2]>>) {
     (m, vec![outline])
 }
 
+/// The defaults, or with `BENCH_AT` set every number property at that fraction of its range.
+fn values(def: &EffectDef, env: &Env) -> Vec<Value> {
+    let mut v = def.defaults_in(env);
+    if let Some(f) = std::env::var("BENCH_AT")
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+    {
+        for (value, p) in v.iter_mut().zip(&def.props) {
+            match p.kind {
+                PropKind::Int { min, max } => {
+                    *value = Value::Int(min + ((max - min) as f64 * f).round() as i32)
+                }
+                PropKind::Float { min, max, .. } => *value = Value::Float(min + (max - min) * f),
+                _ => {}
+            }
+        }
+    }
+    v
+}
+
 fn time(def: &EffectDef, src: &Surface, env: &Env) -> Duration {
     let all = Rect {
         x: 0,
@@ -83,7 +104,7 @@ fn time(def: &EffectDef, src: &Surface, env: &Env) -> Duration {
     let mut best = Duration::MAX;
     for _ in 0..2 {
         let t = Instant::now();
-        let values = def.defaults_in(env);
+        let values = values(def, env);
         let r = def.renderer(&values, src, env);
         let out = render_rect(r.as_ref(), src, all);
         std::hint::black_box(&out);
@@ -150,7 +171,7 @@ fn main() {
             );
         }
     }
-    rows.sort_by(|a, b| b.2.cmp(&a.2));
+    rows.sort_by_key(|r| std::cmp::Reverse(r.2));
     println!("| Effect | Menu | ms at {W}×{H} |\n|---|---|---:|");
     for (cat, name, d) in rows {
         println!("| {name} | {cat} | {:.0} |", d.as_secs_f64() * 1e3);
