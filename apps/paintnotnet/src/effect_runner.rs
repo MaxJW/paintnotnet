@@ -39,13 +39,28 @@ impl EffectRef {
                 build: |_, _, _| Box::new(pnn_effects::framework::PixelOp(|c| c)),
             }),
             Self::Adjustment(a) => pnn_effects::adjustments::def(a),
+            Self::Effect(id) if pnn_effects::effect(id).name == REMOVE_BACKGROUND => {
+                Some(EffectDef {
+                    name: REMOVE_BACKGROUND,
+                    props: Vec::new(),
+                    unclipped: false,
+                    link: None,
+                    build: |_, _, _| Box::new(pnn_effects::framework::PixelOp(|c| c)),
+                })
+            }
             Self::Effect(id) => pnn_effects::effect_def(id),
         }
     }
 
     /// Settings for effects with their own dialog.
-    fn custom(self, src: &Surface, bounds: Rect) -> Option<Custom> {
+    fn custom(self, src: &Surface, bounds: Rect, ai: &crate::ai::Ai) -> Option<Custom> {
         match self {
+            Self::Effect(id) if pnn_effects::effect(id).name == REMOVE_BACKGROUND => {
+                Some(Custom::RemoveBackground(RemoveBackground {
+                    quality: ai.default_quality(),
+                    ..Default::default()
+                }))
+            }
             Self::Adjustment(Adjustment::Curves) => Some(Custom::Curves(Curves::default())),
             Self::Adjustment(Adjustment::Levels) => Some(Custom::Levels {
                 levels: Levels::default(),
@@ -66,9 +81,72 @@ impl EffectRef {
     }
 }
 
-/// Settings of effects with a custom dialog (Curves, Levels).
+pub const REMOVE_BACKGROUND: &str = "Remove Background";
+
+/// Remove Background's settings (the matte itself comes from the model, once per layer).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RemoveBackground {
+    pub quality: pnn_ai::Quality,
+    /// Move the edge out (+) or in (−), pixels.
+    pub shift: i32,
+    /// Blur the edge, pixels (Gaussian standard deviation).
+    pub softness: f64,
+    /// Keep the background, remove the subject.
+    pub invert: bool,
+}
+
+impl Default for RemoveBackground {
+    fn default() -> Self {
+        Self {
+            quality: pnn_ai::Quality::Best,
+            shift: 0,
+            softness: 0.0,
+            invert: false,
+        }
+    }
+}
+
+impl RemoveBackground {
+    fn refine(&self) -> pnn_ai::Refine {
+        pnn_ai::Refine {
+            shift: self.shift,
+            softness: self.softness as f32,
+            invert: self.invert,
+        }
+    }
+}
+
+/// The layer with its alpha scaled by a matte.
+struct MatteAlpha {
+    coverage: Vec<u8>,
+    width: u32,
+}
+
+impl Renderer for MatteAlpha {
+    fn render_row(&self, src: &Surface, x0: u32, y: u32, out: &mut [ColorBgra]) {
+        let row = y as usize * self.width as usize;
+        for (i, o) in out.iter_mut().enumerate() {
+            let x = x0 + i as u32;
+            let mut c = src.get(x, y);
+            let k = self.coverage[row + x as usize] as u32;
+            c.a = ((c.a as u32 * k + 127) / 255) as u8;
+            *o = c;
+        }
+    }
+}
+
+fn matte_renderer(matte: &crate::ai::Matte, settings: &RemoveBackground) -> Box<dyn Renderer> {
+    let (w, h) = (matte.width as usize, matte.height as usize);
+    Box::new(MatteAlpha {
+        coverage: settings.refine().apply(&matte.coverage, w, h),
+        width: matte.width,
+    })
+}
+
+/// Settings of effects with a custom dialog (Curves, Levels, Remove Background).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Custom {
+    RemoveBackground(RemoveBackground),
     Curves(Curves),
     Levels {
         levels: Levels,
@@ -102,6 +180,8 @@ pub struct EffectSession {
     env: Env,
     job: Option<Job>,
     gpu: Option<Arc<pnn_render::GpuEffects>>,
+    /// Remove Background: finding the layer's subject.
+    pub matte: Option<crate::ai::MatteJob>,
 }
 
 impl Drop for Job {
@@ -182,9 +262,16 @@ impl EffectSession {
         tiles_in(self.env.bounds)
     }
 
-    /// Start rendering the current values in the background.
+    /// The renderer for the current values. Remove Background's (refining the matte) is
+    /// built here only when rendering synchronously; previews build it on a worker.
     fn renderer(&self) -> Box<dyn Renderer> {
         let cpu = match &self.custom {
+            Some(Custom::RemoveBackground(rb)) => match self.matte.as_ref().and_then(|j| j.matte())
+            {
+                Some(m) => matte_renderer(m, rb),
+                // No matte yet: the layer as it is.
+                None => Box::new(pnn_effects::framework::PixelOp(|c| c)),
+            },
             Some(Custom::Curves(c)) => c.renderer(),
             Some(Custom::Levels { levels, .. }) => levels.renderer(),
             None => self.def.renderer(&self.values, &self.before, &self.env),
@@ -193,7 +280,19 @@ impl EffectSession {
     }
 
     fn spawn(&mut self, ctx: &egui::Context) {
-        let renderer: Arc<dyn Renderer> = self.renderer().into();
+        // Remove Background reshapes the whole matte before any tile renders: do that on the
+        // worker, not here.
+        let make: Box<dyn FnOnce() -> Box<dyn Renderer> + Send> =
+            match (&self.custom, self.matte.as_ref().and_then(|j| j.matte())) {
+                (Some(Custom::RemoveBackground(rb)), Some(m)) => {
+                    let (m, rb) = (m.clone(), *rb);
+                    Box::new(move || matte_renderer(&m, &rb))
+                }
+                _ => {
+                    let r = self.renderer();
+                    Box::new(move || r)
+                }
+            };
         let (tx, rx) = channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let tiles = self.tiles();
@@ -213,6 +312,10 @@ impl EffectSession {
         );
         rayon::spawn(move || {
             use rayon::prelude::*;
+            let renderer = make();
+            if cancel.load(Ordering::Relaxed) {
+                return;
+            }
             tiles.par_iter().for_each_with(tx, |tx, &c| {
                 if cancel.load(Ordering::Relaxed) {
                     return;
@@ -270,10 +373,17 @@ impl EffectSession {
         }
     }
 
+    /// Remove Background without its matte yet can't be applied.
+    fn ready(&self) -> bool {
+        !matches!(self.custom, Some(Custom::RemoveBackground(_)))
+            || self.matte.as_ref().is_some_and(|j| j.matte().is_some())
+    }
+
     fn preview_done(&self) -> bool {
-        self.job.as_ref().is_some_and(|j| {
-            j.values == self.values && j.custom == self.custom && j.received == j.total
-        })
+        self.ready()
+            && self.job.as_ref().is_some_and(|j| {
+                j.values == self.values && j.custom == self.custom && j.received == j.total
+            })
     }
 }
 
@@ -301,7 +411,10 @@ impl PaintNotNetApp {
             return;
         };
         session.values = session.def.defaults_in(&session.env);
-        session.custom = target.custom(&session.before, session.env.bounds);
+        session.custom = target.custom(&session.before, session.env.bounds, &self.ai);
+        if let Some(Custom::RemoveBackground(rb)) = &session.custom {
+            session.matte = Some(self.ai.start(ctx, session.before.clone(), rb.quality));
+        }
         let interactive = !session.def.props.is_empty() || session.custom.is_some();
         self.effect = Some(session);
         if interactive {
@@ -366,17 +479,30 @@ impl PaintNotNetApp {
             },
             job: None,
             gpu: self.gpu_effects.clone(),
+            matte: None,
         })
     }
 
     /// Effects > Repeat (Ctrl+F): the last effect with its last settings, no dialog.
-    pub(crate) fn repeat_effect(&mut self) -> bool {
+    pub(crate) fn repeat_effect(&mut self, ctx: &egui::Context) -> bool {
         let Some((target, values, custom)) = self.last_applied.clone() else {
             return false;
         };
         let Some(def) = target.def() else {
             return false;
         };
+        // Remove Background reopens its dialog with the last settings: the model has to run
+        // on this layer first.
+        if let Some(Custom::RemoveBackground(rb)) = custom {
+            if let Some(mut s) =
+                self.effect_session(target, def, values, Some(Custom::RemoveBackground(rb)))
+            {
+                s.matte = Some(self.ai.start(ctx, s.before.clone(), rb.quality));
+                s.spawn(ctx);
+                self.effect = Some(s);
+            }
+            return true;
+        }
         if let Some(s) = self.effect_session(target, def, values, custom) {
             self.effect = Some(s);
             self.finish_effect(true);
@@ -389,6 +515,13 @@ impl PaintNotNetApp {
         let Some(s) = self.effect.as_mut() else {
             return;
         };
+        // Remove Background: the model finished (or the download did): render with it.
+        if let Some(job) = s.matte.as_mut()
+            && job.poll(&self.ai, ctx)
+            && job.matte().is_some()
+        {
+            s.spawn(ctx);
+        }
         // Drain finished preview tiles.
         if let Some(job) = s.job.as_mut() {
             let tiles: Vec<TileResult> = job.rx.try_iter().collect();
@@ -399,6 +532,11 @@ impl PaintNotNetApp {
         }
         let mut outcome = None;
         let mut changed = false;
+        let mut download = false;
+        let mut quality = None;
+        let ready = s.ready();
+        let matte = s.matte.as_ref();
+        let models_dir = self.ai.models_dir();
         let def = &s.def;
         let values = &mut s.values;
         let custom = &mut s.custom;
@@ -420,6 +558,17 @@ impl PaintNotNetApp {
                     Some(Custom::Curves(c)) => changed |= curves_ui(ui, c, grab),
                     Some(Custom::Levels { levels, input }) => {
                         changed |= levels_ui(ui, levels, input, before, bounds)
+                    }
+                    Some(Custom::RemoveBackground(rb)) => {
+                        let before = *rb;
+                        if let Some(job) = matte {
+                            download = remove_background_ui(ui, rb, job, models_dir);
+                        }
+                        if rb.quality != before.quality {
+                            quality = Some(rb.quality);
+                        } else if *rb != before {
+                            changed = true;
+                        }
                     }
                     None => {}
                 }
@@ -466,7 +615,7 @@ impl PaintNotNetApp {
                 }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if ui.button("OK").clicked() {
+                    if ui.add_enabled(ready, egui::Button::new("OK")).clicked() {
                         outcome = Some(true);
                     }
                     if ui.button("Cancel").clicked() {
@@ -483,11 +632,23 @@ impl PaintNotNetApp {
         });
         if outcome.is_none() && esc {
             outcome = Some(false);
-        } else if outcome.is_none() && enter && !ctx.egui_wants_keyboard_input() {
+        } else if outcome.is_none() && enter && ready && !ctx.egui_wants_keyboard_input() {
             outcome = Some(true);
         }
-        if changed && let Some(s) = self.effect.as_mut() {
-            s.spawn(ctx);
+        if let Some(s) = self.effect.as_mut() {
+            if let Some(job) = s.matte.as_mut() {
+                if download {
+                    job.download(&self.ai, ctx);
+                }
+                if let Some(q) = quality {
+                    job.set_quality(&self.ai, ctx, q);
+                    // The layer as it is until the other model has run.
+                    changed = true;
+                }
+            }
+            if changed {
+                s.spawn(ctx);
+            }
         }
         if let Some(ok) = outcome {
             self.finish_effect(ok);
@@ -525,6 +686,47 @@ impl PaintNotNetApp {
             EffectRef::Effect(id) => Some(pnn_effects::effect(*id).name),
         }
     }
+}
+
+/// Remove Background's dialog: model status (download question, progress), quality, and
+/// the edge controls once there's a matte. Returns true if Download was pressed.
+fn remove_background_ui(
+    ui: &mut egui::Ui,
+    rb: &mut RemoveBackground,
+    job: &crate::ai::MatteJob,
+    models_dir: &std::path::Path,
+) -> bool {
+    use pnn_ai::Quality;
+    ui.label("Quality");
+    ui.horizontal(|ui| {
+        ui.selectable_value(&mut rb.quality, Quality::Best, "Best")
+            .on_hover_text("BiRefNet: finer edges, slower, a larger download");
+        ui.selectable_value(&mut rb.quality, Quality::Fast, "Fast")
+            .on_hover_text("BiRefNet lite: quicker, a smaller download");
+    });
+    ui.add_space(4.0);
+    let download = crate::ai::status_ui(ui, job, models_dir);
+    ui.add_space(4.0);
+    ui.add_enabled_ui(job.matte().is_some(), |ui| {
+        let mut shift = Value::Int(rb.shift);
+        property_ui(
+            ui,
+            &PropDef::int("Shift edge (px)", 0, -30, 30),
+            &mut shift,
+            &[],
+        );
+        rb.shift = shift.int();
+        let mut soft = Value::Float(rb.softness);
+        property_ui(
+            ui,
+            &PropDef::float("Edge softness (px)", 0.0, 0.0, 20.0, 1),
+            &mut soft,
+            &[],
+        );
+        rb.softness = soft.float();
+        ui.checkbox(&mut rb.invert, "Keep the background instead");
+    });
+    download
 }
 
 /// One generated control.
@@ -1024,6 +1226,7 @@ fn effect_icon(name: &str) -> Icon {
         "Tile Reflection" => Icon::FxTile,
         "Twist" => Icon::FxTwist,
         "Vignette" => Icon::FxVignette,
+        REMOVE_BACKGROUND => Icon::FxRemoveBackground,
         "Zoom Blur" => Icon::FxZoomBlur,
         _ => Icon::FxBlur,
     }

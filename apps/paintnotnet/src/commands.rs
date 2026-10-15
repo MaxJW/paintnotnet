@@ -16,8 +16,12 @@ use eframe::egui::{self, Key};
 use pnn_effects::{Adjustment, EffectId};
 
 /// Effects that work so far (by menu name).
-pub const IMPLEMENTED_EFFECTS: &[&str] =
-    &["Feather Object", "Feather Selection", "Blur Selection Edge"];
+pub const IMPLEMENTED_EFFECTS: &[&str] = &[
+    "Feather Object",
+    "Feather Selection",
+    "Blur Selection Edge",
+    crate::effect_runner::REMOVE_BACKGROUND,
+];
 
 /// A floating utility window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -88,6 +92,8 @@ pub enum Command {
     FillSelectionSecondary,
     InvertSelection,
     SelectAll,
+    /// paintnotnet addition: select the image's main subject (local AI).
+    SelectSubject,
     Deselect,
     /// paintnotnet addition (Shift+F6).
     FeatherSelection,
@@ -288,6 +294,7 @@ impl Command {
                 | C::CanvasSize
                 | C::Flatten
                 | C::SelectAll
+                | C::SelectSubject
                 | C::Deselect
                 | C::InvertSelection
                 | C::EraseSelection

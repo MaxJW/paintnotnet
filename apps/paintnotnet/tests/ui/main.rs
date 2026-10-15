@@ -2,6 +2,7 @@
 //! Tests that change process-wide state (the shortcut table) live in their own binaries.
 
 mod adjust_ui;
+mod ai_ui;
 mod canvas_render;
 mod canvas_view_ui;
 mod clipboard_ui;

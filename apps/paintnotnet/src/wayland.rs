@@ -5,8 +5,8 @@
 //!
 //! winit owns the Wayland connection and the surface, so this joins that connection from
 //! its raw `wl_display` pointer and wraps the raw `wl_surface` pointer. Those two calls are
-//! the only `unsafe` code in paintnotnet; everything else goes through wayland-client's
-//! safe API on a private event queue.
+//! the app's only `unsafe` code (the other is `pnn-ai`'s cuDNN preload); everything else goes
+//! through wayland-client's safe API on a private event queue.
 #![allow(unsafe_code)]
 
 use std::ffi::c_void;

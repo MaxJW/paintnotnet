@@ -17,6 +17,7 @@ pnn-effects = { path = "crates/pnn-effects" }
 pnn-tools = { path = "crates/pnn-tools" }
 pnn-io = { path = "crates/pnn-io" }
 pnn-render = { path = "crates/pnn-render" }
+pnn-ai = { path = "crates/pnn-ai" }
 
 # GUI: eframe drives winit + wgpu. Web-only features are left out.
 eframe = { version = "=0.36.2", default-features = false, features = [
@@ -58,6 +59,18 @@ zip = { version = "9.0.2", default-features = false, features = ["deflate"] }
 quick-xml = "0.42.0"
 serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.8"
+# Remove Background / Select Subject: ONNX Runtime loaded from the system at run time (no
+# bundled binaries), models fetched on first use over HTTPS and checked by SHA-256.
+ort = { version = "=2.0.0-rc.14", default-features = false, features = [
+    "std",
+    "load-dynamic",
+    "api-29",
+    "cuda",
+    "half",
+] }
+half = "2"
+ureq = "3"
+sha2 = "0.10"
 arboard = { version = "3.6.1", features = ["wayland-data-control"] }
 
 log = "0.4.34"

@@ -11,7 +11,9 @@ modernised paint.net, "keeping things vaguely in place" but with docked side pan
 glassy, great-looking UI, better tool controls (brush size first), super smooth performance, extra features, and better
 maths wherever something we copied (paint.net 3.36, BoltBait) can be done more accurately or faster. Phases 13
 (design system and docked shell), 14 (tool controls) and 15 (better maths, accuracy and speed; CI 344 tests) are
-done (2026-10-14). **Next:** Phase 16 (.pdn files and one window). The recreation backlog (rest of the
+done (2026-10-14); Phase 16 (.pdn files, one window, own window buttons) is done apart from the checks that need you,
+and Phase 17 (Remove Background and Select Subject, local AI) is done (2026-10-15). **Next:** Phase 18 (enhanced
+features, to agree). The recreation backlog (rest of the
 BoltBait pack, Sketch Blur, comparing against the 5.1.12 release files) is parked below and done on the `recreation`
 branch only if wanted.
 
@@ -601,20 +603,63 @@ Supersedes PLAN.md §5 ("No .pdn support needed"): the user now wants .pdn suppo
   buttons (named for screen readers) send minimise, maximise and close. **Not checked:** dragging, double-click and
   edge resizing with a real pointer on KWin (no way to drive the pointer from here); the user should try them
 
-## Phase 17: Remove Background (local AI) — requested 2026-10-13
-- [ ] Effects › Object › Remove Background: BiRefNet (MIT; the model BRIA's RMBG-2.0 is built on) run with ONNX Runtime,
-      loaded at run time from the system (`onnxruntime-opt-cuda` 1.29 is installed: CUDA on the RTX 3070, CPU fallback),
-      through the `ort` crate (2.0.0-rc.14, `load-dynamic`, `api-29`)
-- [ ] Models downloaded on first use after asking, checked by SHA-256, stored in `~/.local/share/paintnotnet/models/`:
-      onnx-community/BiRefNet-ONNX @534d3c8 (fp16 490 MB for GPU, fp32 973 MB for CPU) and BiRefNet_lite-ONNX @de15b22
-      (fp16 115 MB, fp32 224 MB); input 1024×1024, ImageNet mean/std normalisation (the repo's preprocessor_config.json)
-- [ ] Dialog in the common style: quality (best / fast), edge softness, shift edge in/out, invert; inference once per
-      layer in the background, sliders re-shape the mask live
-- [ ] PKGBUILD: optdepends onnxruntime
+## Phase 17: Remove Background and Select Subject (local AI) — requested 2026-10-13 ✅
+Select Subject was moved in from the Phase 18 ideas (user, 2026-10-14: "include select subject as well").
+- [x] **`pnn-ai`** (new crate): BiRefNet (Zheng et al. 2024, MIT; the model BRIA's RMBG-2.0 is built on), the
+      onnx-community ONNX exports, run with the system's ONNX Runtime (`ort` 2.0.0-rc.14, `load-dynamic`, `api-29`;
+      `libonnxruntime.so.1` or `$ORT_DYLIB_PATH`). CUDA when the runtime has it and the NVIDIA driver is loaded
+      (`PNN_AI_CPU=1` forces the CPU), else the CPU; fp16 models on the GPU, fp32 on the CPU. Input: the image over
+      white, scaled to 1024² with a widened triangle filter (as PIL's bilinear, which the models' processor uses),
+      ImageNet mean/std (`preprocessor_config.json`); output: sigmoid of the logits, scaled back to the image size
+- [x] **Arch packaging bug worked around:** `onnxruntime-opt-cuda` 1.29.0-3's CUDA provider uses cuDNN without listing
+      `libcudnn.so.9` as a dependency ("undefined symbol: cudnnGetConvolutionBackwardDataAlgorithm_v7", so CUDA failed
+      and everything ran on the CPU at 16 s an image). `pnn-ai` loads the system cuDNN `RTLD_GLOBAL` first: one
+      `unsafe` call (`runtime.rs`, `preload_cudnn`), the only one outside `wayland.rs`. Worth reporting to Arch
+- [x] **Models** downloaded only when the user presses Download in the dialog (it says what, how big, from where,
+      where it's kept, and that the image never leaves the computer), streamed to a `.part` file while hashed, checked
+      against the size and SHA-256 Hugging Face lists for the pinned revision, then renamed into place;
+      `~/.local/share/paintnotnet/models` (`$PNN_MODELS_DIR` overrides). Best = BiRefNet @534d3c8 (fp16 490 MB, fp32
+      973 MB), Fast = BiRefNet lite @de15b22 (fp16 115 MB, fp32 224 MB). Default quality: whichever is downloaded
+      (best first), else best on a GPU and fast on the CPU
+- [x] **Effects › Object › Remove Background**: custom dialog (quality Best/Fast, the model's status, shift edge
+      −30…30 px, edge softness 0–20 px, "keep the background instead"); the model runs once per layer on a
+      background thread, the sliders reshape the matte live (grey-level disc dilation/erosion, exact, skipping flat
+      areas; Gaussian from three box blurs) and the preview scales the layer's alpha. Within the selection, mixed by
+      coverage, like every effect. OK waits for the matte; Repeat reopens the dialog with the last settings. Appended
+      to the effects list so earlier effects keep their ids (saved shortcuts name them)
+- [x] **Edit › Select Subject**: the visible image (all visible layers) through the same model; the selection is
+      traced along the matte's 50 % line between pixel centres (marching squares, saddles decided by the cell
+      centre, image corners kept square), so curved edges are smooth rather than pixel steps
+      (`Selection::from_coverage`). One history step
+- [x] The loaded model is shared, kept 2 minutes after use (loading takes 2.5–3 s), freed on exit; mattes are cached
+      by the pixels they came from (4 kept), so Select Subject after Remove Background on the same pixels, or
+      reopening the dialog, doesn't run the model again
+- [x] PKGBUILD: `optdepends` onnxruntime (onnxruntime-cuda / onnxruntime-opt-cuda for NVIDIA). Icons: Lucide 1.48.0
+      `square-scissors` and `scan-face`, copied unmodified from the release zip
+- **Verified 2026-10-15:** `cargo xtask ci` passes (363 tests, 8 ignored). Both models' downloads match the listed
+  SHA-256. On the RTX 3070 (CUDA), a 5476 × 3651
+  photo: BiRefNet loads in 2.7–3.0 s and runs in 1.1 s the first time, 0.59 s after (lite: 2.3 s, 1.0 s, 0.34 s);
+  a 320 × 240 image takes 0.29 s (lite) / 0.52 s (best), so the 1024² model dominates. Edge controls on that photo:
+  shift 30 px 28 ms (250 ms before skipping flat areas), softness 61 ms, both 92 ms. Screenshots of the real app:
+  Remove Background's live preview on the photo (165 fps with the dialog open), Select Subject's outline around the
+  person (164 fps), and the download question with an empty models folder (nothing fetched). Tests: matte maths
+  (resampling, normalisation, sigmoid, disc shift against brute force, softness width), download (good file lands;
+  wrong hash, wrong size and cancel leave nothing), marching squares (disc area within 0.5 %, points within 0.1 px of
+  the circle, holes, all-saddle checkerboard, full image = its rectangle), UI: both commands ask before downloading
+  and fetch nothing; with the real model (`PNN_AI_MODELS=<dir>`) a drawn apple keeps its pixels and stem while the
+  background goes, and Select Subject then selects it without a second run; an opt-in test (`--ignored downloads`)
+  pressed Download for real and fetched, checked and ran BiRefNet lite (8 s)
+- **Not checked:** the CPU path end to end in the app (the example ran the lite fp16 model on the CPU, 16 s; fp32 not
+  timed), ROCm/AMD (only CUDA is tried; others use the CPU), images much larger than 20 MP (memory), the provider bug
+  on other distributions
+- `crates/pnn-ai/examples/segment.rs`: `segment IN OUT [best|fast] [MODEL_DIR]` prints load, run and edge-control
+  timings
 
 ## Phase 18: Enhanced features (to agree)
-- [ ] Ideas to discuss, not yet agreed: adjustment layers / non-destructive effects, layer groups, select subject (the
-      Remove Background mask as a selection), content-aware fill, smarter magic wand, more export options
+- [ ] Ideas to discuss, not yet agreed: adjustment layers / non-destructive effects, layer groups, content-aware fill,
+      smarter magic wand, more export options (select subject moved to Phase 17 and done). From Phase 17: edge colour
+      clean-up for Remove Background (estimating the foreground colour in soft edges so hair doesn't keep a fringe of
+      the old background), a Settings page listing downloaded models with their sizes and a Delete button
 
 ---
 

@@ -97,6 +97,7 @@ icons! {
     InvertSelection => ("squares-exclude"),
     SelectAll => ("scan"),
     Deselect => ("square-x"),
+    SelectSubject => ("scan-face"),
     // View
     ZoomIn => ("zoom-in"),
     ZoomOut => ("zoom-out"),
@@ -169,6 +170,7 @@ icons! {
     FxTwist => ("tornado"),
     FxVignette => ("aperture"),
     FxZoomBlur => ("focus"),
+    FxRemoveBackground => ("square-scissors"),
     // Windows, settings, help
     ToolsWindow => ("wrench"),
     HistoryWindow => ("rotate-ccw-clock"),

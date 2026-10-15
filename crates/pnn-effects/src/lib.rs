@@ -214,6 +214,9 @@ pub static EFFECTS: &[EffectInfo] = &[
     stock("Relief", Stylize),
     extra("Color Balance", Adjustment),
     extra("Transparency", Adjustment),
+    // Added after the rest so earlier effects keep their ids (saved shortcuts name them).
+    // Runs a local AI model; the app provides it (`pnn-ai`).
+    extra("Remove Background", Object),
 ];
 
 pub fn effect(id: EffectId) -> &'static EffectInfo {

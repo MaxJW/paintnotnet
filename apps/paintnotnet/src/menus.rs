@@ -115,6 +115,7 @@ pub fn menus() -> Vec<Menu> {
                     Icon::InvertSelection,
                 ),
                 item("Select &All", C::SelectAll, Icon::SelectAll),
+                item("Select Su&bject", C::SelectSubject, Icon::SelectSubject),
                 item("&Deselect", C::Deselect, Icon::Deselect),
                 SEP,
                 plain("Feat&her Selection...", C::FeatherSelection),

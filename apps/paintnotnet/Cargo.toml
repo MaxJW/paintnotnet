@@ -11,6 +11,7 @@ publish.workspace = true
 pnn-core.workspace = true
 pnn-io.workspace = true
 pnn-render.workspace = true
+pnn-ai.workspace = true
 pnn-effects.workspace = true
 pnn-tools.workspace = true
 eframe.workspace = true

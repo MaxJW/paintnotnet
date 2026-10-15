@@ -22,6 +22,7 @@ depends=(
 makedepends=('cargo' 'git' 'librsvg')
 optdepends=(
   'xdg-desktop-portal: Open and Save As dialogs'
+  'onnxruntime: Remove Background and Select Subject (onnxruntime-cuda or onnxruntime-opt-cuda to use an NVIDIA GPU)'
   'libx11: X11 sessions'
   'libxcursor: X11 sessions'
   'libxi: X11 sessions'

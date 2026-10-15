@@ -452,6 +452,13 @@ impl Selection {
         Selection::from_contours(trace_stencil(stencil, width as usize, height as usize))
     }
 
+    /// The outline where `coverage` (0–255 per pixel, e.g. an AI matte) crosses one half,
+    /// traced between pixel centres with marching squares, so curved edges come out smooth
+    /// rather than in pixel steps. Pixels at the image's edge close against the border.
+    pub fn from_coverage(coverage: &[u8], width: u32, height: u32) -> Selection {
+        Selection::from_contours(iso_contours(coverage, width as usize, height as usize))
+    }
+
     /// paint.net's Copy Selection format: `{"polygonList": ["x,y,x,y,…", …]}` with each
     /// polygon closed by repeating its first point.
     pub fn to_json(&self) -> String {
@@ -643,6 +650,131 @@ fn trace_stencil(stencil: &[bool], w: usize, h: usize) -> Vec<Contour> {
             if loop_pts.len() >= 3 {
                 contours.push(loop_pts);
             }
+        }
+    }
+    contours
+}
+
+/// Closed loops where `m` crosses 127.5, samples at pixel centres, outside the image 0.
+/// Each loop keeps the inside on the same side, so segments link up without ambiguity;
+/// a saddle cell (opposite corners alike) is decided by its centre, the mean of its corners.
+fn iso_contours(m: &[u8], w: usize, h: usize) -> Vec<Contour> {
+    use rayon::prelude::*;
+    use std::collections::HashMap;
+    const T: f64 = 127.5;
+    // Sample (i, j) for i in -1..=w, j in -1..=h.
+    let at = |i: isize, j: isize| -> f64 {
+        if i < 0 || j < 0 || i >= w as isize || j >= h as isize {
+            0.0
+        } else {
+            m[j as usize * w + i as usize] as f64
+        }
+    };
+    let gw = w as u64 + 2;
+    // Edge ids: horizontal edge from sample (i, j) to (i + 1, j), vertical from (i, j) to
+    // (i, j + 1); offset by one so -1 is 0.
+    let hid = |i: isize, j: isize| ((j + 1) as u64 * gw + (i + 1) as u64) << 1;
+    let vid = |i: isize, j: isize| hid(i, j) | 1;
+    let cross = |p: [f64; 2], v1: f64, q: [f64; 2], v2: f64| -> [f64; 2] {
+        let t = (T - v1) / (v2 - v1);
+        [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]
+    };
+    // Segments (from edge, to edge, point at the from edge, a corner of the image to pass
+    // through), each row of cells in parallel.
+    type Seg = (u64, u64, [f64; 2], Option<[f64; 2]>);
+    // A crossed edge: its id and where the outline crosses it.
+    type Edge = (u64, [f64; 2]);
+    let rows: Vec<Vec<Seg>> = (-1..h as isize)
+        .into_par_iter()
+        .map(|j| {
+            let mut segs = Vec::new();
+            for i in -1..w as isize {
+                let (a, b, c, d) = (at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1));
+                let ins = [a > T, b > T, c > T, d > T];
+                if ins.iter().all(|&x| x == ins[0]) {
+                    continue;
+                }
+                // Corner positions (pixel centres) and the four edges as (id, point).
+                let pa = [i as f64 + 0.5, j as f64 + 0.5];
+                let pb = [pa[0] + 1.0, pa[1]];
+                let pc = [pa[0] + 1.0, pa[1] + 1.0];
+                let pd = [pa[0], pa[1] + 1.0];
+                let top = (hid(i, j), cross(pa, a, pb, b));
+                let right = (vid(i + 1, j), cross(pb, b, pc, c));
+                let bottom = (hid(i, j + 1), cross(pd, d, pc, c));
+                let left = (vid(i, j), cross(pa, a, pd, d));
+                // Pairs of crossed edges, each with the corner it cuts off.
+                let mut pairs: Vec<(Edge, Edge, [f64; 2], bool)> = Vec::with_capacity(2);
+                let crossed = [
+                    ins[0] != ins[1],
+                    ins[1] != ins[2],
+                    ins[2] != ins[3],
+                    ins[3] != ins[0],
+                ];
+                if crossed.iter().all(|&x| x) {
+                    let centre = (a + b + c + d) / 4.0 > T;
+                    if ins[0] == centre {
+                        pairs.push((top, right, pb, ins[1]));
+                        pairs.push((bottom, left, pd, ins[3]));
+                    } else {
+                        pairs.push((left, top, pa, ins[0]));
+                        pairs.push((right, bottom, pc, ins[2]));
+                    }
+                } else {
+                    let edges = [top, right, bottom, left];
+                    let found: Vec<usize> = (0..4).filter(|&k| crossed[k]).collect();
+                    let (e1, e2) = (found[0], found[1]);
+                    // Adjacent edges cut off their shared corner; opposite ones split the
+                    // cell, and corner a decides.
+                    let corner = match (e1, e2) {
+                        (0, 1) => (pb, ins[1]),
+                        (1, 2) => (pc, ins[2]),
+                        (2, 3) => (pd, ins[3]),
+                        (0, 3) => (pa, ins[0]),
+                        _ => (pa, ins[0]),
+                    };
+                    pairs.push((edges[e1], edges[e2], corner.0, corner.1));
+                }
+                // A cell over a corner of the image has one real sample; when it's inside,
+                // the outline turns at the image's corner (the cell's centre) instead of
+                // cutting across it.
+                let corner_cell =
+                    (i == -1 || i == w as isize - 1) && (j == -1 || j == h as isize - 1);
+                let turn = (corner_cell && ins.iter().filter(|&&x| x).count() == 1)
+                    .then_some([i as f64 + 1.0, j as f64 + 1.0]);
+                for (e1, e2, corner, inside) in pairs {
+                    // Orient so the inside is on the left (cross product negative, y down).
+                    let (dx, dy) = (e2.1[0] - e1.1[0], e2.1[1] - e1.1[1]);
+                    let (qx, qy) = (corner[0] - e1.1[0], corner[1] - e1.1[1]);
+                    let left = dx * qy - dy * qx < 0.0;
+                    if left == inside {
+                        segs.push((e1.0, e2.0, e1.1, turn));
+                    } else {
+                        segs.push((e2.0, e1.0, e2.1, turn));
+                    }
+                }
+            }
+            segs
+        })
+        .collect();
+    let segs: Vec<Seg> = rows.into_iter().flatten().collect();
+    let from: HashMap<u64, usize> = segs.iter().enumerate().map(|(k, s)| (s.0, k)).collect();
+    let mut used = vec![false; segs.len()];
+    let mut contours = Vec::new();
+    for start in 0..segs.len() {
+        let mut pts = Vec::new();
+        let mut k = start;
+        while !used[k] {
+            used[k] = true;
+            pts.push(segs[k].2);
+            pts.extend(segs[k].3);
+            match from.get(&segs[k].1) {
+                Some(&n) => k = n,
+                None => break,
+            }
+        }
+        if pts.len() >= 3 {
+            contours.push(pts);
         }
     }
     contours
@@ -990,6 +1122,87 @@ mod tests {
         let m = coverage(&s, w as u32, h as u32, false);
         for i in 0..w * h {
             assert_eq!(m[i] > 127, st[i], "pixel {i}");
+        }
+    }
+
+    /// Area of an even-odd polygon set (shoelace, signs from orientation cancel holes as
+    /// long as holes run the other way, which the tracer guarantees).
+    fn signed_area(contours: &[Contour]) -> f64 {
+        contours
+            .iter()
+            .map(|c| {
+                let n = c.len();
+                (0..n)
+                    .map(|i| {
+                        let (p, q) = (c[i], c[(i + 1) % n]);
+                        p[0] * q[1] - q[0] * p[1]
+                    })
+                    .sum::<f64>()
+                    / 2.0
+            })
+            .sum()
+    }
+
+    #[test]
+    fn coverage_tracing_is_smooth_and_closed() {
+        let (w, h) = (80usize, 60usize);
+        // An antialiased disc of radius 20.3: the traced outline's area is the disc's.
+        let r = 20.3f64;
+        let disc: Vec<u8> = (0..w * h)
+            .map(|i| {
+                let (x, y) = ((i % w) as f64 + 0.5, (i / w) as f64 + 0.5);
+                let d = (x - 40.0).hypot(y - 30.0) - r;
+                ((0.5 - d).clamp(0.0, 1.0) * 255.0).round() as u8
+            })
+            .collect();
+        let s = Selection::from_coverage(&disc, w as u32, h as u32);
+        assert_eq!(s.contours().len(), 1);
+        let area = signed_area(s.contours()).abs();
+        let ideal = std::f64::consts::PI * r * r;
+        assert!((area - ideal).abs() / ideal < 0.005, "{area} vs {ideal}");
+        // Every point lies on the circle to within a tenth of a pixel (no pixel steps).
+        for p in &s.contours()[0] {
+            let d = (p[0] - 40.0).hypot(p[1] - 30.0) - r;
+            assert!(d.abs() < 0.1, "{p:?} is {d} off");
+        }
+
+        // Fully covered: the image's rectangle, closing against the border.
+        let full = Selection::from_coverage(&vec![255; w * h], w as u32, h as u32);
+        assert!((signed_area(full.contours()).abs() - (w * h) as f64).abs() < 1e-9);
+        assert_eq!(
+            full.pixel_bounds(w as u32, h as u32),
+            Some(Rect {
+                x: 0,
+                y: 0,
+                width: w as u32,
+                height: h as u32
+            })
+        );
+
+        // A ring: the hole stays a hole (even-odd), and rasterises back to the pixels.
+        let ring: Vec<u8> = (0..w * h)
+            .map(|i| {
+                let (x, y) = ((i % w) as f64 + 0.5, (i / w) as f64 + 0.5);
+                let d = (x - 40.0).hypot(y - 30.0);
+                if (10.0..25.0).contains(&d) { 255 } else { 0 }
+            })
+            .collect();
+        let s = Selection::from_coverage(&ring, w as u32, h as u32);
+        assert_eq!(s.contours().len(), 2);
+        assert!(!s.contains([40.0, 30.0]) && s.contains([40.0, 30.0 + 17.0]));
+        let m = coverage(&s, w as u32, h as u32, false);
+        for i in 0..w * h {
+            assert_eq!(m[i] > 127, ring[i] > 127, "pixel {i}");
+        }
+
+        // Saddles everywhere (a one-pixel checkerboard): every loop closes.
+        let checker: Vec<u8> = (0..w * h)
+            .map(|i| if (i % w + i / w) % 2 == 0 { 255 } else { 0 })
+            .collect();
+        let s = Selection::from_coverage(&checker, w as u32, h as u32);
+        let m = coverage(&s, w as u32, h as u32, false);
+        for i in 0..w * h {
+            assert_eq!(m[i] > 127, checker[i] > 127, "pixel {i}");
         }
     }
 

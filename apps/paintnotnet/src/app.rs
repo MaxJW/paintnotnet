@@ -28,6 +28,8 @@ use crate::workspace::Workspace;
 pub struct SmokeTest {
     duration: Duration,
     started: Option<Instant>,
+    /// `PNN_SMOKE_COMMAND` has run.
+    command_run: bool,
 }
 
 impl SmokeTest {
@@ -35,6 +37,7 @@ impl SmokeTest {
         Self {
             duration,
             started: None,
+            command_run: false,
         }
     }
 }
@@ -112,6 +115,10 @@ pub struct PaintNotNetApp {
     pub(crate) palette: Option<crate::settings_ui::PaletteState>,
     /// The adjustment/effect dialog in progress.
     pub(crate) effect: Option<crate::effect_runner::EffectSession>,
+    /// Remove Background / Select Subject: the AI model and recent mattes.
+    pub(crate) ai: crate::ai::Ai,
+    /// Select Subject in progress.
+    pub(crate) select_subject: Option<crate::ai::SubjectSession>,
     /// Effects with an exact GPU port render there (`None`: no wgpu, or `PNN_GPU_EFFECTS=0`).
     pub(crate) gpu_effects: Option<std::sync::Arc<pnn_render::GpuEffects>>,
     /// Live previews (the gradient while its nubs move) are drawn by the GPU compositor
@@ -203,6 +210,8 @@ impl PaintNotNetApp {
             settings_open: None,
             palette: None,
             effect: None,
+            ai: Default::default(),
+            select_subject: None,
             gpu_effects,
             gpu_preview: cc.wgpu_render_state.is_some()
                 && std::env::var("PNN_GPU_PREVIEW").as_deref() != Ok("0"),
@@ -242,6 +251,16 @@ impl PaintNotNetApp {
     }
 
     /// The open adjustment/effect dialog (tests).
+    /// Keep AI models in `dir` (tests; the app uses `~/.local/share/paintnotnet/models`).
+    pub fn set_models_dir(&mut self, dir: PathBuf) {
+        self.ai = crate::ai::Ai::with_dir(dir);
+    }
+
+    /// Select Subject is waiting (for the download question, a download or the model).
+    pub fn selecting_subject(&self) -> bool {
+        self.select_subject.is_some()
+    }
+
     pub fn effect_mut(&mut self) -> Option<&mut crate::effect_runner::EffectSession> {
         self.effect.as_mut()
     }
@@ -334,6 +353,7 @@ impl PaintNotNetApp {
     pub fn execute(&mut self, ctx: &egui::Context, t: Triggered) {
         if self.doc_dialog.is_some()
             || self.effect.is_some()
+            || self.select_subject.is_some()
             || self.stroke.is_some()
             || self.brush.is_some()
         {
@@ -389,8 +409,9 @@ impl PaintNotNetApp {
             Command::Effect(id) => {
                 self.open_effect(ctx, crate::effect_runner::EffectRef::Effect(id))
             }
+            Command::SelectSubject => self.select_subject(ctx),
             Command::RepeatEffect => {
-                if !self.repeat_effect()
+                if !self.repeat_effect(ctx)
                     && let Some(id) = self.last_effect
                 {
                     // Dialog-based effects reopen their dialog.
@@ -994,6 +1015,20 @@ impl PaintNotNetApp {
                 tab.doc.insert_layer(tab.doc.layers().len(), l);
             }
         }
+        // PNN_SMOKE_COMMAND=<command id, e.g. SelectSubject>: run that menu command once, as
+        // soon as an image is open.
+        if !smoke.command_run
+            && self.workspace.active().is_some()
+            && let Ok(id) = std::env::var("PNN_SMOKE_COMMAND")
+        {
+            smoke.command_run = true;
+            if let Some(c) = crate::menus::all_commands()
+                .into_iter()
+                .find(|c| c.id() == id)
+            {
+                self.execute(ctx, Triggered::once(c));
+            }
+        }
         // PNN_SMOKE_FEATHER=1: drag the feather radius every frame on a large selection with
         // the preview overlay on (the live-slider case), instead of sweeping the view.
         if std::env::var_os("PNN_SMOKE_FEATHER").is_some() {
@@ -1080,6 +1115,8 @@ impl PaintNotNetApp {
             } else {
                 self.brush_tool_event(crate::canvas::ToolEvent::Move { pos });
             }
+        } else if std::env::var_os("PNN_SMOKE_COMMAND").is_some() {
+            // Leave the view alone, to see what the command did.
         } else if let Some(tab) = self.workspace.active_mut() {
             // Sweep zoom (about 1%–800%) and pan so the canvas redraws every frame.
             let vp = self.canvas.viewport;
@@ -1580,7 +1617,7 @@ impl CommandState {
             | Command::TogglePixelGrid
             | Command::ToggleRulers => self.has_doc,
             Command::SaveAll => self.any_dirty,
-            Command::SelectAll | Command::InvertSelection => self.has_doc,
+            Command::SelectAll | Command::InvertSelection | Command::SelectSubject => self.has_doc,
             Command::RepeatEffect => self.repeat_effect,
             Command::Adjustment(_) => self.has_doc,
             Command::Deselect
@@ -1724,6 +1761,9 @@ impl eframe::App for PaintNotNetApp {
         // let go, so the device is destroyed here rather than on that thread while the
         // process exits (which crashes the NVIDIA driver).
         self.effect = None;
+        self.select_subject = None;
+        // Free the AI model (and its GPU memory) here, not as the process exits.
+        self.ai.unload();
         if let Some(gpu) = self.gpu_effects.take() {
             let deadline = Instant::now() + Duration::from_secs(2);
             while std::sync::Arc::strong_count(&gpu) > 1 && Instant::now() < deadline {
@@ -1742,6 +1782,7 @@ impl eframe::App for PaintNotNetApp {
 
         let modal_open = self.modal.is_some()
             || self.effect.is_some()
+            || self.select_subject.is_some()
             || self.settings_open.is_some()
             || self.palette.is_some()
             || self.files.dialog_open()
@@ -1911,6 +1952,8 @@ impl eframe::App for PaintNotNetApp {
         }
         self.run_doc_dialog(&ctx);
         self.run_effect(&ctx);
+        self.run_select_subject(&ctx);
+        self.ai.tick();
         self.run_settings(&ctx);
         self.run_palette(&ctx);
 
