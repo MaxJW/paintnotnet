@@ -236,3 +236,122 @@ fn invert_selection_keeps_an_exact_mask() {
     assert!(worst <= 1, "differs by up to {worst}");
     assert_eq!(kept[0], 255, "outside the ellipse is now selected");
 }
+
+/// Move Selected Pixels with the GPU drawing the drag gives the same document as the CPU
+/// path, and the history step is recorded once, on release.
+#[test]
+fn gpu_drawn_pixel_move_matches_the_cpu() {
+    use eframe::egui::{Event, Modifiers, PointerButton};
+    use pnn_core::{ColorBgra, Document, Layer, Selection, Surface};
+    let doc = || {
+        let (w, h) = (600u32, 400u32);
+        let mut s = Surface::new_transparent(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let v = ((x * 7 + y * 13) % 251) as u8;
+                s.set(x, y, ColorBgra::from_rgba(v, 255 - v, (x % 200) as u8, 255));
+            }
+        }
+        let mut d = Document::from_layers(w, h, vec![Layer::new("Background", s)]);
+        d.set_selection(Selection::ellipse(100.0, 80.0, 380.0, 300.0));
+        d
+    };
+    let run = |gpu: bool| {
+        let mut b = egui_kittest::Harness::builder().with_size(eframe::egui::vec2(1280.0, 800.0));
+        if gpu {
+            b = b.wgpu();
+        }
+        let mut h =
+            b.build_eframe(|cc| paintnotnet::app::PaintNotNetApp::new(cc, None, Vec::new()));
+        h.state_mut().workspace_mut().add(doc(), None, None);
+        h.step();
+        h.step();
+        h.state_mut()
+            .set_tool(pnn_tools::ToolKind::MoveSelectedPixels);
+        let rect = h.state().canvas().rect.unwrap();
+        let view = h.state().workspace().active().unwrap().view.unwrap();
+        let ppp = h.ctx.pixels_per_point() as f64;
+        let vp = [rect.width() as f64 * ppp, rect.height() as f64 * ppp];
+        let at = |x: f64, y: f64| {
+            let s = view.image_to_screen([x, y], vp);
+            eframe::egui::pos2(
+                rect.min.x + (s[0] / ppp) as f32,
+                rect.min.y + (s[1] / ppp) as f32,
+            )
+        };
+        let button = |pressed, pos| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        h.event(Event::PointerMoved(at(240.0, 190.0)));
+        h.step();
+        h.event(button(true, at(240.0, 190.0)));
+        h.step();
+        for k in 1..=10 {
+            h.event(Event::PointerMoved(at(
+                240.0 + 17.0 * k as f64,
+                190.0 - 9.0 * k as f64,
+            )));
+            h.step();
+        }
+        let dragging_on_gpu = h
+            .state()
+            .workspace()
+            .active()
+            .unwrap()
+            .gpu
+            .floating
+            .is_some();
+        h.event(button(false, at(410.0, 100.0)));
+        for _ in 0..4 {
+            h.step();
+        }
+        let tab = h.state().workspace().active().unwrap();
+        let names: Vec<String> = tab
+            .history
+            .entries()
+            .iter()
+            .map(|e| e.name.clone())
+            .collect();
+        (tab.doc.layer(0).surface.to_pixels(), names, dragging_on_gpu)
+    };
+    let (cpu, cpu_names, cpu_gpu) = run(false);
+    let (gpu, gpu_names, gpu_gpu) = run(true);
+    assert!(!cpu_gpu, "no GPU, no GPU drag");
+    if !gpu_gpu {
+        eprintln!("no wgpu adapter: the GPU path wasn't taken");
+        return;
+    }
+    assert_eq!(cpu_names, gpu_names, "same history");
+    assert_eq!(cpu.len(), gpu.len());
+    let diff = cpu.iter().zip(&gpu).filter(|(a, b)| a != b).count();
+    assert_eq!(diff, 0, "{diff} pixels differ");
+}
+
+/// The move tools' cursor says what a drag would do: resize on a handle, move inside the
+/// selection, rotate outside (drawn, so the system cursor hides).
+#[test]
+fn move_tool_cursor_shows_move_resize_and_rotate() {
+    use eframe::egui::{CursorIcon, Event};
+    let mut h = harness();
+    let tab = h.state_mut().workspace_mut().active_mut().unwrap();
+    tab.doc
+        .set_selection(pnn_core::Selection::rect(20.0, 20.0, 60.0, 50.0));
+    h.state_mut()
+        .set_tool(pnn_tools::ToolKind::MoveSelectedPixels);
+    h.step();
+    for (p, want) in [
+        ((40.0, 35.0), CursorIcon::Move),
+        ((20.0, 20.0), CursorIcon::ResizeNorthWest),
+        ((60.0, 35.0), CursorIcon::ResizeEast),
+        ((90.0, 70.0), CursorIcon::None),
+    ] {
+        let s = screen(&h, p.0, p.1);
+        h.event(Event::PointerMoved(s));
+        h.step();
+        h.step();
+        assert_eq!(h.output().platform_output.cursor_icon, want, "at {p:?}");
+    }
+}

@@ -237,6 +237,8 @@ icons! {
     WindowMaximize => ("square"),
     WindowRestore => ("copy"),
     WindowClose => ("x"),
+    // The move tools' cursor outside the selection (drag to rotate).
+    RotateCursor => ("rotate-cw"),
 }
 
 impl Icon {

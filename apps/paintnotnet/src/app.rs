@@ -81,6 +81,9 @@ pub struct PaintNotNetApp {
     pub(crate) click_job: Option<crate::selection_tools::ClickJob>,
     /// For repaints requested from background work.
     pub(crate) ctx: Option<egui::Context>,
+    /// Largest floating-pixel block the GPU can draw (its storage buffer limit; 0 = no GPU,
+    /// moves are drawn on the CPU).
+    pub(crate) gpu_float_limit: u64,
     /// Pencil stroke in progress.
     pub(crate) stroke: Option<crate::actions::PencilStroke>,
     pub(crate) brush: Option<crate::paint_tools::BrushStroke>,
@@ -195,6 +198,7 @@ impl PaintNotNetApp {
             doc_job: None,
             click_job: None,
             ctx: Some(cc.egui_ctx.clone()),
+            gpu_float_limit: 0,
             stroke: None,
             brush: None,
             gradient: None,
@@ -1914,8 +1918,28 @@ impl eframe::App for PaintNotNetApp {
         self.canvas.tool_cursor = Some(match self.tool {
             ToolKind::Pan => canvas::ToolCursor::System(egui::CursorIcon::Grab),
             ToolKind::Text => canvas::ToolCursor::System(egui::CursorIcon::Text),
+            // As paint.net: what a drag from here would do.
             ToolKind::MoveSelectedPixels | ToolKind::MoveSelection => {
-                canvas::ToolCursor::System(egui::CursorIcon::Move)
+                use crate::move_tools::MoveHover;
+                use egui::CursorIcon as C;
+                match self.move_hover() {
+                    Some(MoveHover::Handle(i)) => canvas::ToolCursor::System(
+                        [
+                            C::ResizeNorthWest,
+                            C::ResizeNorth,
+                            C::ResizeNorthEast,
+                            C::ResizeEast,
+                            C::ResizeSouthEast,
+                            C::ResizeSouth,
+                            C::ResizeSouthWest,
+                            C::ResizeWest,
+                        ][i],
+                    ),
+                    Some(MoveHover::Outside) => {
+                        canvas::ToolCursor::Drawn(self.icons.texture(Icon::RotateCursor).id())
+                    }
+                    _ => canvas::ToolCursor::System(C::Move),
+                }
             }
             tool => canvas::ToolCursor::Drawn(self.icons.texture(Icon::for_tool(tool)).id()),
         });
@@ -1965,6 +1989,20 @@ impl eframe::App for PaintNotNetApp {
                 .is_some_and(|d| d.wants_feather_preview());
         let antialias = self.antialiased_selection();
         self.canvas.antialias = antialias;
+        self.gpu_float_limit = frame
+            .wgpu_render_state()
+            .map_or(0, |rs| rs.device.limits().max_storage_buffer_binding_size);
+        // Floating pixels being dragged are drawn by the GPU compositor.
+        let floating = self.move_session.as_ref().and_then(|s| {
+            let tab = self.workspace.tab(s.key)?;
+            Some((s.key, s.floating_preview(&tab.doc)))
+        });
+        for tab in self.workspace.tabs_mut() {
+            tab.gpu.floating = floating
+                .as_ref()
+                .filter(|(k, _)| *k == tab.key)
+                .and_then(|(_, f)| f.clone());
+        }
         let active = self.workspace.active().map(|t| t.key);
         self.canvas.ants_shift = self
             .move_session

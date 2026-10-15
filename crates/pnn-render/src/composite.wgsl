@@ -5,7 +5,8 @@
 
 struct Params {
     op: u32,         // 0 clear, 1 copy the layer, 2 blend the layer; +4: the layer is the
-                     // live gradient drawn over it (see `gradient_pixel`)
+                     // live gradient drawn over it (see `gradient_pixel`); +8: the layer
+                     // with floating pixels drawn over it (see `floating_over`)
     mode: u32,       // BlendMode, in paint.net's order
     opacity: u32,
     chunk_w: u32,    // the chunk's width in tiles, and its first tile
@@ -43,6 +44,16 @@ struct Gradient {
 @group(0) @binding(4) var<uniform> g: Gradient;
 // Selection coverage, 4 bytes per u32, laid out as the layer.
 @group(0) @binding(5) var<storage, read> mask: array<u32>;
+// Floating pixels being moved (Move Selected Pixels): their rectangle, row by row.
+@group(0) @binding(6) var<storage, read> floating: array<u32>;
+@group(0) @binding(7) var<uniform> fl: Floating;
+
+struct Floating {
+    origin: vec2<i32>,  // where the rectangle was lifted from (image px)
+    size: vec2<i32>,
+    offset: vec2<i32>,  // how far it has moved
+    image: vec2<i32>,   // the image's size: nothing lands beyond it
+};
 
 const TILE: u32 = 256u;
 
@@ -235,13 +246,41 @@ fn gradient_pixel(x: u32, y: u32, before: vec4<u32>, cov: u32) -> vec4<u32> {
     return px;
 }
 
+// The floating pixels over `before` at image pixel (x, y): `transform::draw_transformed` for
+// a whole-pixel move (Normal over what's below).
+fn floating_over(x: u32, y: u32, before: vec4<u32>) -> vec4<u32> {
+    let at = vec2<i32>(i32(x), i32(y));
+    let q = at - fl.offset - fl.origin;
+    if (any(q < vec2<i32>(0)) || any(q >= fl.size) || any(at >= fl.image)) {
+        return before;
+    }
+    let px = unpack(floating[u32(q.y * fl.size.x + q.x)]);
+    if (px.w == 0u) {
+        return before;
+    }
+    return blend(before, px, 0u);
+}
+
 @compute @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let entry = slots[id.z];
     let slot = entry & 0x3fffffffu;
     let i = slot * TILE * TILE + id.y * TILE + id.x;
     var src: vec4<u32>;
-    if (p.op >= 4u) {
+    if ((p.op & 8u) != 0u) {
+        var before = vec4<u32>(0u);
+        if ((entry & 0x80000000u) == 0u) {
+            before = unpack(layer[i]);
+        }
+        let x = (p.tx0 + slot % p.chunk_w) * TILE + id.x;
+        let y = (p.ty0 + slot / p.chunk_w) * TILE + id.y;
+        src = floating_over(x, y, before);
+        // An absent layer tile with nothing floating here: as the CPU, leave what's below
+        // exactly as it is (blending nothing would clear transparent pixels' colour).
+        if ((entry & 0x80000000u) != 0u && src.w == 0u && (p.op & 3u) != 1u) {
+            return;
+        }
+    } else if (p.op >= 4u) {
         var before = vec4<u32>(0u);
         if ((entry & 0x80000000u) == 0u) {
             before = unpack(layer[i]);

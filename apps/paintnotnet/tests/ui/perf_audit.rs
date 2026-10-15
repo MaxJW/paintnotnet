@@ -4,7 +4,8 @@
 //!
 //! Opt in with an image (not committed), in a release build:
 //! `PNN_PERF_IMAGE=photo.jpg cargo test --release -p paintnotnet --test ui perf_audit -- --ignored --nocapture`
-//! `PNN_PERF_ONLY=<a,b,…>` runs only the actions whose name contains one of them.
+//! `PNN_PERF_ONLY=<a,b,…>` runs only the actions whose name contains one of them;
+//! `PNN_PERF_FRAMES=<name>` prints every frame's time for actions whose name contains it.
 //! Each action prints its frames, the slowest frame, the UI thread's total and the wall time
 //! (which includes waiting for background work). "LAG" marks a frame over 100 ms; "slow"
 //! one over 16 ms.
@@ -66,6 +67,14 @@ impl Audit {
             total.as_secs_f64() * 1e3,
             wall.as_secs_f64() * 1e3
         );
+        if std::env::var("PNN_PERF_FRAMES").is_ok_and(|f| name.contains(f.as_str())) {
+            let ms: Vec<String> = self
+                .frames
+                .iter()
+                .map(|d| format!("{:.1}", d.as_secs_f64() * 1e3))
+                .collect();
+            println!("    frames (ms): {}", ms.join(" "));
+        }
         self.rows
             .push((name.to_owned(), self.frames.len(), worst, total, wall));
     }

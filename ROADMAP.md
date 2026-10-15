@@ -784,7 +784,21 @@ this just a great modern paint.net replacement for linux."
   - **Audit 2026-10-15, after:** 2 actions over 100 ms (were 40): feathering the 700k-point wand selection (171 ms,
     the distance field) and the first frame of Move Selected Pixels on the whole photo (128 ms; then ~25 ms frames).
     Everything else ≤ 50 ms per frame, most well under 16 ms; full run 145 s (was 355 s, mostly waiting)
-  - [ ] Left: draw floating pixels (Move Selected Pixels) on the GPU, so a whole-photo move costs nothing per frame;
+  - [x] **Dragging moved pixels on the GPU** (user, 2026-10-15: "suuuper laggy", "almost crashes" moving a wand
+        selection around): every drag frame redrew the 24 MP layer on the CPU on all cores, allocated ~96 MB of new
+        tiles and re-uploaded them. Now a whole-pixel drag of lifted pixels uploads them once (one storage buffer
+        of their rectangle, when it fits the device's limit) and the GPU compositor draws them over the active layer
+        at the drag's offset (`composite.wgsl` `floating_over`, Normal blend as the CPU); the document isn't touched
+        until the mouse is released, when the pixels are drawn into it once. Test: the GPU shows what the CPU gives
+        for four offsets, across chunk edges, onto absent tiles and off the image (fully transparent pixels may keep
+        a different hidden colour); UI test: the same drag with and without the GPU leaves identical pixels and
+        history. Finishing keeps the lifted mask shifted as the moved selection's (no re-rasterising). Drag frames
+        3–4 ms (were 25–35), press 48 ms (the one upload), finish 14 ms (was 124); a whole drag 216 ms of UI time
+        (7.4 s this morning)
+  - [x] **Move tool cursors** (user): a resize arrow over a handle (NW … W), the move cursor inside the selection,
+        a rotate cursor (Lucide `rotate-cw`, drawn) outside, as paint.net; handles on the selection's bounds before a
+        move starts; inside is a mask lookup for complex selections. UI test for all three
+  - [ ] Left:
         the feather field in the background; Resize's OK frame (50 ms), Gradient finish (37 ms bake), Fill Selection
         (30 ms), Flip/Rotate Layer (26–29 ms) on the UI thread; WebP saving takes 17 s in the background at default
         effort

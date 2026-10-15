@@ -134,6 +134,20 @@ pub struct GpuSync {
     /// The same for the whole-image ants mask.
     ants_revision: u64,
     ants_tiles: Vec<usize>,
+    /// Floating pixels being dragged (set by the app each frame).
+    pub floating: Option<FloatingPreview>,
+    /// What the GPU last drew of `floating`: (layer, serial, offset).
+    shown_floating: Option<(pnn_core::LayerId, u64, [i32; 2])>,
+}
+
+/// Floating pixels being dragged, for the GPU compositor to draw over `layer`.
+#[derive(Clone)]
+pub struct FloatingPreview {
+    pub layer: pnn_core::LayerId,
+    pub serial: u64,
+    pub pixels: pnn_core::Surface,
+    pub rect: pnn_core::Rect,
+    pub offset: [i32; 2],
 }
 
 /// A live gradient for the GPU compositor to draw on `layer`.
@@ -845,8 +859,14 @@ fn sync_gpu(gpu: &egui_wgpu::RenderState, tab: &mut DocumentTab, visible: Option
             .map_or(0, |m| std::sync::Arc::as_ptr(m) as usize);
         (p.layer, p.shader, selection)
     });
-    let all = preview != sync.shown_preview;
+    let floating = sync
+        .floating
+        .as_ref()
+        .map(|f| (f.layer, f.serial, f.offset));
+    // A new gradient or floating position (or either ending) redraws everything at once.
+    let all = preview != sync.shown_preview || floating != sync.shown_floating;
     sync.shown_preview = preview;
+    sync.shown_floating = floating;
     let mut stale: Vec<TileCoord> = (0..ty)
         .flat_map(|ty| (0..tx).map(move |tx| TileCoord { tx, ty }))
         .filter(|&c| all || doc.tile_revision(c) != sync.revisions[(c.ty * tx + c.tx) as usize])
@@ -884,6 +904,16 @@ fn sync_gpu(gpu: &egui_wgpu::RenderState, tab: &mut DocumentTab, visible: Option
                 .map(|p| pnn_render::LayerGradient {
                     shader: p.shader,
                     selection: p.selection.as_ref(),
+                }),
+            floating: sync
+                .floating
+                .as_ref()
+                .filter(|f| f.layer == l.id())
+                .map(|f| pnn_render::LayerFloating {
+                    serial: f.serial,
+                    pixels: &f.pixels,
+                    rect: f.rect,
+                    offset: f.offset,
                 }),
         })
         .collect();

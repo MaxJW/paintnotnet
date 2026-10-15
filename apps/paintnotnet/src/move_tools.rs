@@ -63,20 +63,79 @@ pub struct MoveSession {
     /// The selection's mask when lifted, with its identity: moved by whole pixels, the
     /// marching ants reuse it shifted instead of rasterising the moved outline each frame.
     pub base_mask: Option<(u64, Arc<pnn_core::Mask>)>,
+    /// Names these lifted pixels for the GPU (uploaded once).
+    pub serial: u64,
+    /// A whole-pixel drag is being drawn by the GPU: the document holds the base without the
+    /// pixels, which are drawn into it when the drag ends (`render_move`).
+    pub gpu_drag: bool,
+}
+
+/// `mask` moved by (dx, dy) whole pixels (what leaves the image is dropped). Rows in parallel.
+fn shift_mask(mask: &pnn_core::Mask, dx: i64, dy: i64) -> pnn_core::Mask {
+    use rayon::prelude::*;
+    let (w, h) = (mask.width() as i64, mask.height() as i64);
+    let src = mask.to_pixels();
+    let mut out = vec![0u8; (w * h) as usize];
+    out.par_chunks_mut(w as usize)
+        .enumerate()
+        .for_each(|(y, row)| {
+            let sy = y as i64 - dy;
+            if sy < 0 || sy >= h {
+                return;
+            }
+            let (x0, x1) = (dx.max(0), (w + dx).min(w));
+            if x1 <= x0 {
+                return;
+            }
+            let s = (sy * w + x0 - dx) as usize;
+            row[x0 as usize..x1 as usize].copy_from_slice(&src[s..s + (x1 - x0) as usize]);
+        });
+    let mut m = pnn_core::Mask::new(w as u32, h as u32, 0);
+    m.write_pixels(&out);
+    m.compact();
+    m
+}
+
+/// See `move_hover`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MoveHover {
+    Handle(usize),
+    Inside,
+    Outside,
+}
+
+fn next_serial() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+fn is_whole_pixel_translation(m: &Affine) -> bool {
+    m[0] == 1.0
+        && m[1] == 0.0
+        && m[3] == 0.0
+        && m[4] == 1.0
+        && m[2].fract() == 0.0
+        && m[5].fract() == 0.0
 }
 
 impl MoveSession {
     /// The ants mask and how far it has moved, while the session is a whole-pixel move.
     pub fn ants_shift(&self) -> Option<(u64, Arc<pnn_core::Mask>, [f64; 2])> {
         let m = self.m;
-        let translation = m[0] == 1.0
-            && m[1] == 0.0
-            && m[3] == 0.0
-            && m[4] == 1.0
-            && m[2].fract() == 0.0
-            && m[5].fract() == 0.0;
         let (id, mask) = self.base_mask.clone()?;
-        translation.then_some((id, mask, [m[2], m[5]]))
+        is_whole_pixel_translation(&m).then_some((id, mask, [m[2], m[5]]))
+    }
+
+    /// What the GPU draws while `gpu_drag`.
+    pub fn floating_preview(&self, doc: &Document) -> Option<crate::canvas::FloatingPreview> {
+        self.gpu_drag.then(|| crate::canvas::FloatingPreview {
+            layer: doc.layer(self.layer).id(),
+            serial: self.serial,
+            pixels: self.pixels.clone(),
+            rect: self.rect,
+            offset: [self.m[2] as i32, self.m[5] as i32],
+        })
     }
 
     /// Nub positions in image coordinates.
@@ -214,6 +273,8 @@ impl PaintNotNetApp {
             drag: None,
             changed: false,
             base_mask,
+            serial: next_serial(),
+            gpu_drag: false,
         });
         true
     }
@@ -248,6 +309,8 @@ impl PaintNotNetApp {
             drag: None,
             changed: true,
             base_mask: None,
+            serial: next_serial(),
+            gpu_drag: false,
         });
         self.render_move();
     }
@@ -274,9 +337,20 @@ impl PaintNotNetApp {
     /// End the session (tool change, Enter, other commands). Records "Finish Pixels" /
     /// "Finish Selection" if anything moved.
     pub(crate) fn finish_move(&mut self) {
+        self.end_gpu_drag();
+        let antialias = self.antialiased_selection();
         let Some(s) = self.move_session.take() else {
             return;
         };
+        // The moved selection's mask is the lifted one shifted by whole pixels: keep that
+        // rather than rasterise the moved outline (0.1 s for a Magic Wand selection).
+        if let Some((_, mask, [dx, dy])) = s.ants_shift()
+            && let Some(tab) = self.workspace.tab_mut(s.key)
+            && !tab.doc.selection().is_empty()
+        {
+            let shifted = shift_mask(&mask, dx as i64, dy as i64);
+            tab.prime_mask(antialias, Arc::new(shifted));
+        }
         if !s.changed {
             return;
         }
@@ -286,6 +360,16 @@ impl PaintNotNetApp {
                 MoveKind::Selection => ("Finish Selection", Icon::MoveSelection),
             };
             tab.commit(name, icon);
+        }
+    }
+
+    /// A GPU-drawn drag ends: draw the pixels into the document.
+    fn end_gpu_drag(&mut self) {
+        if let Some(s) = self.move_session.as_mut()
+            && s.gpu_drag
+        {
+            s.gpu_drag = false;
+            self.render_move();
         }
     }
 
@@ -369,6 +453,22 @@ impl PaintNotNetApp {
                     start: pos,
                     m0: s.m,
                 });
+                // A whole-pixel move of lifted pixels is drawn by the GPU while it lasts, when
+                // they fit in one of its buffers: no CPU drawing or uploads per frame.
+                let bytes = s.rect.width as u64 * s.rect.height as u64 * 4;
+                if mode == DragMode::Move
+                    && s.kind == MoveKind::Pixels
+                    && bytes <= self.gpu_float_limit
+                    && is_whole_pixel_translation(&s.m)
+                {
+                    s.gpu_drag = true;
+                    let selection = s.current_selection();
+                    let mut doc = s.base.clone();
+                    doc.set_selection(selection);
+                    if let Some(tab) = self.workspace.tab_mut(s.key) {
+                        tab.doc = doc;
+                    }
+                }
             }
             ToolEvent::Move { pos } => {
                 let (shift, alt) = (self.modifiers.shift, self.modifiers.alt);
@@ -450,9 +550,18 @@ impl PaintNotNetApp {
                     }
                 };
                 s.changed = true;
-                self.render_move();
+                if s.gpu_drag {
+                    // Only the outline moves here; the GPU draws the pixels.
+                    let (key, selection) = (s.key, s.current_selection());
+                    if let Some(tab) = self.workspace.tab_mut(key) {
+                        tab.doc.set_selection(selection);
+                    }
+                } else {
+                    self.render_move();
+                }
             }
             ToolEvent::Up { .. } => {
+                self.end_gpu_drag();
                 let Some(s) = self.move_session.as_mut() else {
                     return;
                 };
@@ -469,6 +578,80 @@ impl PaintNotNetApp {
         }
     }
 
+    /// What dragging from the pointer would do with a move tool, for its cursor: scale by
+    /// handle `i` (paint.net's nubs, NW clockwise), move (inside the selection) or rotate
+    /// (outside). Before a move starts the handles sit on the selection's bounds, where the
+    /// move will put them. Inside is a mask lookup for complex selections.
+    pub(crate) fn move_hover(&mut self) -> Option<MoveHover> {
+        let pos = self.canvas.cursor?;
+        let antialias = self.antialiased_selection();
+        let tab = self.workspace.active_mut()?;
+        let zoom = tab.view.map_or(1.0, |v| v.zoom);
+        let reach = 6.0 / zoom;
+        let (w, h) = (tab.doc.width() as f64, tab.doc.height() as f64);
+        let session = self.move_session.as_ref().filter(|s| s.key == tab.key);
+        let complex = |sel: &Selection| {
+            sel.contours().iter().map(Vec::len).sum::<usize>() > crate::canvas::GPU_ANTS_POINTS
+        };
+        let (handles, inside) = match session {
+            Some(s) => {
+                let inside = match s.ants_shift() {
+                    Some((_, mask, [dx, dy])) => {
+                        let (x, y) = (pos[0] - dx, pos[1] - dy);
+                        x >= 0.0
+                            && y >= 0.0
+                            && x < w
+                            && y < h
+                            && mask.get(x as u32, y as u32) >= 128
+                    }
+                    None => s.current_selection().contains(pos),
+                };
+                (s.handles(), inside)
+            }
+            None => {
+                let sel = tab.doc.selection().clone();
+                let [x0, y0, x1, y1] = sel.bounds().unwrap_or([0.0, 0.0, w, h]);
+                let (mx, my) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+                let handles = [
+                    [x0, y0],
+                    [mx, y0],
+                    [x1, y0],
+                    [x1, my],
+                    [x1, y1],
+                    [mx, y1],
+                    [x0, y1],
+                    [x0, my],
+                ];
+                let inside = if sel.is_empty() {
+                    // Nothing selected: the whole layer moves.
+                    pos[0] >= 0.0 && pos[1] >= 0.0 && pos[0] < w && pos[1] < h
+                } else if complex(&sel) {
+                    tab.selection_mask(antialias).is_some_and(|m| {
+                        pos[0] >= 0.0
+                            && pos[1] >= 0.0
+                            && pos[0] < w
+                            && pos[1] < h
+                            && m.get(pos[0] as u32, pos[1] as u32) >= 128
+                    })
+                } else {
+                    sel.contains(pos)
+                };
+                (handles, inside)
+            }
+        };
+        if let Some(i) = handles
+            .iter()
+            .position(|p| (p[0] - pos[0]).abs() <= reach && (p[1] - pos[1]).abs() <= reach)
+        {
+            return Some(MoveHover::Handle(i));
+        }
+        Some(if inside {
+            MoveHover::Inside
+        } else {
+            MoveHover::Outside
+        })
+    }
+
     /// Nubs to draw on the canvas for the active session.
     pub(crate) fn move_handles(&self) -> Option<[[f64; 2]; 8]> {
         let s = self.move_session.as_ref()?;
@@ -479,6 +662,25 @@ impl PaintNotNetApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shifting_a_mask_moves_it_and_drops_what_leaves() {
+        let (w, h) = (300u32, 280u32);
+        let mut m = pnn_core::Mask::new(w, h, 0);
+        for y in 10..40 {
+            for x in 250..290 {
+                m.set(x, y, 200);
+            }
+        }
+        let s = shift_mask(&m, 30, -15);
+        assert_eq!(s.get(285, 0), 200, "moved");
+        assert_eq!(s.get(280, 24), 200);
+        assert_eq!(s.get(279, 24), 0, "left of where it moved to");
+        assert_eq!(s.get(285, 25), 0, "below it");
+        let back = shift_mask(&s, -30, 15);
+        assert_eq!(back.get(255, 20), 200);
+        assert_eq!(back.get(275, 20), 0, "the part that left the image is gone");
+    }
 
     #[test]
     fn history_names_follow_paint_net() {

@@ -34,6 +34,30 @@ pub struct LayerInput<'a> {
     pub surface: &'a Surface,
     /// Draw the live gradient over `surface` (its pre-gradient pixels) instead.
     pub gradient: Option<LayerGradient<'a>>,
+    /// Draw floating pixels being moved over `surface`.
+    pub floating: Option<LayerFloating<'a>>,
+}
+
+/// Pixels lifted from `rect` (in image coordinates in `pixels`) and moved by `offset` whole
+/// pixels: drawn by the GPU while a selection is dragged, so the drag costs no CPU drawing
+/// or uploads (the document gets them once, at the end). `serial` names this set of pixels
+/// (uploaded once).
+#[derive(Clone, Copy)]
+pub struct LayerFloating<'a> {
+    pub serial: u64,
+    pub pixels: &'a Surface,
+    pub rect: pnn_core::Rect,
+    pub offset: [i32; 2],
+}
+
+/// `composite.wgsl`'s `Floating`.
+#[repr(C)]
+#[derive(Clone, Copy, Default, Pod, Zeroable)]
+struct FloatingUniform {
+    origin: [i32; 2],
+    size: [i32; 2],
+    offset: [i32; 2],
+    image: [i32; 2],
 }
 
 /// The live gradient on a layer: what to draw and the selection clipping it.
@@ -116,6 +140,8 @@ const COPY: u32 = 1;
 const BLEND: u32 = 2;
 /// Added to COPY or BLEND: the layer is drawn with the live gradient.
 const GRADIENT: u32 = 4;
+/// Added to COPY or BLEND: the layer is drawn with floating pixels over it.
+const FLOATING: u32 = 8;
 
 pub(crate) struct GpuCompositor {
     pipeline: wgpu::ComputePipeline,
@@ -124,6 +150,8 @@ pub(crate) struct GpuCompositor {
     dummy: wgpu::Buffer,
     /// Bound as the gradient when there is none.
     no_gradient: wgpu::Buffer,
+    /// Bound as the floating pixels' uniform when there are none.
+    no_floating: wgpu::Buffer,
 }
 
 impl GpuCompositor {
@@ -149,6 +177,8 @@ impl GpuCompositor {
                 entry(3, wgpu::BufferBindingType::Uniform),
                 entry(4, wgpu::BufferBindingType::Uniform),
                 entry(5, storage(true)),
+                entry(6, storage(true)),
+                entry(7, wgpu::BufferBindingType::Uniform),
             ],
         });
         let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -175,11 +205,17 @@ impl GpuCompositor {
             "no gradient",
             bytemuck::bytes_of(&GradientUniform::default()),
         );
+        let no_floating = crate::gpu::create_uniform_buffer(
+            device,
+            "no floating",
+            bytemuck::bytes_of(&FloatingUniform::default()),
+        );
         Self {
             pipeline,
             layout,
             dummy,
             no_gradient,
+            no_floating,
         }
     }
 
@@ -215,6 +251,22 @@ impl GpuCompositor {
         if let Some(g) = gradient {
             store.upload_mask(device, queue, g.selection, dirty);
         }
+        let floating = shown.iter().find_map(|l| l.floating.as_ref());
+        if let Some(f) = floating {
+            store.upload_floating(device, f);
+        }
+        let floating_uniform = floating.map(|f| {
+            crate::gpu::create_uniform_buffer(
+                device,
+                "floating",
+                bytemuck::bytes_of(&FloatingUniform {
+                    origin: [f.rect.x as i32, f.rect.y as i32],
+                    size: [f.rect.width as i32, f.rect.height as i32],
+                    offset: f.offset,
+                    image: [f.pixels.width() as i32, f.pixels.height() as i32],
+                }),
+            )
+        });
         let uniform = gradient.map(|g| {
             crate::gpu::create_uniform_buffer(
                 device,
@@ -230,6 +282,7 @@ impl GpuCompositor {
                 chunk: *chunk,
                 layer: None,
                 gradient: None,
+                floating: None,
                 op: CLEAR,
                 mode: 0,
                 opacity: 0,
@@ -244,10 +297,31 @@ impl GpuCompositor {
                     chunk: *chunk,
                     layer: Some(l.id),
                     gradient: None,
+                    floating: None,
                     op: base,
                     mode: mode_index(l.mode),
                     opacity: l.opacity as u32,
                 };
+                if let (Some(_), Some(uniform)) = (&l.floating, &floating_uniform) {
+                    // Floating pixels can land on absent tiles too.
+                    let entries: Vec<u32> = tiles
+                        .iter()
+                        .map(|&(c, s)| {
+                            if layer.has(store.tiles_x, c) {
+                                s
+                            } else {
+                                s | LAYER_ABSENT
+                            }
+                        })
+                        .collect();
+                    let draw = Draw {
+                        op: base + FLOATING,
+                        floating: Some(uniform),
+                        ..draw
+                    };
+                    self.dispatch(device, encoder, store, &draw, &entries);
+                    continue;
+                }
                 if let (Some(_), Some(uniform)) = (&l.gradient, &uniform) {
                     // The gradient covers absent tiles too.
                     let entries: Vec<u32> = tiles
@@ -331,6 +405,13 @@ impl GpuCompositor {
             &params,
             draw.gradient.unwrap_or(&self.no_gradient),
             mask_buf,
+            store
+                .floating
+                .as_ref()
+                .map(|(_, b)| b)
+                .filter(|_| draw.floating.is_some())
+                .unwrap_or(&self.dummy),
+            draw.floating.unwrap_or(&self.no_floating),
         ];
         let entries: Vec<wgpu::BindGroupEntry<'_>> = buffers
             .iter()
@@ -358,6 +439,7 @@ struct Draw<'a> {
     chunk: usize,
     layer: Option<LayerId>,
     gradient: Option<&'a wgpu::Buffer>,
+    floating: Option<&'a wgpu::Buffer>,
     op: u32,
     mode: u32,
     opacity: u32,
@@ -395,6 +477,8 @@ pub(crate) struct LayerStore {
     pub(crate) acc: Vec<wgpu::Buffer>,
     layers: HashMap<LayerId, GpuLayer>,
     mask: Option<GpuMask>,
+    /// Floating pixels being moved: (serial, their rectangle row by row).
+    floating: Option<(u64, wgpu::Buffer)>,
 }
 
 impl LayerStore {
@@ -410,6 +494,7 @@ impl LayerStore {
             acc: Vec::new(),
             layers: HashMap::new(),
             mask: None,
+            floating: None,
         };
         store.acc = (0..chunks_x * chunks_y)
             .map(|i| store.chunk_buffer(device, i as usize, "composite"))
@@ -507,6 +592,31 @@ impl LayerStore {
             }
             m.done[i] = true;
         }
+    }
+
+    /// Upload floating pixels (once per set).
+    fn upload_floating(&mut self, device: &wgpu::Device, f: &LayerFloating<'_>) {
+        use rayon::prelude::*;
+        use wgpu::util::DeviceExt;
+        if self.floating.as_ref().is_some_and(|(s, _)| *s == f.serial) {
+            return;
+        }
+        let r = f.rect;
+        let mut px = vec![0u32; (r.width as usize * r.height as usize).max(1)];
+        px.par_chunks_mut(r.width.max(1) as usize)
+            .enumerate()
+            .for_each(|(j, row)| {
+                for (i, v) in row.iter_mut().enumerate() {
+                    let c = f.pixels.get(r.x + i as u32, r.y + j as u32);
+                    *v = u32::from_le_bytes([c.b, c.g, c.r, c.a]);
+                }
+            });
+        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("floating pixels"),
+            contents: bytemuck::cast_slice(&px),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        self.floating = Some((f.serial, buffer));
     }
 
     /// Drop layers no longer in the document.
@@ -668,6 +778,7 @@ mod tests {
                 opacity: l.opacity,
                 surface: &l.surface,
                 gradient: gradient.filter(|(k, _)| *k == i).map(|(_, g)| g),
+                floating: None,
             })
             .collect()
     }
@@ -732,6 +843,91 @@ mod tests {
                 let mut store = LayerStore::new(&device, w, h);
                 let what = format!("{mode:?} bottom {bottom_opacity} top {opacity}");
                 check(&device, &queue, &comp, &mut store, &doc, &all, &what);
+            }
+        }
+    }
+
+    /// Floating pixels moved by whole pixels on the GPU show what the CPU gives drawing them
+    /// into the layer (`draw_transformed`) and flattening, across tile and chunk edges, onto
+    /// absent tiles and off the image's edges.
+    #[test]
+    fn gpu_floating_matches_cpu() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let comp = GpuCompositor::new(&device);
+        let (w, h): (u32, u32) = (4400, 700);
+        let all: Vec<TileCoord> = (0..h.div_ceil(TILE_SIZE))
+            .flat_map(|ty| (0..w.div_ceil(TILE_SIZE)).map(move |tx| TileCoord { tx, ty }))
+            .collect();
+        let rect = Rect {
+            x: 3900,
+            y: 120,
+            width: 300,
+            height: 400,
+        };
+        // Lifted pixels (translucent noise) inside `rect`; the layer has holes there.
+        let src = noise_layer(w, h, 31, true);
+        let mut pixels = Surface::new_transparent(w, h);
+        for y in rect.y..rect.y + rect.height {
+            for x in rect.x..rect.x + rect.width {
+                pixels.set(x, y, src.get(x, y));
+            }
+        }
+        let base = noise_layer(w, h, 7, true);
+        for offset in [[0, 0], [250, -90], [-3700, 160], [17, 33]] {
+            let doc = Document::from_layers(
+                w,
+                h,
+                vec![
+                    Layer::new("Background", noise_layer(w, h, 2, false)),
+                    Layer::new("Active", base.clone()),
+                ],
+            );
+            let mut store = LayerStore::new(&device, w, h);
+            let mut layers = inputs(&doc, None);
+            layers[1].floating = Some(LayerFloating {
+                serial: 1,
+                pixels: &pixels,
+                rect,
+                offset,
+            });
+            let mut encoder = device.create_command_encoder(&Default::default());
+            comp.composite(&device, &queue, &mut encoder, &mut store, &layers, &all);
+            queue.submit([encoder.finish()]);
+            let got = read_back(&device, &queue, &store);
+            // The CPU: draw the pixels into the layer, then flatten.
+            let mut cpu = doc.clone();
+            cpu.modify_layer(1, None, |l| {
+                pnn_core::transform::draw_transformed(
+                    &mut l.surface,
+                    &pixels,
+                    rect,
+                    &pnn_core::transform::translation(offset[0] as f64, offset[1] as f64),
+                    pnn_core::transform::Sampling::Bilinear,
+                )
+            });
+            let want = pnn_core::compositor::flatten(&cpu);
+            for &c in &all {
+                let wt: Vec<ColorBgra> = want.tile(c).map_or_else(
+                    || vec![ColorBgra::TRANSPARENT; (TILE_SIZE * TILE_SIZE) as usize],
+                    |t| t.pixels().to_vec(),
+                );
+                let g = &got[&(c.tx, c.ty)];
+                // What shows: the same pixel, or transparent in both (the CPU allocates an
+                // empty tile where floating pixels land, and blending it clears the hidden
+                // colour of transparent pixels below; the GPU leaves it. The document gets
+                // the CPU's result when the drag ends).
+                let diff = wt
+                    .iter()
+                    .zip(g)
+                    .filter(|(a, b)| a != b && !(a.a == 0 && b.a == 0))
+                    .count();
+                assert_eq!(
+                    diff, 0,
+                    "offset {offset:?}: tile {c:?}: {diff} pixels differ"
+                );
             }
         }
     }
