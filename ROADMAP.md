@@ -679,10 +679,27 @@ Select Subject was moved in from the Phase 18 ideas (user, 2026-10-14: "include 
 - [x] **Resize cursors at the window's edges** didn't show until a click (reported by the user). The app asks for
       them on hover (UI test); in the 2026-10-15 build the user saw them work, so nothing was changed for it
 
-## Phase 18: Enhanced features (to agree)
-- [ ] Agreed 2026-10-15 ("I like both your ideas"): edge colour clean-up for Remove Background (estimating the
-      foreground colour in soft edges so hair doesn't keep a fringe of the old background), and a Settings page
-      listing downloaded models with their sizes and a Delete button
+## Phase 18: Enhanced features (to agree; first two items done)
+Agreed 2026-10-15 ("I like both your ideas"), done the same day:
+- [x] **Edge colour clean-up** (Remove Background › "Clean up edge colours", on by default): where the matte is soft,
+      the kept pixels take the estimated colour of the subject (or, with "keep the background instead", of the
+      background), so hair doesn't keep a fringe of the old background. "Fast Multi-Level Foreground Estimation"
+      (Germer et al., ICPR 2020) ported from PyMatting (MIT, `estimate_foreground_ml.py` @6d5c4a6; NOTICE updated):
+      same constants and mean-colour start; rows updated even-then-odd so they run in parallel (PyMatting sweeps in
+      order; same fixed point); F and B kept in 16 bits (~360 MB at 20 MP). Worked out once per matte on the job's
+      thread (the dialog shows "Finding the subject…" until then), so the sliders stay live. Only opaque layer
+      pixels get new colours (the estimate is made from the layer over white)
+- [x] **Settings › AI models**: where models are kept and what runs them, each model (downloaded or not, with its
+      size; a file of the wrong size shows as incomplete), anything else in the folder (unfinished downloads, older
+      versions), the total, and Delete (asks "Delete? Yes / No"; ends the helper first)
+- **Verified 2026-10-15:** `cargo xtask ci` passes (370 tests, 8 ignored; it first caught two panel-layout unit tests
+  still expecting the old 12 px gap, now written in terms of `GAP`). A synthetic red-over-blue soft edge gives back both colours to within 1 level (test
+  allows 2); opaque/clear pixels keep their colour; with the real model the drawn apple's partly kept edge pixels
+  are apple red, not mixed with the grey; on the 5476 × 3651 photo the estimate takes 0.41 s (release) / 0.52 s (in
+  the app's debug build), and side-by-side crops over magenta show the pale fringe along the hair gone. UI test:
+  the models tab lists an incomplete model, the models not downloaded and an unfinished download with sizes, and
+  deletes only the chosen file after Yes. Screenshots: the models tab with the user's real folder, Remove
+  Background with the new option
 - [ ] Ideas to discuss, not yet agreed: adjustment layers / non-destructive effects, layer groups, content-aware fill,
       smarter magic wand, more export options (select subject moved to Phase 17 and done)
 

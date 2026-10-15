@@ -680,19 +680,24 @@ mod tests {
     fn design_a_layout() {
         let l = compute(CENTRAL, &input());
         let rail = l.rail.unwrap();
-        assert_eq!(rail.min, pos2(12.0, 52.0));
+        // Everything GAP from the window edges and from each other: rail 52 wide, dock 300,
+        // options bar 48 high.
+        let top = CENTRAL.min.y + GAP;
+        assert_eq!(rail.min, pos2(GAP, top));
         let dock = l.dock.unwrap();
+        let (right, bottom) = (CENTRAL.max.x - GAP, CENTRAL.max.y - GAP);
         assert_eq!(
             dock,
-            Rect::from_min_max(pos2(1128.0, 52.0), pos2(1428.0, 860.0))
+            Rect::from_min_max(pos2(right - 300.0, top), pos2(right, bottom))
         );
+        let (left, middle_right) = (GAP + 52.0 + GAP, right - 300.0 - GAP);
         assert_eq!(
             l.options,
-            Rect::from_min_max(pos2(76.0, 52.0), pos2(1116.0, 100.0))
+            Rect::from_min_max(pos2(left, top), pos2(middle_right, top + 48.0))
         );
         assert_eq!(
             l.free,
-            Rect::from_min_max(pos2(76.0, 112.0), pos2(1116.0, 860.0))
+            Rect::from_min_max(pos2(left, top + 48.0 + GAP), pos2(middle_right, bottom))
         );
         let names: Vec<_> = l.sections.iter().map(|(p, _)| *p).collect();
         assert_eq!(names, DOCK_ORDER);
@@ -709,8 +714,8 @@ mod tests {
         i.visible = [false; 4];
         let l = compute(CENTRAL, &i);
         assert!(l.rail.is_none() && l.dock.is_none() && l.sections.is_empty());
-        assert_eq!(l.free.min.x, 12.0);
-        assert_eq!(l.free.max.x, 1428.0);
+        assert_eq!(l.free.min.x, GAP);
+        assert_eq!(l.free.max.x, CENTRAL.max.x - GAP);
     }
 
     #[test]

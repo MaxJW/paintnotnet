@@ -152,6 +152,25 @@ fn removes_the_background_and_selects_the_subject_with_the_model() {
         ColorBgra::from_rgba(220, 60, 40, 255),
         "colours kept"
     );
+    // Edge colours cleaned up (on by default): pixels partly kept along the apple's side
+    // are apple red, not red mixed with the grey background.
+    let mut soft = 0;
+    for y in 100..140 {
+        for x in 100..120 {
+            let p = s.get(x, y);
+            if p.a > 20 && p.a < 235 {
+                soft += 1;
+                let dist = |c: [i32; 3]| {
+                    (p.r as i32 - c[0]).abs()
+                        + (p.g as i32 - c[1]).abs()
+                        + (p.b as i32 - c[2]).abs()
+                };
+                let (red, grey) = (dist([220, 60, 40]), dist([200, 205, 210]));
+                assert!(red <= 45 && red * 4 < grey, "({x},{y}) {p:?}");
+            }
+        }
+    }
+    assert!(soft > 0, "the matte has a soft edge to check");
 
     // Undo, then Select Subject on the same pixels: no second run needed (cached), and the
     // selection follows the apple.
@@ -202,4 +221,46 @@ fn downloads_the_model_when_asked_then_runs_it() {
         .collect();
     assert_eq!(files.len(), 1, "{files:?}");
     assert!(files[0].starts_with("birefnet-lite-") && files[0].ends_with("-de15b22.onnx"));
+}
+
+/// Settings › AI models lists the models with their sizes and whatever else is in the folder,
+/// and deletes a file after asking.
+#[test]
+fn settings_lists_models_and_deletes_after_asking() {
+    let dir = tempfile::tempdir().unwrap();
+    let lite = dir.path().join("birefnet-lite-fp16-de15b22.onnx");
+    let part = dir.path().join("birefnet-fp16-534d3c8.onnx.part");
+    std::fs::write(&lite, vec![0u8; 5_000_000]).unwrap();
+    std::fs::write(&part, vec![0u8; 2_000_000]).unwrap();
+    let mut h = harness_with(apple());
+    h.state_mut().set_models_dir(dir.path().to_owned());
+    run(&mut h, Command::Settings);
+    h.get_by_label("AI models").click();
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(
+        h.query_by_label("BiRefNet lite (for the GPU), incomplete")
+            .is_some()
+    );
+    assert!(h.query_by_label("BiRefNet (for the CPU)").is_some());
+    assert!(
+        h.query_by_label("birefnet-fp16-534d3c8.onnx.part (unfinished download)")
+            .is_some()
+    );
+    assert!(h.query_by_label("In all: 7 MB").is_some());
+    // Delete the unfinished download: asks, then removes only that file.
+    let deletes: Vec<_> = h.get_all_by_label("Delete").collect();
+    assert_eq!(deletes.len(), 2, "one per file on disk");
+    deletes[1].click();
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(part.exists(), "not before Yes");
+    h.get_by_label("Yes").click();
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(!part.exists() && lite.exists());
+    assert!(h.query_by_label("In all: 5 MB").is_some());
 }

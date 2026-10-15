@@ -93,6 +93,9 @@ pub struct RemoveBackground {
     pub softness: f64,
     /// Keep the background, remove the subject.
     pub invert: bool,
+    /// Use the estimated colours of what's kept where the edge is soft (no fringe of what
+    /// was removed).
+    pub clean_edges: bool,
 }
 
 impl Default for RemoveBackground {
@@ -102,6 +105,7 @@ impl Default for RemoveBackground {
             shift: 0,
             softness: 0.0,
             invert: false,
+            clean_edges: true,
         }
     }
 }
@@ -116,30 +120,50 @@ impl RemoveBackground {
     }
 }
 
-/// The layer with its alpha scaled by a matte.
+/// The layer with its alpha scaled by a matte and, where it's soft, the estimated colours
+/// of what is kept.
 struct MatteAlpha {
     coverage: Vec<u8>,
     width: u32,
+    matte: Arc<crate::ai::Matte>,
+    /// Use the foreground's (or, inverted, the background's) estimated colours.
+    colours: Option<bool>,
 }
 
 impl Renderer for MatteAlpha {
     fn render_row(&self, src: &Surface, x0: u32, y: u32, out: &mut [ColorBgra]) {
         let row = y as usize * self.width as usize;
+        let colours = self.colours.and_then(|bg| {
+            self.matte
+                .colours
+                .get()
+                .map(|c| if bg { &c.background } else { &c.foreground })
+        });
         for (i, o) in out.iter_mut().enumerate() {
             let x = x0 + i as u32;
+            let p = row + x as usize;
             let mut c = src.get(x, y);
-            let k = self.coverage[row + x as usize] as u32;
+            let k = self.coverage[p] as u32;
+            // Only opaque pixels: the estimate was made from the layer over white.
+            if let Some(rgb) = colours
+                && c.a == 255
+                && k < 255
+            {
+                c = ColorBgra::from_rgba(rgb[3 * p], rgb[3 * p + 1], rgb[3 * p + 2], 255);
+            }
             c.a = ((c.a as u32 * k + 127) / 255) as u8;
             *o = c;
         }
     }
 }
 
-fn matte_renderer(matte: &crate::ai::Matte, settings: &RemoveBackground) -> Box<dyn Renderer> {
+fn matte_renderer(matte: &Arc<crate::ai::Matte>, settings: &RemoveBackground) -> Box<dyn Renderer> {
     let (w, h) = (matte.width as usize, matte.height as usize);
     Box::new(MatteAlpha {
         coverage: settings.refine().apply(&matte.coverage, w, h),
         width: matte.width,
+        matte: matte.clone(),
+        colours: settings.clean_edges.then_some(settings.invert),
     })
 }
 
@@ -413,7 +437,7 @@ impl PaintNotNetApp {
         session.values = session.def.defaults_in(&session.env);
         session.custom = target.custom(&session.before, session.env.bounds, &self.ai);
         if let Some(Custom::RemoveBackground(rb)) = &session.custom {
-            session.matte = Some(self.ai.start(ctx, session.before.clone(), rb.quality));
+            session.matte = Some(self.ai.start(ctx, session.before.clone(), rb.quality, true));
         }
         let interactive = !session.def.props.is_empty() || session.custom.is_some();
         self.effect = Some(session);
@@ -497,7 +521,7 @@ impl PaintNotNetApp {
             if let Some(mut s) =
                 self.effect_session(target, def, values, Some(Custom::RemoveBackground(rb)))
             {
-                s.matte = Some(self.ai.start(ctx, s.before.clone(), rb.quality));
+                s.matte = Some(self.ai.start(ctx, s.before.clone(), rb.quality, true));
                 s.spawn(ctx);
                 self.effect = Some(s);
             }
@@ -725,6 +749,11 @@ fn remove_background_ui(
         );
         rb.softness = soft.float();
         ui.checkbox(&mut rb.invert, "Keep the background instead");
+        ui.checkbox(&mut rb.clean_edges, "Clean up edge colours")
+            .on_hover_text(
+                "Where the edge is soft (hair, fur), use the colours of what is kept, without a \
+             fringe of what was removed",
+            );
     });
     download
 }

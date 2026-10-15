@@ -4,12 +4,14 @@
 //! the first time a model is needed; models are fetched only when the user agrees, checked
 //! by SHA-256 and kept in [`models_dir`].
 
+pub mod foreground;
 pub mod models;
 pub mod prep;
 pub mod refine;
 pub mod runtime;
 pub mod worker;
 
+pub use foreground::EdgeColours;
 pub use models::{
     DownloadError, MODELS, Model, Precision, Progress, Quality, download, models_dir,
 };

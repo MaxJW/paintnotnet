@@ -62,6 +62,28 @@ fn main() {
                 );
                 drop(r);
             }
+            let t = Instant::now();
+            let colours = pnn_ai::foreground::estimate(img.as_raw(), &m.coverage, w, h);
+            println!("edge colours: {:?}", t.elapsed());
+            // The cut-out over magenta, plain and with cleaned-up edge colours, side by side.
+            if let Some(path) = std::env::var_os("PNN_SEGMENT_COMPARE") {
+                let mut out = image::RgbImage::new(2 * w as u32, h as u32);
+                for (i, &k) in m.coverage.iter().enumerate() {
+                    let a = k as f32 / 255.0;
+                    let over = |c: u8, bg: f32| (c as f32 * a + bg * (1.0 - a)).round() as u8;
+                    let bg = [255.0, 0.0, 255.0];
+                    let (x, y) = ((i % w) as u32, (i / w) as u32);
+                    let raw = &img.as_raw()[3 * i..3 * i + 3];
+                    let fg = &colours.foreground[3 * i..3 * i + 3];
+                    out.put_pixel(x, y, image::Rgb([0, 1, 2].map(|c| over(raw[c], bg[c]))));
+                    out.put_pixel(
+                        x + w as u32,
+                        y,
+                        image::Rgb([0, 1, 2].map(|c| over(fg[c], bg[c]))),
+                    );
+                }
+                out.save(path).expect("save compare");
+            }
             image::GrayImage::from_raw(w as u32, h as u32, m.coverage)
                 .expect("size")
                 .save(output)

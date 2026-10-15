@@ -32,6 +32,9 @@ pub struct Matte {
     pub device: Device,
     /// How long the model took (not counting loading it).
     pub took: Duration,
+    /// The subject's and the background's own colours where the matte is soft (Remove
+    /// Background's edge clean-up), worked out once, on the job's thread, when first needed.
+    pub colours: std::sync::OnceLock<pnn_ai::EdgeColours>,
 }
 
 type CacheKey = (u64, u32, u32, Quality);
@@ -122,10 +125,18 @@ impl Ai {
         }
     }
 
-    /// Start finding the subject of `source`.
-    pub fn start(&self, ctx: &egui::Context, source: Surface, quality: Quality) -> MatteJob {
+    /// Start finding the subject of `source`; with `colours`, also its edge colours (the job
+    /// is ready once both are).
+    pub fn start(
+        &self,
+        ctx: &egui::Context,
+        source: Surface,
+        quality: Quality,
+        colours: bool,
+    ) -> MatteJob {
         let mut job = MatteJob {
             quality,
+            colours,
             source,
             stage: Stage::Working,
             rx: None,
@@ -154,6 +165,8 @@ enum Msg {
 /// Finding one image's subject.
 pub struct MatteJob {
     pub quality: Quality,
+    /// Work out the edge colours too.
+    colours: bool,
     source: Surface,
     pub stage: Stage,
     rx: Option<Receiver<Msg>>,
@@ -253,8 +266,24 @@ impl MatteJob {
         let (shared, source, ctx) = (ai.shared.clone(), self.source.clone(), ctx.clone());
         let path = model.path_in(&ai.dir);
         let exe = ai.worker_exe.clone();
+        let colours = self.colours;
         std::thread::spawn(move || {
-            let result = find_subject(&shared, &source, model, &path, &exe);
+            let result = find_subject(&shared, &source, model, &path, &exe).map(|(m, rgb)| {
+                if colours {
+                    m.colours.get_or_init(|| {
+                        let t = Instant::now();
+                        let c = pnn_ai::foreground::estimate(
+                            &rgb,
+                            &m.coverage,
+                            m.width as usize,
+                            m.height as usize,
+                        );
+                        log::info!("AI: edge colours took {:?}", t.elapsed());
+                        c
+                    });
+                }
+                m
+            });
             let _ = tx.send(Msg::Done(result));
             ctx.request_repaint();
         });
@@ -308,7 +337,7 @@ fn find_subject(
     model: Model,
     path: &std::path::Path,
     exe: &std::path::Path,
-) -> Result<Arc<Matte>, String> {
+) -> Result<(Arc<Matte>, Vec<u8>), String> {
     use std::hash::{Hash, Hasher};
     let (w, h) = (source.width(), source.height());
     let rgb = rgb_over_white(source);
@@ -320,7 +349,7 @@ fn find_subject(
         .map_err(|_| "the AI state was poisoned".to_owned())?;
     s.last_used = Some(Instant::now());
     if let Some((_, m)) = s.cache.iter().find(|(k, _)| *k == key) {
-        return Ok(m.clone());
+        return Ok((m.clone(), rgb));
     }
     let device = pnn_ai::runtime().map_err(|e| e.to_string())?.device;
     // A helper that died (or a first run): start one. One retry if it stops mid-request.
@@ -357,6 +386,7 @@ fn find_subject(
         model,
         device: m.device,
         took: m.took,
+        colours: Default::default(),
     });
     log::info!(
         "AI: {} on {} took {:?} ({:?} with loading and transfer) for {w}×{h}",
@@ -370,11 +400,63 @@ fn find_subject(
         s.cache.remove(0);
     }
     s.last_used = Some(Instant::now());
-    Ok(matte)
+    Ok((matte, rgb))
+}
+
+/// A file in the models folder, or a model that could be there.
+pub struct ModelFile {
+    pub label: String,
+    pub path: PathBuf,
+    /// Bytes on disk; `None` = not downloaded.
+    pub size: Option<u64>,
+}
+
+/// The models we can use (downloaded or not), then anything else in `dir`: older versions,
+/// unfinished downloads.
+pub fn model_files(dir: &std::path::Path) -> Vec<ModelFile> {
+    let mut out: Vec<ModelFile> = pnn_ai::MODELS
+        .iter()
+        .map(|m| {
+            let path = m.path_in(dir);
+            let size = std::fs::metadata(&path).ok().map(|md| md.len());
+            let precision = match m.precision {
+                pnn_ai::Precision::Fp16 => "for the GPU",
+                pnn_ai::Precision::Fp32 => "for the CPU",
+            };
+            let mut label = format!("{} ({precision})", m.name());
+            if size.is_some_and(|s| s != m.size) {
+                label.push_str(", incomplete");
+            }
+            ModelFile { label, path, size }
+        })
+        .collect();
+    let mut others: Vec<ModelFile> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .filter(|e| !out.iter().any(|f| f.path == e.path()))
+        .map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let label = if name.ends_with(".part") {
+                format!("{name} (unfinished download)")
+            } else {
+                format!("{name} (not used)")
+            };
+            ModelFile {
+                label,
+                path: e.path(),
+                size: e.metadata().ok().map(|m| m.len()),
+            }
+        })
+        .collect();
+    others.sort_by(|a, b| a.label.cmp(&b.label));
+    out.extend(others);
+    out
 }
 
 /// `dir` with the home folder as `~`.
-fn tilde(dir: &std::path::Path) -> String {
+pub fn tilde(dir: &std::path::Path) -> String {
     match std::env::var_os("HOME").and_then(|h| dir.strip_prefix(h).ok().map(|p| p.to_owned())) {
         Some(rest) => format!("~/{}", rest.display()),
         None => dir.display().to_string(),
@@ -452,7 +534,7 @@ impl crate::app::PaintNotNetApp {
             return;
         };
         let image = pnn_core::flatten(&tab.doc);
-        let job = self.ai.start(ctx, image, self.ai.default_quality());
+        let job = self.ai.start(ctx, image, self.ai.default_quality(), false);
         self.select_subject = Some(SubjectSession { key: tab.key, job });
         // With the model at hand and the image cached this finishes at once.
         self.run_select_subject(ctx);

@@ -10,9 +10,19 @@ use crate::commands::{Chord, Command, Triggered};
 use crate::config::{Appearance, MouseWheel};
 use crate::menus::{all_commands, command_label};
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Tab {
+    #[default]
+    General,
+    Keyboard,
+    Models,
+}
+
 #[derive(Default)]
 pub struct SettingsState {
-    keyboard_tab: bool,
+    tab: Tab,
+    /// AI models: the file whose Delete was pressed, waiting for Yes.
+    confirm_delete: Option<std::path::PathBuf>,
     /// The search box has been focused since the Keyboard tab opened.
     search_focused: bool,
     search: String,
@@ -128,16 +138,19 @@ impl PaintNotNetApp {
                 .default_pos(ctx.content_rect().center()),
             |ui| {
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut st.keyboard_tab, false, "General");
+                    ui.selectable_value(&mut st.tab, Tab::General, "General");
                     if ui
-                        .selectable_value(&mut st.keyboard_tab, true, "Keyboard")
+                        .selectable_value(&mut st.tab, Tab::Keyboard, "Keyboard")
                         .clicked()
                     {
                         st.search_focused = false;
                     }
+                    ui.selectable_value(&mut st.tab, Tab::Models, "AI models");
                 });
                 ui.separator();
-                if !st.keyboard_tab {
+                if st.tab == Tab::Models {
+                    self.models_tab_ui(ui, &mut st);
+                } else if st.tab == Tab::General {
                     ui.label(egui::RichText::new("Appearance").strong());
                     ui.horizontal(|ui| {
                         for (a, name) in [
@@ -207,6 +220,73 @@ impl PaintNotNetApp {
         }
         if open {
             self.settings_open = Some(st);
+        }
+    }
+
+    /// The AI models tab: where they're kept, what runs them, each file with its size and a
+    /// Delete button (asks first).
+    fn models_tab_ui(&mut self, ui: &mut egui::Ui, st: &mut SettingsState) {
+        let dir = self.ai.models_dir().to_owned();
+        ui.label(
+            "Remove Background and Select Subject run these models on this computer. They are \
+             downloaded when first needed, after asking.",
+        );
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(format!("Kept in {}", crate::ai::tilde(&dir))).weak());
+        ui.label(
+            egui::RichText::new(match pnn_ai::runtime() {
+                Ok(rt) => format!("Runs on the {}", rt.device.label()),
+                Err(e) => e.to_string(),
+            })
+            .weak(),
+        );
+        ui.add_space(8.0);
+        let files = crate::ai::model_files(&dir);
+        let mut delete = None;
+        egui::Grid::new("model_files")
+            .num_columns(3)
+            .spacing(egui::vec2(16.0, 8.0))
+            .show(ui, |ui| {
+                for f in &files {
+                    ui.label(&f.label)
+                        .on_hover_text(f.path.display().to_string());
+                    ui.label(match f.size {
+                        Some(s) => crate::ai::megabytes(s),
+                        None => "not downloaded".to_owned(),
+                    });
+                    if f.size.is_some() {
+                        if st.confirm_delete.as_ref() == Some(&f.path) {
+                            ui.horizontal(|ui| {
+                                ui.label("Delete?");
+                                if ui.button("Yes").clicked() {
+                                    delete = Some(f.path.clone());
+                                }
+                                if ui.button("No").clicked() {
+                                    st.confirm_delete = None;
+                                }
+                            });
+                        } else if ui.button("Delete").clicked() {
+                            st.confirm_delete = Some(f.path.clone());
+                        }
+                    } else {
+                        ui.label("");
+                    }
+                    ui.end_row();
+                }
+            });
+        let total: u64 = files.iter().filter_map(|f| f.size).sum();
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new(format!("In all: {}", crate::ai::megabytes(total))).weak());
+        if let Some(path) = delete {
+            st.confirm_delete = None;
+            // The helper may have it open; end it first (Linux would keep the data until then).
+            self.ai.unload();
+            if let Err(e) = std::fs::remove_file(&path) {
+                self.errors.push((
+                    "AI models".into(),
+                    format!("Couldn't delete {}: {e}", path.display()),
+                ));
+            }
         }
     }
 

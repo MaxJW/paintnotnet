@@ -48,3 +48,14 @@ Lucide icons 1.48.0 (https://github.com/lucide-icons/lucide), the UI's icons, ar
 unmodified from assets/icons/lucide/. Copyright (c) 2026 Lucide Icons and Contributors, ISC
 License; icons derived from Feather are Copyright (c) 2013-present Cole Bemis, MIT License.
 Both licences are in full in assets/icons/lucide/LICENSE.
+
+-------------------------------------------------------------------------------
+
+PyMatting (https://github.com/pymatting/pymatting). Remove Background's edge colour clean-up
+(crates/pnn-ai/src/foreground.rs) is ported from pymatting/foreground/estimate_foreground_ml.py
+at commit 6d5c4a6, an implementation of "Fast Multi-Level Foreground Estimation" (Germer,
+Uelwer, Conrad, Harmeling, ICPR 2020).
+
+Copyright (c) 2020 PyMatting
+
+Used under the MIT License (text above).
