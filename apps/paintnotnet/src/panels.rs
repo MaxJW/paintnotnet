@@ -18,11 +18,11 @@ use crate::config::Dock;
 use crate::theme::{self, Palette};
 
 /// Gap between the window edges, the islands and the free canvas area.
-pub const GAP: f32 = 12.0;
+pub const GAP: f32 = 16.0;
 /// Gap between the sections stacked in the dock.
-pub const STACK_GAP: f32 = 8.0;
+pub const STACK_GAP: f32 = 12.0;
 /// Height of a dock section's title row.
-pub const HEADER: f32 = 36.0;
+pub const HEADER: f32 = 40.0;
 const MIN_DOCK_WIDTH: f32 = 240.0;
 const MAX_DOCK_WIDTH: f32 = 520.0;
 /// Smallest height of a section's body below its title.
@@ -388,7 +388,7 @@ impl Panels {
         };
         let visible = self.visible(Panel::Tools);
         let max_height = self.layout.free.max.y - rail.min.y;
-        let margin = egui::Margin::symmetric(8, 8);
+        let margin = egui::Margin::symmetric(10, 10);
         let response = egui::Area::new(egui::Id::new("tool_rail"))
             .fixed_pos(rail.min - vec2((1.0 - fade) * 8.0, 0.0))
             .constrain(false)
@@ -421,7 +421,7 @@ impl Panels {
         if rect.width() < 40.0 {
             return;
         }
-        let margin = egui::Margin::symmetric(10, 8);
+        let margin = egui::Margin::symmetric(14, 10);
         let response = egui::Area::new(egui::Id::new("tool_options"))
             .fixed_pos(rect.min)
             .constrain(false)
@@ -492,14 +492,21 @@ impl Panels {
                                 }
                             } else {
                                 egui::Margin {
-                                    left: 6,
-                                    right: 6,
+                                    left: 10,
+                                    right: 10,
                                     top: 0,
-                                    bottom: 8,
+                                    bottom: 12,
                                 }
                             };
                             egui::Frame::new().inner_margin(margin).show(ui, |ui| {
-                                ui.spacing_mut().item_spacing.y = theme::space::S + 2.0;
+                                // Colors is tall already: its rows stay as compact as they
+                                // were, so Layers and History keep their room.
+                                if panel == Panel::Colors {
+                                    ui.spacing_mut().item_spacing.y = theme::space::S + 2.0;
+                                    ui.spacing_mut().interact_size.y = 26.0;
+                                } else {
+                                    ui.spacing_mut().item_spacing.y = theme::space::M;
+                                }
                                 ui.set_width(ui.available_width());
                                 contents(panel, Part::Body, ui)
                             });

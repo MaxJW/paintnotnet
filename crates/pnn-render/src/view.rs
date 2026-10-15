@@ -84,16 +84,14 @@ impl View {
         }
     }
 
-    /// Centre axes where the image fits. Otherwise the image may be scrolled until its edge
-    /// reaches the middle of the viewport (paint.net stops at the edge; the user asked for
-    /// room to work near the edges), so the view centre stays inside the image.
-    pub fn clamp(&mut self, image: [f64; 2], viewport: [f64; 2]) {
-        for axis in 0..2 {
-            self.center[axis] = if image[axis] * self.zoom <= viewport[axis] {
-                image[axis] / 2.0
-            } else {
-                self.center[axis].clamp(0.0, image[axis])
-            };
+    /// The image may be scrolled until its edge reaches the middle of the viewport, so the
+    /// view centre stays inside the image (paint.net stops at the edge; the user asked for
+    /// room to work near the edges). This holds whether or not the image fits: paint.net
+    /// pins a fitting image in the middle, but the user wants to drag it about too
+    /// (2026-10-15). Fit to Window still centres it.
+    pub fn clamp(&mut self, image: [f64; 2], _viewport: [f64; 2]) {
+        for (c, &len) in self.center.iter_mut().zip(&image) {
+            *c = c.clamp(0.0, len);
         }
     }
 
@@ -225,11 +223,19 @@ mod tests {
     }
 
     #[test]
-    fn small_images_stay_centred() {
-        let mut v = View::fitted([200.0, 100.0], VP);
-        v.scroll_by([500.0, 500.0], [200.0, 100.0], VP);
-        assert_eq!(v.center, [100.0, 50.0]);
-        assert_eq!(v.image_to_screen([0.0, 0.0], VP), [700.0, 450.0]);
+    fn small_images_pan_until_their_edge_is_mid_viewport() {
+        let small = [200.0, 100.0];
+        let mut v = View::fitted(small, VP);
+        assert_eq!(v.center, [100.0, 50.0], "fitted: centred");
+        // A little: it moves.
+        v.scroll_by([30.0, -20.0], small, VP);
+        assert_eq!(v.center, [130.0, 30.0]);
+        // A lot: it stops with its far edge at the middle of the view.
+        v.scroll_by([500.0, 500.0], small, VP);
+        assert_eq!(v.center, [200.0, 100.0]);
+        assert_eq!(v.image_to_screen(small, VP), [VP[0] / 2.0, VP[1] / 2.0]);
+        // Fit to Window centres it again.
+        assert_eq!(View::fitted(small, VP).center, [100.0, 50.0]);
     }
 
     #[test]

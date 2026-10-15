@@ -48,7 +48,7 @@ pub mod motion {
 /// Heights of the fixed bands, in points.
 pub mod size {
     /// Height of buttons, text boxes and list rows.
-    pub const CONTROL: f32 = 26.0;
+    pub const CONTROL: f32 = 28.0;
 }
 
 /// Font family for medium-weight text (labels that need a little emphasis).
@@ -268,11 +268,11 @@ pub fn setup(ctx: &egui::Context) {
             .text_styles
             .insert(TextStyle::Monospace, FontId::monospace(text::MONO));
         let s = &mut style.spacing;
-        s.item_spacing = egui::vec2(space::M, space::S + 2.0);
-        s.button_padding = egui::vec2(space::M + 2.0, space::S);
+        s.item_spacing = egui::vec2(space::M + 2.0, space::M);
+        s.button_padding = egui::vec2(space::L, space::S + 1.0);
         s.interact_size.y = size::CONTROL;
-        s.menu_margin = Margin::same(6);
-        s.window_margin = Margin::same(space::L as i8);
+        s.menu_margin = Margin::same(8);
+        s.window_margin = Margin::same(space::XL as i8);
         s.slider_rail_height = 4.0;
         s.icon_width = 16.0;
         s.icon_width_inner = 9.0;
@@ -280,7 +280,9 @@ pub fn setup(ctx: &egui::Context) {
         s.menu_width = 220.0;
         s.scroll = egui::style::ScrollStyle::floating();
         style.animation_time = motion::FAST;
-        style.interaction.tooltip_delay = 0.5;
+        // Quick to explain an icon; once one tooltip is up, its neighbours show at once.
+        style.interaction.tooltip_delay = 0.15;
+        style.interaction.tooltip_grace_time = 0.6;
     });
     ctx.set_visuals_of(egui::Theme::Dark, Palette::dark().visuals());
     ctx.set_visuals_of(egui::Theme::Light, Palette::light().visuals());

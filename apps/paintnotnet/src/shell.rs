@@ -64,12 +64,17 @@ pub fn image_list(ui: &mut egui::Ui, ws: &Workspace, palette: &Palette) -> Vec<I
                 for (i, (tab, &w)) in ws.tabs().iter().zip(&widths).enumerate() {
                     let selected = ws.active_index() == Some(i);
                     let id = egui::Id::new(("image_list_item", tab.key));
-                    let mut close_rect = None;
-                    let item = ui
-                        .dnd_drag_source(id, i, |ui| {
-                            close_rect = tab_chip(ui, tab, selected, w, palette);
-                        })
-                        .response;
+                    let (rect, close_rect) = tab_chip(ui, tab, selected, w, palette);
+                    // Clicks and drags both: a press only becomes a drag (reordering) once the
+                    // pointer moves, so a plain click switches images. (egui's
+                    // `dnd_drag_source` senses drags only, which turned every click into one.)
+                    let item = ui.interact(rect, id, Sense::click_and_drag());
+                    if item.drag_started_by(egui::PointerButton::Primary) {
+                        egui::DragAndDrop::set_payload(ui.ctx(), i);
+                    }
+                    if item.dragged_by(egui::PointerButton::Primary) {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    }
                     // After the tab, so the button gets the clicks over it.
                     let close = close_rect.is_some_and(|r| close_button(ui, r, tab.key, palette));
                     let title = tab.title();
@@ -99,14 +104,14 @@ pub fn image_list(ui: &mut egui::Ui, ws: &Workspace, palette: &Palette) -> Vec<I
     actions
 }
 
-/// One tab. Returns where its close button goes when it should show one.
+/// One tab. Returns its rect and where its close button goes when it should show one.
 fn tab_chip(
     ui: &mut egui::Ui,
     tab: &DocumentTab,
     selected: bool,
     width: f32,
     palette: &Palette,
-) -> Option<Rect> {
+) -> (Rect, Option<Rect>) {
     let (rect, _) = ui.allocate_exact_size(vec2(width, TAB_HEIGHT), Sense::hover());
     let hovered = ui.rect_contains_pointer(rect);
     if selected {
@@ -145,12 +150,13 @@ fn tab_chip(
         galley,
         text_color,
     );
-    (selected || hovered).then(|| {
+    let close = (selected || hovered).then(|| {
         Rect::from_center_size(
             pos2(rect.max.x - 4.0 - CLOSE / 2.0, rect.center().y),
             vec2(CLOSE, CLOSE),
         )
-    })
+    });
+    (rect, close)
 }
 
 fn close_button(ui: &mut egui::Ui, rect: Rect, key: u64, palette: &Palette) -> bool {

@@ -49,7 +49,8 @@ impl Rendered {
 /// The app showing `test_doc()` at `zoom`, nothing covering the canvas.
 fn setup(zoom: f64, grid: bool) -> Harness<'static, PaintNotNetApp> {
     let mut h = Harness::builder()
-        .with_size(vec2(640.0, 480.0))
+        // Wide and tall enough that the options bar stays on two rows above the image.
+        .with_size(vec2(960.0, 640.0))
         .wgpu()
         .build_eframe(|cc| PaintNotNetApp::new(cc, None, Vec::new()));
     h.state_mut().workspace_mut().add(test_doc(), None, None);

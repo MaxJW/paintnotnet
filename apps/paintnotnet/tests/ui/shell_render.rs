@@ -67,8 +67,9 @@ fn docked_shell_matches_design_a() {
         "stacked in order"
     );
     assert_eq!(colors.x_range(), history.x_range(), "one column");
+    // 305 px before the roomier spacing (2026-10-15), which costs ~26 px of height here.
     assert!(
-        (history.max.y - layers.min.y) > 300.0,
+        (history.max.y - layers.min.y) > 270.0,
         "Layers and History fill the dock"
     );
     // Zoomed in, the (white) image runs on under the panels, which show it as glass that

@@ -8,9 +8,11 @@ pub mod models;
 pub mod prep;
 pub mod refine;
 pub mod runtime;
+pub mod worker;
 
 pub use models::{
     DownloadError, MODELS, Model, Precision, Progress, Quality, download, models_dir,
 };
 pub use refine::Refine;
 pub use runtime::{AiError, Device, Runtime, Segmenter, runtime};
+pub use worker::Worker;

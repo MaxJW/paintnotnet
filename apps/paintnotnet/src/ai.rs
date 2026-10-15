@@ -3,9 +3,11 @@
 //!
 //! A [`MatteJob`] goes from asking to download the model (nothing is fetched until the user
 //! agrees), through downloading and running it, to a matte: the subject's coverage, 0–255
-//! per pixel. The loaded model is shared and kept for a while after use (loading it takes
-//! seconds); mattes are cached by the pixels they came from, so changing settings or running
-//! Select Subject after Remove Background on the same pixels doesn't run the model again.
+//! per pixel. The model runs in a helper process (paintnotnet started with `--ai-worker`, see
+//! `pnn_ai::worker`), kept for a while after use (loading takes seconds) and ended when idle,
+//! which frees its GPU memory; mattes are cached by the pixels they came from, so changing
+//! settings or running Select Subject after Remove Background on the same pixels doesn't run
+//! the model again.
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, channel};
@@ -13,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
-use pnn_ai::{Device, Model, Progress, Quality, Segmenter};
+use pnn_ai::{Device, Model, Progress, Quality, Worker};
 use pnn_core::Surface;
 
 /// Free the model (and the GPU memory it holds) after this long unused.
@@ -34,9 +36,12 @@ pub struct Matte {
 
 type CacheKey = (u64, u32, u32, Quality);
 
+/// The argument that makes paintnotnet run as the AI helper (handled first thing in `main`).
+pub const WORKER_ARG: &str = "--ai-worker";
+
 #[derive(Default)]
 struct Shared {
-    segmenter: Option<Segmenter>,
+    worker: Option<Worker>,
     cache: Vec<(CacheKey, Arc<Matte>)>,
     last_used: Option<Instant>,
 }
@@ -45,14 +50,13 @@ struct Shared {
 pub struct Ai {
     shared: Arc<Mutex<Shared>>,
     dir: PathBuf,
+    /// The program started as the helper (this one; tests point it at the built app).
+    worker_exe: PathBuf,
 }
 
 impl Default for Ai {
     fn default() -> Self {
-        Self {
-            shared: Default::default(),
-            dir: pnn_ai::models_dir(),
-        }
+        Self::with_dir(pnn_ai::models_dir())
     }
 }
 
@@ -62,7 +66,13 @@ impl Ai {
         Self {
             shared: Default::default(),
             dir,
+            worker_exe: std::env::current_exe().unwrap_or_else(|_| "paintnotnet".into()),
         }
+    }
+
+    /// Start `exe` as the helper (tests: the built app rather than the test binary).
+    pub fn set_worker_exe(&mut self, exe: PathBuf) {
+        self.worker_exe = exe;
     }
 
     pub fn models_dir(&self) -> &std::path::Path {
@@ -97,18 +107,18 @@ impl Ai {
     /// Unload the model once it has been idle a while (called every frame).
     pub fn tick(&self) {
         if let Ok(mut s) = self.shared.try_lock()
-            && s.segmenter.is_some()
+            && s.worker.is_some()
             && s.last_used.is_some_and(|t| t.elapsed() > KEEP_LOADED)
         {
-            log::info!("AI: unloading the idle model");
-            s.segmenter = None;
+            log::info!("AI: ending the idle helper");
+            s.worker = None;
         }
     }
 
     /// Unload now (exit).
     pub fn unload(&self) {
         if let Ok(mut s) = self.shared.lock() {
-            s.segmenter = None;
+            s.worker = None;
         }
     }
 
@@ -242,8 +252,9 @@ impl MatteJob {
         self.stage = Stage::Working;
         let (shared, source, ctx) = (ai.shared.clone(), self.source.clone(), ctx.clone());
         let path = model.path_in(&ai.dir);
+        let exe = ai.worker_exe.clone();
         std::thread::spawn(move || {
-            let result = find_subject(&shared, &source, model, &path);
+            let result = find_subject(&shared, &source, model, &path, &exe);
             let _ = tx.send(Msg::Done(result));
             ctx.request_repaint();
         });
@@ -296,6 +307,7 @@ fn find_subject(
     source: &Surface,
     model: Model,
     path: &std::path::Path,
+    exe: &std::path::Path,
 ) -> Result<Arc<Matte>, String> {
     use std::hash::{Hash, Hasher};
     let (w, h) = (source.width(), source.height());
@@ -310,30 +322,48 @@ fn find_subject(
     if let Some((_, m)) = s.cache.iter().find(|(k, _)| *k == key) {
         return Ok(m.clone());
     }
-    if s.segmenter.as_ref().is_none_or(|seg| seg.model != model) {
-        s.segmenter = None;
+    let device = pnn_ai::runtime().map_err(|e| e.to_string())?.device;
+    // A helper that died (or a first run): start one. One retry if it stops mid-request.
+    let mut attempt = 0;
+    let got = loop {
+        if s.worker.is_none() {
+            s.worker = Some(
+                Worker::spawn(exe, WORKER_ARG, device)
+                    .map_err(|e| format!("couldn't start the AI helper: {e}"))?,
+            );
+        }
+        let worker = s.worker.as_mut().expect("started above");
         let t = Instant::now();
-        s.segmenter = Some(Segmenter::load(model, path).map_err(|e| e.to_string())?);
-        log::info!("AI: loaded {} in {:?}", model.file_name(), t.elapsed());
-    }
-    let seg = s.segmenter.as_mut().expect("loaded above");
-    let t = Instant::now();
-    let coverage = seg
-        .matte(&rgb, w as usize, h as usize)
-        .map_err(|e| e.to_string())?;
+        match worker.matte(model, path, &rgb, w, h) {
+            Ok(m) => break (m, t.elapsed()),
+            Err(pnn_ai::AiError::Run(e))
+                if e.starts_with("the AI helper stopped") && attempt == 0 =>
+            {
+                log::warn!("AI: {e}; starting it again");
+                s.worker = None;
+                attempt += 1;
+            }
+            Err(e) => {
+                s.worker = None;
+                return Err(e.to_string());
+            }
+        }
+    };
+    let (m, total) = got;
     let matte = Arc::new(Matte {
         width: w,
         height: h,
-        coverage,
+        coverage: m.coverage,
         model,
-        device: seg.device,
-        took: t.elapsed(),
+        device: m.device,
+        took: m.took,
     });
     log::info!(
-        "AI: {} on {} took {:?} for {w}×{h}",
+        "AI: {} on {} took {:?} ({:?} with loading and transfer) for {w}×{h}",
         model.name(),
-        seg.device.label(),
-        matte.took
+        m.device.label(),
+        matte.took,
+        total
     );
     s.cache.push((key, matte.clone()));
     if s.cache.len() > CACHED {

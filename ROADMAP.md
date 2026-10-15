@@ -611,10 +611,13 @@ Select Subject was moved in from the Phase 18 ideas (user, 2026-10-14: "include 
       (`PNN_AI_CPU=1` forces the CPU), else the CPU; fp16 models on the GPU, fp32 on the CPU. Input: the image over
       white, scaled to 1024² with a widened triangle filter (as PIL's bilinear, which the models' processor uses),
       ImageNet mean/std (`preprocessor_config.json`); output: sigmoid of the logits, scaled back to the image size
-- [x] **Arch packaging bug worked around:** `onnxruntime-opt-cuda` 1.29.0-3's CUDA provider uses cuDNN without listing
-      `libcudnn.so.9` as a dependency ("undefined symbol: cudnnGetConvolutionBackwardDataAlgorithm_v7", so CUDA failed
-      and everything ran on the CPU at 16 s an image). `pnn-ai` loads the system cuDNN `RTLD_GLOBAL` first: one
-      `unsafe` call (`runtime.rs`, `preload_cudnn`), the only one outside `wayland.rs`. Worth reporting to Arch
+- [x] **Arch packaging bug worked around, without `unsafe`:** `onnxruntime-opt-cuda` 1.29.0-3's CUDA provider uses
+      cuDNN without listing `libcudnn.so.9` as a dependency ("undefined symbol:
+      cudnnGetConvolutionBackwardDataAlgorithm_v7", so CUDA failed and everything ran on the CPU at 16 s an image).
+      The model runs in a helper process (paintnotnet started with `--ai-worker`, `pnn_ai::worker`; images and
+      mattes over a pipe) started with `LD_PRELOAD=libcudnn.so.9` when CUDA is used. (A first version loaded cuDNN
+      with one `unsafe` dlopen; the user preferred no `unsafe`, 2026-10-15.) The helper also frees the GPU memory
+      when it ends (2 minutes idle, or on exit) and keeps a driver crash out of the editor. Worth reporting to Arch
 - [x] **Models** downloaded only when the user presses Download in the dialog (it says what, how big, from where,
       where it's kept, and that the image never leaves the computer), streamed to a `.part` file while hashed, checked
       against the size and SHA-256 Hugging Face lists for the pinned revision, then renamed into place;
@@ -631,7 +634,7 @@ Select Subject was moved in from the Phase 18 ideas (user, 2026-10-14: "include 
       traced along the matte's 50 % line between pixel centres (marching squares, saddles decided by the cell
       centre, image corners kept square), so curved edges are smooth rather than pixel steps
       (`Selection::from_coverage`). One history step
-- [x] The loaded model is shared, kept 2 minutes after use (loading takes 2.5–3 s), freed on exit; mattes are cached
+- [x] The helper (with its loaded model) is kept 2 minutes after use (loading takes 2.5–3 s), ended on exit; mattes are cached
       by the pixels they came from (4 kept), so Select Subject after Remove Background on the same pixels, or
       reopening the dialog, doesn't run the model again
 - [x] PKGBUILD: `optdepends` onnxruntime (onnxruntime-cuda / onnxruntime-opt-cuda for NVIDIA). Icons: Lucide 1.48.0
@@ -642,7 +645,8 @@ Select Subject was moved in from the Phase 18 ideas (user, 2026-10-14: "include 
   a 320 × 240 image takes 0.29 s (lite) / 0.52 s (best), so the 1024² model dominates. Edge controls on that photo:
   shift 30 px 28 ms (250 ms before skipping flat areas), softness 61 ms, both 92 ms. Screenshots of the real app:
   Remove Background's live preview on the photo (165 fps with the dialog open), Select Subject's outline around the
-  person (164 fps), and the download question with an empty models folder (nothing fetched). Tests: matte maths
+  person (164 fps), and the download question with an empty models folder (nothing fetched). Through the helper
+  process: 0.60 s in the model, 0.64 s with the 20 MP image sent and the matte returned over the pipe. Tests: matte maths
   (resampling, normalisation, sigmoid, disc shift against brute force, softness width), download (good file lands;
   wrong hash, wrong size and cancel leave nothing), marching squares (disc area within 0.5 %, points within 0.1 px of
   the circle, holes, all-saddle checkerboard, full image = its rectangle), UI: both commands ask before downloading
@@ -655,11 +659,32 @@ Select Subject was moved in from the Phase 18 ideas (user, 2026-10-14: "include 
 - `crates/pnn-ai/examples/segment.rs`: `segment IN OUT [best|fast] [MODEL_DIR]` prints load, run and edge-control
   timings
 
+### Requested after Phase 17 (2026-10-15) ✅
+- [x] **Tabs:** a click on another image's tab switched nothing; the tab used egui's `dnd_drag_source`, which senses
+      drags only, so every press lifted the tab. Tabs now sense clicks and drags: a press becomes a drag (reorder)
+      only once the pointer moves
+- [x] **Tooltips** after 0.15 s (was 0.5); once one is up, the next shows at once for 0.6 s
+- [x] **Roomier UI:** gaps between panels 12 → 16 px (stacked sections 8 → 12), panel padding up, controls 26 → 28 px
+      tall, more space between items, options bar groups 12 → 18 px apart, title bar 40 → 44, status bar 28 → 30.
+      Colors keeps its compact rows so Layers and History don't shrink more than the gaps cost (~26 px at 867 px
+      tall). Found on the way: the menu bar's width was estimated with the global button padding rather than egui's
+      menu style (2 px), reserving ~110 px too much, so a tab could be cut off; it now uses the menu style
+- [x] **Pan a small image:** an image that fits the window can be dragged about (middle drag, Space+drag) until its
+      edge reaches the middle of the view, the same limit as a large image; Fit to Window centres it again (paint.net
+      pins it in the middle)
+- **Verified 2026-10-15:** UI tests: a plain click on a tab switches to it and a drag reorders (failed before the
+  fix); a tab that fits isn't clipped (failed before); middle-dragging a small image moves it 20 × 10 px at 400 %
+  (failed before); the edge strips ask for the right resize cursor on hover. Screenshots before and after the
+  spacing pass. All 133 UI tests pass
+- [ ] **Resize cursors at the window's edges** don't show until you click (reported by the user). The app asks for
+      them on hover (UI test), so it is between egui-winit/winit and KWin; not reproduced yet (needs the real pointer)
+
 ## Phase 18: Enhanced features (to agree)
+- [ ] Agreed 2026-10-15 ("I like both your ideas"): edge colour clean-up for Remove Background (estimating the
+      foreground colour in soft edges so hair doesn't keep a fringe of the old background), and a Settings page
+      listing downloaded models with their sizes and a Delete button
 - [ ] Ideas to discuss, not yet agreed: adjustment layers / non-destructive effects, layer groups, content-aware fill,
-      smarter magic wand, more export options (select subject moved to Phase 17 and done). From Phase 17: edge colour
-      clean-up for Remove Background (estimating the foreground colour in soft edges so hair doesn't keep a fringe of
-      the old background), a Settings page listing downloaded models with their sizes and a Delete button
+      smarter magic wand, more export options (select subject moved to Phase 17 and done)
 
 ---
 

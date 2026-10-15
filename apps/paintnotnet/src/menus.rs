@@ -590,7 +590,10 @@ pub fn help_button(
 
 /// Natural width of the menu bar (egui's `MenuBar` otherwise takes all the width it gets).
 pub fn menu_bar_width(ui: &egui::Ui) -> f32 {
-    let pad = ui.spacing().button_padding.x * 2.0 + ui.spacing().item_spacing.x;
+    // The bar's buttons use egui's menu style (its own, smaller button padding).
+    let mut style = (**ui.style()).clone();
+    egui::containers::menu::menu_style(&mut style);
+    let pad = style.spacing.button_padding.x * 2.0 + style.spacing.item_spacing.x;
     menus()
         .iter()
         .filter(|m| m.id != MenuId::Help)

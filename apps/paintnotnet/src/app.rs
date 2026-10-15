@@ -256,6 +256,11 @@ impl PaintNotNetApp {
         self.ai = crate::ai::Ai::with_dir(dir);
     }
 
+    /// Run the AI helper from `exe` (tests: the built app, not the test binary).
+    pub fn set_ai_worker(&mut self, exe: PathBuf) {
+        self.ai.set_worker_exe(exe);
+    }
+
     /// Select Subject is waiting (for the download question, a download or the model).
     pub fn selecting_subject(&self) -> bool {
         self.select_subject.is_some()
@@ -1164,8 +1169,8 @@ impl PaintNotNetApp {
 }
 
 /// Height of the title bar and of the status bar.
-const TITLE_BAR_HEIGHT: f32 = 40.0;
-const STATUS_BAR_HEIGHT: f32 = 28.0;
+const TITLE_BAR_HEIGHT: f32 = 44.0;
+const STATUS_BAR_HEIGHT: f32 = 30.0;
 
 impl PaintNotNetApp {
     /// The title bar: menus on the left, the document tabs in the middle, then command
@@ -1183,7 +1188,7 @@ impl PaintNotNetApp {
             .frame(
                 egui::Frame::new()
                     .fill(palette.band)
-                    .inner_margin(egui::Margin::symmetric(12, 0)),
+                    .inner_margin(egui::Margin::symmetric(16, 0)),
             )
             .show(ui, |ui| {
                 let state = self.command_state();
@@ -1833,7 +1838,7 @@ impl eframe::App for PaintNotNetApp {
             .frame(
                 egui::Frame::new()
                     .fill(band)
-                    .inner_margin(egui::Margin::symmetric(12, 0)),
+                    .inner_margin(egui::Margin::symmetric(16, 0)),
             )
             .show(ui, |ui| {
                 status::status_bar(ui, &info, &mut self.status, &self.icons)

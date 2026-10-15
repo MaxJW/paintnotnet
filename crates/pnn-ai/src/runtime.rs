@@ -2,7 +2,8 @@
 //! `$ORT_DYLIB_PATH`), and a loaded model.
 //!
 //! The GPU (CUDA) is used when the runtime was built with it and an NVIDIA driver is loaded;
-//! if CUDA fails to start for a model, it runs on the CPU instead.
+//! if CUDA fails to start for a model, it runs on the CPU instead. Models are run in a helper
+//! process (`worker`), which is what makes CUDA start with Arch's package.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -78,9 +79,6 @@ pub fn runtime() -> Result<&'static Runtime, AiError> {
             let cuda = ep::CUDA::is_available().unwrap_or(false)
                 && nvidia_driver()
                 && std::env::var_os("PNN_AI_CPU").is_none();
-            if cuda {
-                preload_cudnn();
-            }
             log::info!("ONNX Runtime from {}; CUDA: {cuda}", lib.display());
             Ok(Runtime {
                 device: if cuda { Device::Cuda } else { Device::Cpu },
@@ -89,26 +87,6 @@ pub fn runtime() -> Result<&'static Runtime, AiError> {
         })
         .as_ref()
         .map_err(|e| AiError::NoRuntime(e.clone()))
-}
-
-/// Load the system's cuDNN with its symbols visible to libraries loaded later.
-///
-/// Arch's `onnxruntime-opt-cuda` 1.29.0-3 ships a CUDA provider
-/// (`libonnxruntime_providers_cuda.so`) that calls cuDNN but doesn't list `libcudnn.so.9`
-/// among the libraries it needs, so loading it fails with "undefined symbol:
-/// cudnnGetConvolutionBackwardDataAlgorithm_v7" unless cuDNN is already loaded globally.
-/// (`ort`'s own preloading opens libraries `RTLD_LOCAL`, which doesn't help.) Harmless where
-/// the provider is packaged correctly; if cuDNN is missing, CUDA fails later and the CPU is
-/// used.
-#[allow(unsafe_code)]
-fn preload_cudnn() {
-    use libloading::os::unix::{Library, RTLD_GLOBAL, RTLD_NOW};
-    // SAFETY: opens the system's cuDNN, which runs only its own initialisers; the handle is
-    // kept for the life of the process, so its symbols never go away while used.
-    match unsafe { Library::open(Some("libcudnn.so.9"), RTLD_NOW | RTLD_GLOBAL) } {
-        Ok(lib) => std::mem::forget(lib),
-        Err(e) => log::info!("cuDNN not preloaded: {e}"),
-    }
 }
 
 /// The NVIDIA kernel driver is loaded (CUDA can't work without it).

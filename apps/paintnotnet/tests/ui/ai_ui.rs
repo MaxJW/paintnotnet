@@ -131,6 +131,8 @@ fn removes_the_background_and_selects_the_subject_with_the_model() {
     };
     let mut h = harness_with(apple());
     h.state_mut().set_models_dir(dir.into());
+    h.state_mut()
+        .set_ai_worker(env!("CARGO_BIN_EXE_paintnotnet").into());
     run(&mut h, remove_background());
     // The preview arrives once the model has run: the background goes transparent.
     step_until(&mut h, Duration::from_secs(90), |h| {
@@ -178,6 +180,8 @@ fn downloads_the_model_when_asked_then_runs_it() {
     let dir = tempfile::tempdir().unwrap();
     let mut h = harness_with(apple());
     h.state_mut().set_models_dir(dir.path().to_owned());
+    h.state_mut()
+        .set_ai_worker(env!("CARGO_BIN_EXE_paintnotnet").into());
     run(&mut h, remove_background());
     h.get_by_label("Fast").click();
     for _ in 0..3 {

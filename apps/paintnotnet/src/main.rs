@@ -15,6 +15,12 @@ fn main() -> ExitCode {
     )
     .init();
 
+    // The AI helper process (`ai.rs`): answer model requests on stdin, nothing else.
+    if std::env::args().nth(1).as_deref() == Some(paintnotnet::ai::WORKER_ARG) {
+        pnn_ai::worker::serve();
+        return ExitCode::SUCCESS;
+    }
+
     let Args {
         smoke,
         files,

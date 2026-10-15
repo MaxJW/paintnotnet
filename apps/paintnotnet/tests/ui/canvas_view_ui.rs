@@ -132,3 +132,42 @@ fn middle_drag_pans_past_the_image_edge() {
     h.step();
     assert!((screen(&h, 0.0, 0.0) - rect.center()).length() < 1.0);
 }
+
+/// An image smaller than the window can be dragged about (middle button), until its edge
+/// reaches the middle of the view.
+#[test]
+fn a_small_image_can_be_panned() {
+    let mut h = harness();
+    let before = h.state().workspace().active().unwrap().view.unwrap();
+    let start = screen(&h, 50.0, 40.0);
+    h.event(Event::PointerMoved(start));
+    h.step();
+    let button = |pressed, pos| Event::PointerButton {
+        pos,
+        button: PointerButton::Middle,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    h.event(button(true, start));
+    h.step();
+    for k in 1..=8 {
+        h.event(Event::PointerMoved(
+            start + vec2(10.0 * k as f32, 5.0 * k as f32),
+        ));
+        h.step();
+    }
+    let end = start + vec2(80.0, 40.0);
+    h.event(button(false, end));
+    h.step();
+    let after = h.state().workspace().active().unwrap().view.unwrap();
+    // Zoom 400%: 80 × 40 screen points move the view 20 × 10 image pixels the other way.
+    let ppp = h.ctx.pixels_per_point() as f64;
+    let moved = [
+        before.center[0] - after.center[0],
+        before.center[1] - after.center[1],
+    ];
+    assert!(
+        (moved[0] - 20.0 * ppp).abs() < 0.5 && (moved[1] - 10.0 * ppp).abs() < 0.5,
+        "{moved:?}"
+    );
+}

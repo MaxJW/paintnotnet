@@ -18,7 +18,7 @@ fn icon_button(
     selected: bool,
 ) -> egui::Response {
     ui.scope(|ui| {
-        ui.spacing_mut().button_padding = vec2(5.0, 5.0);
+        ui.spacing_mut().button_padding = vec2(6.0, 6.0);
         ui.add_enabled(
             enabled,
             egui::Button::image(icons.image(icon))
@@ -47,7 +47,7 @@ pub fn row1(
 ) -> Option<Command> {
     let mut picked = None;
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 1.0;
+        ui.spacing_mut().item_spacing.x = 3.0;
         let groups: &[&[(Icon, Command, &str)]] = &[
             &[
                 (Icon::New, Command::NewImage, "New"),
@@ -127,7 +127,7 @@ pub fn row2(
 ) -> Option<Row2Action> {
     let mut action = None;
     // Groups go straight into the caller's wrapping layout; each wraps as a unit.
-    ui.spacing_mut().item_spacing.x = 12.0;
+    ui.spacing_mut().item_spacing.x = 18.0;
     let picked = g(ui, "tool", |ui| {
         let mut picked = None;
         let face = egui::RichText::new(tool.name()).font(egui::FontId::new(
@@ -188,7 +188,7 @@ pub fn row2(
 /// A group of controls that wraps as a unit, with tight spacing inside.
 fn g<R>(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     crate::controls::group(ui, id, |ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
+        ui.spacing_mut().item_spacing.x = 8.0;
         add(ui)
     })
 }
