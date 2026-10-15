@@ -676,8 +676,8 @@ Select Subject was moved in from the Phase 18 ideas (user, 2026-10-14: "include 
   fix); a tab that fits isn't clipped (failed before); middle-dragging a small image moves it 20 × 10 px at 400 %
   (failed before); the edge strips ask for the right resize cursor on hover. Screenshots before and after the
   spacing pass. All 133 UI tests pass
-- [ ] **Resize cursors at the window's edges** don't show until you click (reported by the user). The app asks for
-      them on hover (UI test), so it is between egui-winit/winit and KWin; not reproduced yet (needs the real pointer)
+- [x] **Resize cursors at the window's edges** didn't show until a click (reported by the user). The app asks for
+      them on hover (UI test); in the 2026-10-15 build the user saw them work, so nothing was changed for it
 
 ## Phase 18: Enhanced features (to agree)
 - [ ] Agreed 2026-10-15 ("I like both your ideas"): edge colour clean-up for Remove Background (estimating the
