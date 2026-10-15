@@ -1020,13 +1020,34 @@ impl PaintNotNetApp {
                 tab.doc.insert_layer(tab.doc.layers().len(), l);
             }
         }
+        // PNN_SMOKE_WAND=x,y: one Magic Wand click there (image px) as soon as an image is open,
+        // to time a complex selection.
+        if self.smoke.as_ref().is_some_and(|s| !s.command_run)
+            && let Ok(at) = std::env::var("PNN_SMOKE_WAND")
+            && let Some(key) = self.workspace.active().map(|t| t.key)
+        {
+            if let Some(s) = self.smoke.as_mut() {
+                s.command_run = true;
+            }
+            let p: Vec<f64> = at
+                .split(',')
+                .filter_map(|v| v.trim().parse().ok())
+                .collect();
+            if let [x, y] = p[..] {
+                let t = Instant::now();
+                self.magic_wand(key, [x, y], pnn_core::CombineMode::Replace, true);
+                log::info!("smoke: magic wand took {:?}", t.elapsed());
+            }
+        }
         // PNN_SMOKE_COMMAND=<command id, e.g. SelectSubject>: run that menu command once, as
         // soon as an image is open.
-        if !smoke.command_run
+        if self.smoke.as_ref().is_some_and(|s| !s.command_run)
             && self.workspace.active().is_some()
             && let Ok(id) = std::env::var("PNN_SMOKE_COMMAND")
         {
-            smoke.command_run = true;
+            if let Some(s) = self.smoke.as_mut() {
+                s.command_run = true;
+            }
             if let Some(c) = crate::menus::all_commands()
                 .into_iter()
                 .find(|c| c.id() == id)
@@ -1120,7 +1141,9 @@ impl PaintNotNetApp {
             } else {
                 self.brush_tool_event(crate::canvas::ToolEvent::Move { pos });
             }
-        } else if std::env::var_os("PNN_SMOKE_COMMAND").is_some() {
+        } else if std::env::var_os("PNN_SMOKE_COMMAND").is_some()
+            || std::env::var_os("PNN_SMOKE_WAND").is_some()
+        {
             // Leave the view alone, to see what the command did.
         } else if let Some(tab) = self.workspace.active_mut() {
             // Sweep zoom (about 1%–800%) and pan so the canvas redraws every frame.
@@ -1757,6 +1780,13 @@ fn open_url(url: &str) {
 }
 
 impl eframe::App for PaintNotNetApp {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        // After a window move or resize, the button release the desktop kept.
+        if let Some(release) = shell::take_release(ctx) {
+            raw_input.events.insert(0, release);
+        }
+    }
+
     fn on_exit(&mut self) {
         // A clean exit leaves nothing to recover.
         if let Some(a) = self.autosave.as_mut() {
@@ -1913,6 +1943,7 @@ impl eframe::App for PaintNotNetApp {
                 .as_ref()
                 .is_some_and(|d| d.wants_feather_preview());
         let antialias = self.antialiased_selection();
+        self.canvas.antialias = antialias;
         self.canvas.overlay = match self.workspace.active_mut() {
             Some(tab) if preview => tab
                 .selection_mask(antialias)

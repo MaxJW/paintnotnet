@@ -269,6 +269,28 @@ pub fn window_buttons(ui: &mut egui::Ui, icons: &crate::icons::Icons) {
     }
 }
 
+/// The desktop takes over the pointer to move or resize the window and keeps the button's
+/// release, so egui would go on thinking the button is down, and hovers nothing while a
+/// button is down (the wheel over the canvas stopped zooming, tooltips stopped, until the
+/// next click). Remember to give egui that release on the next frame (`take_release`).
+fn release_after_handover(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("release after handover"), true));
+}
+
+/// The release owed after a move or resize (see `release_after_handover`), once; the app's
+/// `raw_input_hook` puts it in front of the next frame's input.
+pub fn take_release(ctx: &egui::Context) -> Option<egui::Event> {
+    let id = egui::Id::new("release after handover");
+    ctx.data_mut(|d| d.remove_temp::<bool>(id))?;
+    let pos = ctx.input(|i| i.pointer.latest_pos()).unwrap_or_default();
+    Some(egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    })
+}
+
 /// Dragging the title bar's empty space moves the window; double-clicking it maximises or
 /// restores. `bar` is the background response, made before the bar's widgets (which sit on
 /// top of it and keep their own clicks).
@@ -278,6 +300,7 @@ pub fn title_bar_drag(ctx: &egui::Context, bar: &egui::Response) {
         ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
     } else if bar.drag_started_by(egui::PointerButton::Primary) {
         ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        release_after_handover(ctx);
     }
 }
 
@@ -351,6 +374,7 @@ pub fn resize_edges(ctx: &egui::Context) {
                     && ctx.input(|i| i.pointer.primary_pressed())
                 {
                     ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
+                    release_after_handover(ctx);
                 }
             });
     }

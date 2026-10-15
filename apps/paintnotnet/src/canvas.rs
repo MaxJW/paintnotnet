@@ -77,6 +77,8 @@ pub struct CanvasState {
     pub tool_cursor: Option<ToolCursor>,
     /// Feather preview: (mask identity, coverage) to tint outside of, set by the app.
     pub overlay: Option<(u64, std::sync::Arc<pnn_core::Mask>)>,
+    /// Selections are antialiased (set by the app; picks which cached mask the GPU ants use).
+    pub antialias: bool,
     /// Clone Stamp source marker (image coordinates).
     pub clone_source: Option<[f64; 2]>,
     /// Text caret (top, bottom) and move nub (image coordinates).
@@ -376,10 +378,23 @@ pub fn show(
 
     let view = *view;
     ui.painter().rect_filled(area, 0.0, surround_color(ui));
+    // A complex selection (the Magic Wand on a photo: tens of thousands of outlines) gets its
+    // ants from the GPU, drawn from the selection's mask: as egui lines they cost tens of
+    // milliseconds every frame and the whole app lagged.
+    let contours = (!tab.doc.selection().is_empty()).then(|| tab.ant_contours(ui.ctx()));
+    let gpu_ants = gpu.is_some()
+        && std::env::var_os("PNN_GPU_ANTS").is_none_or(|v| v != "0")
+        && contours
+            .as_ref()
+            .is_some_and(|c| c.iter().map(Vec::len).sum::<usize>() > GPU_ANTS_POINTS);
+    let ants_offset = ((ui.input(|i| i.time) * 12.0) % 8.0).floor() as f32;
     if let Some(gpu) = gpu {
         sync_gpu(gpu, tab);
         if let Some((rev, mask)) = &state.overlay {
             sync_overlay(gpu, tab, *rev, mask);
+        } else if gpu_ants && let Some(mask) = tab.selection_mask(state.antialias) {
+            let rev = tab.doc.selection_revision() * 2 + u64::from(state.antialias);
+            sync_overlay(gpu, tab, rev, &mask);
         }
         // The view's coordinates start at the free area; the callback covers all of `area`.
         let origin = view.image_to_screen([0.0, 0.0], vp);
@@ -392,6 +407,7 @@ pub fn show(
             image_size: [img[0] as f32, img[1] as f32],
             grid: if state.pixel_grid { 1.0 } else { 0.0 },
             overlay: if state.overlay.is_some() { 1.0 } else { 0.0 },
+            ants: if gpu_ants { 1.0 + ants_offset } else { 0.0 },
             ..Default::default()
         };
         ui.painter()
@@ -407,9 +423,13 @@ pub fn show(
         // The panels over the canvas show this blurred (see `glass`).
         crate::glass::set_backdrop(ui.ctx(), Some(area));
     }
-    if !tab.doc.selection().is_empty() {
-        let contours = tab.ant_contours(ui.ctx());
-        marching_ants(ui, &contours, &view, canvas_rect, area, vp, ppp);
+    if let Some(contours) = contours {
+        if gpu_ants {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(80));
+        } else {
+            marching_ants(ui, &contours, &view, canvas_rect, area, vp, ppp);
+        }
     }
     if let Some(handles) = state.handles {
         let painter = ui.painter().with_clip_rect(area);
@@ -992,6 +1012,10 @@ fn rulers(
         }
     }
 }
+
+/// Above this many outline points the ants are drawn by the GPU from the selection mask
+/// (constant cost) instead of as exact polygon lines.
+pub const GPU_ANTS_POINTS: usize = 20_000;
 
 /// paint.net's marching ants: a white line with animated black dashes along the selection's
 /// polygon edges. Only segments near the visible area are drawn.

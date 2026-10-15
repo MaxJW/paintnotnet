@@ -561,6 +561,7 @@ fn write_region(mask: &mut Mask, r: Rect, data: &[u8]) {
 /// loops touch diagonally the walk turns right, keeping loops simple. Collinear runs are
 /// merged.
 fn trace_stencil(stencil: &[bool], w: usize, h: usize) -> Vec<Contour> {
+    use rayon::prelude::*;
     let inside = |x: i64, y: i64| {
         x >= 0
             && y >= 0
@@ -568,43 +569,70 @@ fn trace_stencil(stencil: &[bool], w: usize, h: usize) -> Vec<Contour> {
             && (y as usize) < h
             && stencil[y as usize * w + x as usize]
     };
-    let vid = |x: usize, y: usize| y * (w + 1) + x;
-    // Up to two outgoing edges per vertex (diagonal touches).
-    let mut out: Vec<[u32; 2]> = vec![[u32::MAX; 2]; (w + 1) * (h + 1)];
-    let mut used: Vec<[bool; 2]> = vec![[false; 2]; (w + 1) * (h + 1)];
-    let mut add = |from: usize, to: usize| {
-        let slot = &mut out[from];
-        if slot[0] == u32::MAX {
-            slot[0] = to as u32;
-        } else {
-            slot[1] = to as u32;
-        }
-    };
-    for y in 0..h {
-        for x in 0..w {
-            if !stencil[y * w + x] {
-                continue;
-            }
-            let (xi, yi) = (x as i64, y as i64);
-            if !inside(xi, yi - 1) {
-                add(vid(x, y), vid(x + 1, y));
-            }
-            if !inside(xi + 1, yi) {
-                add(vid(x + 1, y), vid(x + 1, y + 1));
-            }
-            if !inside(xi, yi + 1) {
-                add(vid(x + 1, y + 1), vid(x, y + 1));
-            }
-            if !inside(xi - 1, yi) {
-                add(vid(x, y + 1), vid(x, y));
-            }
-        }
+    let vw = w + 1;
+    // Up to two outgoing edges per vertex (diagonal touches), stored as target + 1 (0 = none,
+    // so the arrays start zeroed and cost nothing until touched).
+    let mut out: Vec<[u32; 2]> = vec![[0; 2]; vw * (h + 1)];
+    let mut used: Vec<[bool; 2]> = vec![[false; 2]; vw * (h + 1)];
+    // Pixel row y adds edges at vertex rows y and y + 1: even pixel rows, then odd ones, each
+    // own disjoint pairs of vertex rows, so rows run in parallel. Each row lists the vertices
+    // it gave a first edge (where the walk below starts).
+    let mut starts: Vec<u32> = Vec::new();
+    for phase in 0..2 {
+        let (_, tail) = out.split_at_mut(phase * vw);
+        let found: Vec<Vec<u32>> = tail
+            .par_chunks_mut(2 * vw)
+            .enumerate()
+            .map(|(k, pair)| {
+                let y = phase + 2 * k;
+                let mut first = Vec::new();
+                if y >= h || pair.len() < 2 * vw {
+                    return first;
+                }
+                let base = y * vw;
+                let mut add = |from: usize, to: usize| {
+                    let slot = &mut pair[from - base];
+                    if slot[0] == 0 {
+                        slot[0] = to as u32 + 1;
+                        first.push(from as u32);
+                    } else {
+                        slot[1] = to as u32 + 1;
+                    }
+                };
+                let vid = |x: usize, y: usize| y * vw + x;
+                let yi = y as i64;
+                for x in 0..w {
+                    if !stencil[y * w + x] {
+                        continue;
+                    }
+                    let xi = x as i64;
+                    if !inside(xi, yi - 1) {
+                        add(vid(x, y), vid(x + 1, y));
+                    }
+                    if !inside(xi + 1, yi) {
+                        add(vid(x + 1, y), vid(x + 1, y + 1));
+                    }
+                    if !inside(xi, yi + 1) {
+                        add(vid(x + 1, y + 1), vid(x, y + 1));
+                    }
+                    if !inside(xi - 1, yi) {
+                        add(vid(x, y + 1), vid(x, y));
+                    }
+                }
+                first
+            })
+            .collect();
+        starts.extend(found.into_iter().flatten());
     }
+    // Walk from vertices in order, as a scan of every vertex would.
+    starts.par_sort_unstable();
+    // Stored as target + 1: empty slots (0) become u32::MAX.
+    let edge = |v: usize, k: usize| out[v][k].wrapping_sub(1);
     let pos = |v: usize| ((v % (w + 1)) as i64, (v / (w + 1)) as i64);
     let mut contours = Vec::new();
-    for start in 0..out.len() {
+    for start in starts.into_iter().map(|v| v as usize) {
         for k in 0..2 {
-            if out[start][k] == u32::MAX || used[start][k] {
+            if edge(start, k) == u32::MAX || used[start][k] {
                 continue;
             }
             let mut loop_pts: Vec<[f64; 2]> = Vec::new();
@@ -612,7 +640,7 @@ fn trace_stencil(stencil: &[bool], w: usize, h: usize) -> Vec<Contour> {
             let mut prev_dir = (0i64, 0i64);
             loop {
                 used[v][slot] = true;
-                let next = out[v][slot] as usize;
+                let next = edge(v, slot) as usize;
                 let (a, b) = (pos(v), pos(next));
                 let dir = (b.0 - a.0, b.1 - a.1);
                 if dir != prev_dir {
@@ -620,17 +648,12 @@ fn trace_stencil(stencil: &[bool], w: usize, h: usize) -> Vec<Contour> {
                 }
                 prev_dir = dir;
                 v = next;
-                if v == start
-                    && out[v]
-                        .iter()
-                        .enumerate()
-                        .all(|(i, &e)| e == u32::MAX || used[v][i])
-                {
+                if v == start && (0..2).all(|i| edge(v, i) == u32::MAX || used[v][i]) {
                     break;
                 }
                 // Pick the unused outgoing edge, preferring a right turn at diagonal touches.
                 let choices: Vec<usize> = (0..2)
-                    .filter(|&i| out[v][i] != u32::MAX && !used[v][i])
+                    .filter(|&i| edge(v, i) != u32::MAX && !used[v][i])
                     .collect();
                 slot = match choices.as_slice() {
                     [] => break,
@@ -640,7 +663,7 @@ fn trace_stencil(stencil: &[bool], w: usize, h: usize) -> Vec<Contour> {
                         *choices
                             .iter()
                             .find(|&&i| {
-                                let n = pos(out[v][i] as usize);
+                                let n = pos(edge(v, i) as usize);
                                 (n.0 - pos(v).0, n.1 - pos(v).1) == right
                             })
                             .unwrap_or(&choices[0])
@@ -858,22 +881,26 @@ pub fn flood_stencil(
         premultiplied,
         perceptual,
     } = tolerance;
-    let matches = |i: usize| {
-        if perceptual {
-            colors_match_perceptual(target_lab, target, pixels[i], pct, premultiplied)
-        } else {
-            colors_match(target, pixels[i], pct, premultiplied)
-        }
-    };
-    let mut stencil = vec![false; w * h];
-    if !contiguous {
+    // Every pixel's colour test once, in parallel (the OKLab test costs three cube roots;
+    // the scanline fill below would repeat it several times per pixel).
+    let ok: Vec<bool> = {
         use rayon::prelude::*;
-        stencil
-            .par_iter_mut()
-            .enumerate()
-            .for_each(|(i, s)| *s = matches(i));
-        return stencil;
+        pixels
+            .par_iter()
+            .map(|&c| {
+                if perceptual {
+                    colors_match_perceptual(target_lab, target, c, pct, premultiplied)
+                } else {
+                    colors_match(target, c, pct, premultiplied)
+                }
+            })
+            .collect()
+    };
+    if !contiguous {
+        return ok;
     }
+    let matches = |i: usize| ok[i];
+    let mut stencil = vec![false; w * h];
     let mut stack = vec![(seed.0 as usize, seed.1 as usize)];
     while let Some((x, y)) = stack.pop() {
         if stencil[y * w + x] || !matches(y * w + x) {
@@ -1203,6 +1230,28 @@ mod tests {
         let m = coverage(&s, w as u32, h as u32, false);
         for i in 0..w * h {
             assert_eq!(m[i] > 127, checker[i] > 127, "pixel {i}");
+        }
+    }
+
+    /// The Magic Wand keeps its stencil as the selection mask instead of rasterising the
+    /// traced outline: they must agree exactly, antialiased or not.
+    #[test]
+    fn traced_stencil_rasterises_back_to_itself() {
+        let (w, h) = (300usize, 260usize);
+        // Noise with specks, holes and diagonal touches, across several tiles.
+        let st: Vec<bool> = (0..w * h)
+            .map(|i| ((i * 2654435761usize) >> 7) % 5 < 2 || (i % w > 100 && i % w < 180))
+            .collect();
+        let sel = Selection::from_stencil(&st, w as u32, h as u32);
+        for aa in [false, true] {
+            let m = sel.rasterize_hard(w as u32, h as u32, aa).to_pixels();
+            for i in 0..w * h {
+                assert_eq!(
+                    m[i],
+                    if st[i] { 255 } else { 0 },
+                    "pixel {i}, antialias {aa}"
+                );
+            }
         }
     }
 

@@ -228,7 +228,16 @@ pub fn load(path: &Path) -> Result<Document, IoError> {
         })?;
     // Large images (e.g. 16-bit 8K) exceed the decoder's default allocation cap.
     reader.no_limits();
-    let rgba = reader.decode().map_err(image_err)?.into_rgba8();
+    // Upright as the camera meant it: phone photos are stored sideways with an EXIF
+    // orientation tag (the editor doesn't write the tag back, so saving keeps them upright).
+    use image::ImageDecoder;
+    let mut decoder = reader.into_decoder().map_err(image_err)?;
+    let orientation = decoder
+        .orientation()
+        .unwrap_or(image::metadata::Orientation::NoTransforms);
+    let mut img = image::DynamicImage::from_decoder(decoder).map_err(image_err)?;
+    img.apply_orientation(orientation);
+    let rgba = img.into_rgba8();
     let (width, height) = rgba.dimensions();
     let pixels: Vec<ColorBgra> = rgba
         .pixels()
@@ -487,6 +496,34 @@ mod tests {
             size(&nq),
             size(&nl)
         );
+    }
+
+    /// A photo stored sideways with EXIF orientation 6 ("rotate 90° clockwise to view")
+    /// opens upright.
+    #[test]
+    fn exif_orientation_is_applied() {
+        use image::ImageEncoder;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sideways.png");
+        // 3 × 2 as stored; red marks the stored top-left pixel.
+        let mut rgba = vec![255u8; 3 * 2 * 4];
+        rgba[..4].copy_from_slice(&[255, 0, 0, 255]);
+        // TIFF header, one IFD entry: Orientation (0x0112), SHORT, 1, value 6.
+        let exif: Vec<u8> = vec![
+            b'I', b'I', 0x2a, 0, 8, 0, 0, 0, 1, 0, 0x12, 0x01, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0, 0, 0,
+            0, 0,
+        ];
+        let file = std::fs::File::create(&path).unwrap();
+        let mut enc = image::codecs::png::PngEncoder::new(file);
+        enc.set_exif_metadata(exif).unwrap();
+        enc.write_image(&rgba, 3, 2, ExtendedColorType::Rgba8)
+            .unwrap();
+        let doc = load(&path).unwrap();
+        assert_eq!((doc.width(), doc.height()), (2, 3), "turned upright");
+        // Rotating 90° clockwise puts the stored top-left at the top-right.
+        let s = &doc.layer(0).surface;
+        assert_eq!(s.get(1, 0), ColorBgra::from_rgba(255, 0, 0, 255));
+        assert_eq!(s.get(0, 0), ColorBgra::from_rgba(255, 255, 255, 255));
     }
 
     #[test]

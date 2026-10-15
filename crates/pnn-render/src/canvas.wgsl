@@ -16,7 +16,7 @@ struct View {
     grid: f32,              // 1.0 = pixel grid enabled
     srgb_target: f32,       // 1.0 = framebuffer is sRGB, so output linear values
     overlay: f32,           // 1.0 = tint outside the selection (feather preview)
-    _pad: f32,
+    ants: f32,              // 0 = off; else 1 + dash offset: marching ants from the mask
 };
 
 struct Chunk {
@@ -60,6 +60,30 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
     return select(hi, lo, c <= vec3(0.04045));
 }
 
+// Selected (coverage at least half) at image point `img`. Outside the image is unselected;
+// beyond this chunk (a neighbour across a chunk seam) counts as `fallback`.
+fn selected_at(img: vec2<f32>, fallback: bool) -> bool {
+    if (any(img < vec2(0.0)) || any(img >= view.image_size)) {
+        return false;
+    }
+    let local = img - chunk.origin;
+    if (any(local < vec2(0.0)) || any(local >= chunk.size)) {
+        return fallback;
+    }
+    return textureLoad(overlay_tex, vec2<i32>(floor(local)), 0).r >= 0.5;
+}
+
+// On the inside edge of the selection: selected, with a neighbour one screen pixel away
+// that isn't. Works at any zoom, whatever the selection's complexity.
+fn ants_edge(img: vec2<f32>) -> bool {
+    if (!selected_at(img, true)) {
+        return false;
+    }
+    let d = 1.0 / view.zoom;
+    return !selected_at(img + vec2(d, 0.0), true) || !selected_at(img - vec2(d, 0.0), true)
+        || !selected_at(img + vec2(0.0, d), true) || !selected_at(img - vec2(0.0, d), true);
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Both samples in uniform control flow; nearest when zoomed in (crisp pixels, as
@@ -88,6 +112,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         // Quick-mask style: unselected areas tinted red, fading with the feather.
         let tint = vec3(0.85, 0.12, 0.12);
         rgb = mix(rgb, tint, (1.0 - coverage) * 0.5);
+    }
+
+    if (view.ants > 0.5 && ants_edge(in.img)) {
+        // paint.net's ants: white with black dashes, marching. Dashes run diagonally in screen
+        // space, so they march along horizontal and vertical edges alike.
+        let p = vec2<i32>(floor(in.position.xy));
+        let phase = (p.x + p.y + i32(view.ants - 1.0)) & 7;
+        rgb = select(vec3(1.0), vec3(0.0), phase < 4);
     }
 
     if (view.srgb_target > 0.5) {

@@ -17,8 +17,10 @@ use crate::commands::Panel;
 use crate::config::Dock;
 use crate::theme::{self, Palette};
 
-/// Gap between the window edges, the islands and the free canvas area.
+/// Gap between the islands and between them and the free canvas area.
 pub const GAP: f32 = 16.0;
+/// Gap between the window's edges and the islands (user, 2026-10-15: less than between them).
+pub const EDGE: f32 = 8.0;
 /// Gap between the sections stacked in the dock.
 pub const STACK_GAP: f32 = 12.0;
 /// Height of a dock section's title row.
@@ -78,7 +80,7 @@ fn idx(p: Panel) -> usize {
 
 /// Lay the islands out in `central` (the area between the title bar and the status bar).
 pub fn compute(central: Rect, input: &LayoutInput) -> Layout {
-    let inner = central.shrink(GAP);
+    let inner = central.shrink(EDGE);
     let shown = |p: Panel| input.visible[idx(p)];
     let rail = shown(Panel::Tools).then(|| {
         Rect::from_min_size(
@@ -680,17 +682,17 @@ mod tests {
     fn design_a_layout() {
         let l = compute(CENTRAL, &input());
         let rail = l.rail.unwrap();
-        // Everything GAP from the window edges and from each other: rail 52 wide, dock 300,
-        // options bar 48 high.
-        let top = CENTRAL.min.y + GAP;
-        assert_eq!(rail.min, pos2(GAP, top));
+        // EDGE from the window edges, GAP from each other: rail 52 wide, dock 300, options
+        // bar 48 high.
+        let top = CENTRAL.min.y + EDGE;
+        assert_eq!(rail.min, pos2(EDGE, top));
         let dock = l.dock.unwrap();
-        let (right, bottom) = (CENTRAL.max.x - GAP, CENTRAL.max.y - GAP);
+        let (right, bottom) = (CENTRAL.max.x - EDGE, CENTRAL.max.y - EDGE);
         assert_eq!(
             dock,
             Rect::from_min_max(pos2(right - 300.0, top), pos2(right, bottom))
         );
-        let (left, middle_right) = (GAP + 52.0 + GAP, right - 300.0 - GAP);
+        let (left, middle_right) = (EDGE + 52.0 + GAP, right - 300.0 - GAP);
         assert_eq!(
             l.options,
             Rect::from_min_max(pos2(left, top), pos2(middle_right, top + 48.0))
@@ -714,8 +716,8 @@ mod tests {
         i.visible = [false; 4];
         let l = compute(CENTRAL, &i);
         assert!(l.rail.is_none() && l.dock.is_none() && l.sections.is_empty());
-        assert_eq!(l.free.min.x, GAP);
-        assert_eq!(l.free.max.x, CENTRAL.max.x - GAP);
+        assert_eq!(l.free.min.x, EDGE);
+        assert_eq!(l.free.max.x, CENTRAL.max.x - EDGE);
     }
 
     #[test]

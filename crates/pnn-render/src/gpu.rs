@@ -30,7 +30,9 @@ pub struct ViewUniforms {
     pub srgb_target: f32,
     /// 1.0 = tint pixels outside the selection mask (feather preview).
     pub overlay: f32,
-    pub _pad: f32,
+    /// Marching ants drawn from the selection mask (complex selections): 0 = off, else
+    /// 1 + the dashes' offset in screen px (0–7).
+    pub ants: f32,
 }
 
 #[repr(C)]
@@ -129,7 +131,7 @@ impl CanvasRenderer {
         let chunk_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("canvas chunk"),
             entries: &[
-                uniform_entry(0, wgpu::ShaderStages::VERTEX),
+                uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
                 texture_entry(1),
                 texture_entry(2),
             ],
@@ -458,6 +460,7 @@ impl CanvasRenderer {
         uniforms.viewport = size.map(|v| v as f32);
         uniforms.grid = 0.0;
         uniforms.overlay = 0.0;
+        uniforms.ants = 0.0;
         queue.write_buffer(&canvas.backdrop_buffer, 0, bytemuck::bytes_of(&uniforms));
         let lin = |c: f32| {
             if !self.srgb_target {

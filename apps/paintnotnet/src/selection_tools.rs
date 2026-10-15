@@ -264,7 +264,13 @@ impl PaintNotNetApp {
         }
     }
 
-    fn magic_wand(&mut self, key: u64, pos: [f64; 2], mode: CombineMode, contiguous: bool) {
+    pub(crate) fn magic_wand(
+        &mut self,
+        key: u64,
+        pos: [f64; 2],
+        mode: CombineMode,
+        contiguous: bool,
+    ) {
         let feather = self.settings.feather;
         let tolerance = pnn_core::selection::Tolerance {
             pct: self.settings.tolerance,
@@ -272,6 +278,7 @@ impl PaintNotNetApp {
             perceptual: self.settings.tolerance_space == pnn_tools::ToleranceSpace::Perceptual,
         };
         let sampling = self.settings.sampling;
+        let antialias = self.antialiased_selection();
         let Some(tab) = self.workspace.tab_mut(key) else {
             return;
         };
@@ -295,6 +302,20 @@ impl PaintNotNetApp {
         let combined = tab.doc.selection().combine(&shape, mode);
         tab.doc.set_selection(combined);
         tab.commit("Magic Wand", Icon::MagicWand);
+        // A new selection's mask is the stencil itself (its outline runs along pixel edges, so
+        // rasterising it, antialiased or not, gives back exactly these pixels): keep it rather
+        // than rasterise tens of thousands of outlines again (~0.1 s on a 24 MP photo).
+        if mode == CombineMode::Replace && feather.is_none() {
+            use rayon::prelude::*;
+            let bytes: Vec<u8> = stencil
+                .par_iter()
+                .map(|&s| if s { 255 } else { 0 })
+                .collect();
+            let mut mask = Mask::new(w, h, 0);
+            mask.write_pixels(&bytes);
+            mask.compact();
+            tab.mask_cache = Some((tab.doc.selection_revision(), antialias, Arc::new(mask)));
+        }
     }
 
     /// Edit menu selection commands. Returns false if `command` isn't one.

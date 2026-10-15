@@ -152,3 +152,59 @@ fn a_tab_that_fits_is_not_cut_off() {
     eprintln!("rect {:?} interact {:?}", r.rect, r.interact_rect);
     assert_eq!(r.rect, r.interact_rect, "not clipped");
 }
+
+/// Dragging the title bar hands the move to the desktop, which keeps the button release:
+/// afterwards the wheel over the canvas still zooms (it didn't until another click).
+#[test]
+fn wheel_zooms_after_moving_the_window() {
+    use eframe::egui::{Event, Modifiers, MouseWheelUnit, PointerButton, Pos2, vec2};
+    let mut h = harness();
+    h.step();
+    // Empty title bar: just left of the command search box.
+    let search = h.get_by_label_contains("Search commands").rect();
+    let bar = Pos2::new(search.min.x - 30.0, search.center().y);
+    h.event(Event::PointerMoved(bar));
+    h.step();
+    h.event(Event::PointerButton {
+        pos: bar,
+        button: PointerButton::Primary,
+        pressed: true,
+        modifiers: Modifiers::NONE,
+    });
+    h.step();
+    let mut commands = Vec::new();
+    for k in 1..=4 {
+        h.event(Event::PointerMoved(bar + vec2(10.0 * k as f32, 0.0)));
+        h.step();
+        commands.extend(sent(&h));
+    }
+    assert!(
+        commands.contains(&ViewportCommand::StartDrag),
+        "the move went to the desktop"
+    );
+    // The desktop moves the window and swallows the release. eframe runs the app's
+    // `raw_input_hook` before each frame (egui_kittest doesn't): the release it adds is fed
+    // here as eframe would.
+    let release = paintnotnet::shell::take_release(&h.ctx).expect("a release is owed");
+    h.event(release);
+    h.step();
+    assert!(
+        paintnotnet::shell::take_release(&h.ctx).is_none(),
+        "only once"
+    );
+    // The pointer comes back over the canvas and the wheel turns.
+    let canvas = h.state().canvas().rect.unwrap().center();
+    h.event(Event::PointerMoved(canvas));
+    h.step();
+    let before = h.state().workspace().active().unwrap().view.unwrap().zoom;
+    h.event(Event::MouseWheel {
+        unit: MouseWheelUnit::Line,
+        delta: vec2(0.0, 1.0),
+        modifiers: Modifiers::NONE,
+        phase: eframe::egui::TouchPhase::Move,
+    });
+    h.step();
+    h.step();
+    let after = h.state().workspace().active().unwrap().view.unwrap().zoom;
+    assert!(after > before, "zoomed: {before} -> {after}");
+}

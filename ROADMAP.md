@@ -6,14 +6,14 @@ shown passing.
 
 **Current state (2026-10-13): the recreation is finished and saved.** Phases 0–11 are done, verified and committed;
 the git branch `recreation` and tag `recreation-2026-10-13` keep that faithful paint.net 5.x recreation as it stands
-(Phase 5's feather feel still awaits your sign-off). From here `main` is **paintnotnet modern**: the user's own
+(Phase 5's feather feel: signed off by the user, 2026-10-15, "Feather looks great"). From here `main` is **paintnotnet modern**: the user's own
 modernised paint.net, "keeping things vaguely in place" but with docked side panels instead of draggable windows, a
 glassy, great-looking UI, better tool controls (brush size first), super smooth performance, extra features, and better
 maths wherever something we copied (paint.net 3.36, BoltBait) can be done more accurately or faster. Phases 13
 (design system and docked shell), 14 (tool controls) and 15 (better maths, accuracy and speed; CI 344 tests) are
 done (2026-10-14); Phase 16 (.pdn files, one window, own window buttons) is done apart from the checks that need you,
-and Phase 17 (Remove Background and Select Subject, local AI) is done (2026-10-15). **Next:** Phase 18 (enhanced
-features, to agree). The recreation backlog (rest of the
+and Phase 17 (Remove Background and Select Subject, local AI) is done (2026-10-15), as are the two agreed Phase 18
+items. **Next:** Phase 19 (a great modern paint.net for Linux: no lag, everything working, polish, packaging). The recreation backlog (rest of the
 BoltBait pack, Sketch Blur, comparing against the 5.1.12 release files) is parked below and done on the `recreation`
 branch only if wanted.
 
@@ -125,7 +125,7 @@ Guessed or approximated (paint.net doesn't document them):
 - **Verified 2026-10-09:** 11 Phase 4 UI tests incl. move + hole, Ctrl copy, nudges, Move Selection, nub scale ×2, Shift right-drag 180°, whole-layer move. CI passes.
 - Gap: paint.net draws floating pixels as an overlay; here each change redraws the layer, which is slower for very large selections (optimise if it bites).
 
-## Phase 5: Feather ★ ✅ (awaiting your sign-off on the feel)
+## Phase 5: Feather ★ ✅ (feel signed off by the user, 2026-10-15)
 - [x] `pnn-sdf`: exact EDT (Felzenszwalb–Huttenlocher), signed field from coverage, profiles (smooth/linear/gaussian), rayon
 - [x] Live Feather field on all selection tools (toolbar radius/profile/position, applies to the current selection too); position inside/centered/outside; red quick-mask preview overlay (toolbar Preview toggle, and while a feather dialog is open); ants on the 50% contour
 - [x] Edit > Feather Selection… (Shift+F6)
@@ -700,8 +700,56 @@ Agreed 2026-10-15 ("I like both your ideas"), done the same day:
   the models tab lists an incomplete model, the models not downloaded and an unfinished download with sizes, and
   deletes only the chosen file after Yes. Screenshots: the models tab with the user's real folder, Remove
   Background with the new option
-- [ ] Ideas to discuss, not yet agreed: adjustment layers / non-destructive effects, layer groups, content-aware fill,
-      smarter magic wand, more export options (select subject moved to Phase 17 and done)
+- Parked (user, 2026-10-15: "lets just stick with our roadmap for the time being"): adjustment layers /
+  non-destructive effects, layer groups, content-aware fill, smarter magic wand, more export options
+
+## Phase 19: A great modern paint.net for Linux — requested 2026-10-15
+The user's goal: "get this app cleaned up, optimised, fully working, everything functional and working great, the app
+looking great, packaged nicely, windows and dialogs all looking great, UI looking great, no lag from anything, and make
+this just a great modern paint.net replacement for linux."
+
+### 19a. Fixes reported 2026-10-15 ✅
+- [x] **Magic Wand lag** on a 24 MP phone photo (5712 × 4284): the app ran at **12 fps** (81 ms a frame) as long as the
+      selection existed, and each click took 1.04 s. The selection was 29,209 outlines with 736,672 points, and the
+      marching ants turned them into up to 200,000 egui line segments every frame. Now:
+      - a selection of more than 20,000 outline points gets its ants from the canvas shader, drawn from the selection
+        mask already kept on the GPU for the feather preview (inside pixels next to an outside one, one screen pixel
+        away, at any zoom; outside the image counts as outside): cost no longer depends on the selection. Simpler
+        selections keep the exact polygon ants. Limitation: an edge lying exactly on a 4096 px chunk seam isn't drawn.
+        `PNN_GPU_ANTS=0` turns it off. **165 fps** with that selection
+      - the wand tests each pixel's colour once, in parallel, before the scanline fill (it repeated the OKLab test,
+        three cube roots, several times per pixel): fill 827 → 120 ms
+      - outline tracing builds its edges row-parallel (even rows, then odd, own disjoint vertex rows) in lazily
+        zeroed arrays and walks only from vertices with edges (same output): 162 → 52–66 ms
+      - a plain new wand selection keeps its stencil as the selection mask instead of rasterising the outlines again
+        (test: the traced outline rasterises back to exactly the stencil, antialiased or not): saves ~0.1 s
+      - click **1.04 s → 0.25 s** (`PNN_SMOKE_WAND=x,y` times it in the real app; `wand_bench` example times each step)
+- [x] **Wheel stopped zooming after moving the window** until the next click: the desktop keeps the button release
+      after `StartDrag`/`BeginResize`, egui then thinks the button is still down and hovers nothing. The app's
+      `raw_input_hook` gives egui that release on the next frame (UI test feeds it as eframe does; the zoom failed
+      before). Same for edge resizing
+- [x] **Less space at the window edges:** islands 8 px from the window edges (`EDGE`), still 16 px apart (`GAP`)
+- [x] **Photos open upright:** the EXIF orientation tag is applied on load (the user's phone photo opened sideways;
+      orientation 6). Test with a PNG carrying EXIF orientation 6
+- **Verified 2026-10-15:** release build timings above on the user's photo; screenshots (GPU ants on the photo, the
+  new edge spacing); tests listed. **Not checked live:** moving the window by its title bar then zooming (needs the
+  real pointer; the user should try it)
+
+### 19b. Plan (proposed 2026-10-15, to work through in this order)
+- [ ] **No lag from anything:** measure every tool, selection tool, effect preview, dialog, layer operation, undo/redo,
+      open and save on a 24 MP photo in the release build; budget: frames under 7 ms at 165 Hz, nothing on the UI
+      thread over ~100 ms (longer work on a worker with progress, like effects). Known: the wand's 0.25 s still runs
+      on the UI thread
+- [ ] **Everything functional:** the disabled commands (Print, Acquire, Color Profile, the image's right-click menu,
+      the shape tool's line style, caps and shape cycling) either work or leave the menus; Sketch Blur (no published
+      maths) likewise; every tool option does what it says
+- [ ] **Looking great:** review every window and dialog (New Image, Resize, Canvas Size, Layer Properties, Save
+      options, effect dialogs, Settings, About, Help), in dark and light, at small and large window sizes; menu icons
+      where missing; consistent spacing and controls
+- [ ] **Packaged nicely:** build and install the PKGBUILD with makepkg (not yet tried), AppStream metainfo,
+      desktop entry and MIME checked, About with version and licences; README for users
+- [ ] **Cleaned up:** dead code and leftovers from the recreation, docs, and the 16 GB `target/` once development is
+      done (user, 2026-10-15)
 
 ---
 
