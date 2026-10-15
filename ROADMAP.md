@@ -762,10 +762,32 @@ this just a great modern paint.net replacement for linux."
         or blur; lifting pixels and `fill_masked` work per tile in parallel; `draw_transformed` writes destination
         tiles in parallel. Move Selected Pixels on the whole photo: 7.4 s → 0.84 s for a 24-frame drag (worst frame,
         the lift, 552 → 136 ms; ~30 ms frames while dragging). To do: draw the floating pixels on the GPU
-  - [ ] Still over budget: Invert Selection (200 ms, polygon XOR of 700k points), Rotate Image 90° (88 ms), Flip
-        (45 ms), Copy / Paste of the whole photo (300 / 440 ms frames), undo/redo of whole-image changes (15–35 ms,
-        Canvas Size 99 ms), the first frame with a complex selection (12 ms, mask upload), saving (to measure: the
-        audit now flattens first)
+  - [x] **Clipboard:** the desktop clipboard has a thread of its own (arboard converts a copied image to PNG for
+        Wayland on the calling thread: ~0.3 s for the photo); copy and paste build pixels per tile in parallel and use
+        the cached selection mask. Copy 309 → 38 ms, Paste 442 → 37 ms frames. Pasting a large image another app
+        copied still waits for its PNG to decode. The audit uses an in-memory clipboard (it had been overwriting the
+        user's clipboard with the photo)
+  - [x] **Invert Selection, Flip / Rotate Image** run on a snapshot in the background on large images (the polygon
+        XOR of a wand selection took 0.2 s); Invert keeps the inverted mask (255 − coverage; test: within 1 level of
+        rasterising the inverted outline). `to_pixels` / `write_pixels` / `compact` and Levels' histogram work in
+        parallel
+  - [x] **Undo / redo of whole-image changes:** at most 96 tiles (24 MB) are composited and shown per frame, visible
+        ones first, the rest over the next frames (it was ~370 tiles in one 15–35 ms frame); the live gradient still
+        redraws at once
+  - [x] **Feathering a complex selection** froze 3.2 s (undo 0.1 s, redo 3.3 s): the polygon ants of a feathered
+        selection are its outline offset (3.1 s for the wand selection), so complex selections now always take the
+        GPU ants (decided on the outline's own size) and never compute them; the distance transform's column pass
+        and both transforms run in parallel; the field reads the kept unfeathered mask instead of rasterising again
+        (test: identical field); selection masks are cached by what they depend on (outline id, feather, quality,
+        image size), the last four kept, so undo/redo between selections find theirs again. Now 171 ms to apply,
+        undo/redo 10 ms
+  - **Audit 2026-10-15, after:** 2 actions over 100 ms (were 40): feathering the 700k-point wand selection (171 ms,
+    the distance field) and the first frame of Move Selected Pixels on the whole photo (128 ms; then ~25 ms frames).
+    Everything else ≤ 50 ms per frame, most well under 16 ms; full run 145 s (was 355 s, mostly waiting)
+  - [ ] Left: draw floating pixels (Move Selected Pixels) on the GPU, so a whole-photo move costs nothing per frame;
+        the feather field in the background; Resize's OK frame (50 ms), Gradient finish (37 ms bake), Fill Selection
+        (30 ms), Flip/Rotate Layer (26–29 ms) on the UI thread; WebP saving takes 17 s in the background at default
+        effort
 - [ ] **Everything functional:** the disabled commands (Print, Acquire, Color Profile, the image's right-click menu,
       the shape tool's line style, caps and shape cycling) either work or leave the menus; Sketch Blur (no published
       maths) likewise; every tool option does what it says

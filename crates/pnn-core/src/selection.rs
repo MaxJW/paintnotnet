@@ -313,6 +313,18 @@ impl Selection {
     /// on the geometry, quality and how far the feather reaches outward, not otherwise on the
     /// radius, so callers can cache it while the radius changes.
     pub fn distance_field(&self, width: u32, height: u32, antialias: bool) -> Option<FeatherField> {
+        self.distance_field_from(width, height, antialias, None)
+    }
+
+    /// As [`Self::distance_field`], reading the outline's coverage from `hard` (this
+    /// selection's unfeathered mask, same quality) instead of rasterising it again.
+    pub fn distance_field_from(
+        &self,
+        width: u32,
+        height: u32,
+        antialias: bool,
+        hard: Option<&Mask>,
+    ) -> Option<FeatherField> {
         let [x0, y0, x1, y1] = self.bounds()?;
         let grow = self.feather.outward_extent().ceil() as f64 + 2.0;
         let rx0 = (x0 - grow).floor().max(0.0) as u32;
@@ -328,7 +340,18 @@ impl Selection {
             width: rx1 - rx0,
             height: ry1 - ry0,
         };
-        let coverage = self.raster_region(region, antialias);
+        let coverage = match hard {
+            Some(m) => {
+                use rayon::prelude::*;
+                (0..region.height)
+                    .into_par_iter()
+                    .flat_map_iter(|j| {
+                        (0..region.width).map(move |i| m.get(region.x + i, region.y + j))
+                    })
+                    .collect()
+            }
+            None => self.raster_region(region, antialias),
+        };
         // The canvas edge is not an edge of the selection.
         let field = SignedField::from_coverage(
             &coverage,
@@ -1230,6 +1253,26 @@ mod tests {
         let m = coverage(&s, w as u32, h as u32, false);
         for i in 0..w * h {
             assert_eq!(m[i] > 127, checker[i] > 127, "pixel {i}");
+        }
+    }
+
+    /// A feather field built from the kept unfeathered mask is the one built by rasterising.
+    #[test]
+    fn feather_field_from_the_kept_mask_matches() {
+        let (w, h) = (300u32, 200u32);
+        let sel = Selection::ellipse(20.3, 15.7, 250.2, 180.9).with_feather(Feather {
+            radius: 12.0,
+            ..Default::default()
+        });
+        for aa in [false, true] {
+            let hard = sel
+                .clone()
+                .with_feather(Feather::NONE)
+                .rasterize_hard(w, h, aa);
+            let a = sel.distance_field(w, h, aa).unwrap();
+            let b = sel.distance_field_from(w, h, aa, Some(&hard)).unwrap();
+            assert_eq!(a.region, b.region);
+            assert_eq!(a.field.sd, b.field.sd, "antialias {aa}");
         }
     }
 

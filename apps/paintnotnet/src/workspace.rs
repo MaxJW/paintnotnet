@@ -30,7 +30,13 @@ pub struct DocumentTab {
     pub gpu: GpuSync,
     pub layer_thumbs: LayerThumbs,
     /// Rasterised selection: (selection revision, antialiased, mask).
-    pub mask_cache: Option<(u64, bool, std::sync::Arc<pnn_core::Mask>)>,
+    /// Recent selection masks (`selection_tools::MaskKey`), newest last: undo and redo between
+    /// selections find theirs again instead of rasterising (0.1 s for a Magic Wand selection
+    /// of a photo).
+    pub mask_cache: Vec<(
+        crate::selection_tools::MaskKey,
+        std::sync::Arc<pnn_core::Mask>,
+    )>,
     /// Selection distance field (survives feather radius changes).
     pub feather_field: Option<std::sync::Arc<pnn_core::selection::FeatherField>>,
     /// Marching-ant outlines: (selection revision, contours).
@@ -158,7 +164,7 @@ impl Workspace {
             compositor: Compositor::new(),
             gpu: GpuSync::default(),
             layer_thumbs: LayerThumbs::default(),
-            mask_cache: None,
+            mask_cache: Vec::new(),
             feather_field: None,
             ants_cache: None,
             thumbnail: None,

@@ -208,3 +208,31 @@ fn wheel_zooms_after_moving_the_window() {
     let after = h.state().workspace().active().unwrap().view.unwrap().zoom;
     assert!(after > before, "zoomed: {before} -> {after}");
 }
+
+/// Invert Selection keeps the mask (inverted) instead of rasterising again: it agrees with
+/// rasterising the inverted outline.
+#[test]
+fn invert_selection_keeps_an_exact_mask() {
+    use paintnotnet::commands::{Command, Triggered};
+    let mut h = harness();
+    let ctx = h.ctx.clone();
+    let tab = h.state_mut().workspace_mut().active_mut().unwrap();
+    tab.doc
+        .set_selection(pnn_core::Selection::ellipse(10.3, 7.7, 71.2, 55.9));
+    let _ = tab.selection_mask(true);
+    h.state_mut()
+        .execute(&ctx, Triggered::once(Command::InvertSelection));
+    h.step();
+    let tab = h.state_mut().workspace_mut().active_mut().unwrap();
+    let (w, hh) = (tab.doc.width(), tab.doc.height());
+    let kept = tab.selection_mask(true).unwrap().to_pixels();
+    let fresh = tab.doc.selection().rasterize_hard(w, hh, true).to_pixels();
+    let worst = kept
+        .iter()
+        .zip(&fresh)
+        .map(|(a, b)| (*a as i32 - *b as i32).abs())
+        .max()
+        .unwrap();
+    assert!(worst <= 1, "differs by up to {worst}");
+    assert_eq!(kept[0], 255, "outside the ellipse is now selected");
+}

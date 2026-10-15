@@ -58,6 +58,26 @@ fn main() {
         let _ = combined.bounds();
         let t_bounds = t.elapsed();
         drop(m);
+        {
+            let f = pnn_core::selection::Feather {
+                radius: 10.0,
+                ..Default::default()
+            };
+            let fs = combined.clone().with_feather(f);
+            let t = Instant::now();
+            let field = fs.distance_field(w, h, true).unwrap();
+            let t_field = t.elapsed();
+            let t = Instant::now();
+            let _ = fs.shape_field(&field, w, h);
+            let t_shape = t.elapsed();
+            let t = Instant::now();
+            let ants = fs.ant_contours();
+            println!(
+                "  feather 10 px: field {t_field:?}, shape {t_shape:?}, ants {:?} ({} contours)",
+                t.elapsed(),
+                ants.len()
+            );
+        }
         println!(
             "seed {seed:?}: {n} px selected; flood {t_flood:?}, trace {t_trace:?} ({} contours, {pts} points), combine {t_comb:?}, rasterize {t_rast:?}, ants {t_ants:?} ({} contours), bounds {t_bounds:?}",
             shape.contours().len(),

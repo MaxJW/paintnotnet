@@ -100,6 +100,10 @@ impl Audit {
         // The command itself runs outside a frame here; count it as one.
         self.frames.push(t.elapsed());
         self.frames(3);
+        // Image commands on a large image finish in the background; the next action waits.
+        self.settle(Duration::from_secs(20), |h| {
+            !h.state().click_job_running() && !h.state().doc_job_running()
+        });
     }
 
     fn key(&mut self, modifiers: Modifiers, key: Key) {
@@ -221,6 +225,9 @@ fn perf_audit() {
         rows: Vec::new(),
         only: std::env::var("PNN_PERF_ONLY").ok(),
     };
+    // Not the user's desktop clipboard: the audit copies the whole image.
+    a.h.state_mut()
+        .set_clipboard(Box::new(paintnotnet::clipboard::MemoryClipboard::default()));
     let ctx = a.h.ctx.clone();
     if a.h.state().diagnostics().visible() {
         a.h.state_mut()
@@ -351,6 +358,18 @@ fn perf_audit() {
     a.action("idle with a complex selection (30 frames)", |a| {
         a.frames(30)
     });
+    a.action("Feather Selection 10 px (complex): open + OK", |a| {
+        a.command(Command::FeatherSelection);
+        if let Some(d) = a.h.state_mut().doc_dialog_mut()
+            && let paintnotnet::doc_dialogs::Kind::FeatherSelection(f) = &mut d.kind
+        {
+            f.radius = 10.0;
+        }
+        a.frames(5);
+        a.ok();
+        a.frames(5);
+    });
+    a.undo_redo("Feather Selection (complex)");
     a.h.state_mut().set_tool(ToolKind::MoveSelection);
     a.action("MoveSelection drag (complex)", |a| {
         let (w, h) = a.size();
@@ -395,11 +414,11 @@ fn perf_audit() {
     a.action("Select All + Copy", |a| {
         a.command(Command::SelectAll);
         a.command(Command::Copy);
-        a.settle(Duration::from_secs(10), |_| false);
+        a.frames(5);
     });
     a.action("Paste into new layer", |a| {
         a.command(Command::PasteIntoNewLayer);
-        a.settle(Duration::from_secs(5), |_| false);
+        a.frames(5);
         a.command(Command::Finish);
     });
     a.undo_redo("Paste into new layer");

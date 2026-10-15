@@ -184,27 +184,31 @@ fn edt_1d(f: &mut [f32], v: &mut [usize], z: &mut [f32], d: &mut [f32]) {
 /// Exact squared Euclidean distance from each pixel centre to the nearest `seed` pixel centre
 /// (0 on seeds, a large value if there are none).
 pub fn squared_distance(seed: &[bool], width: usize, height: usize) -> Vec<f32> {
-    let mut g: Vec<f32> = seed.iter().map(|&s| if s { 0.0 } else { INF }).collect();
-    // Columns, then rows.
-    let mut cols: Vec<Vec<f32>> = (0..width)
-        .into_par_iter()
-        .map(|x| {
-            let mut f: Vec<f32> = (0..height).map(|y| g[y * width + x]).collect();
+    if width == 0 || height == 0 {
+        return Vec::new();
+    }
+    // Columns, then rows. Each column is gathered into a contiguous run and written back in
+    // parallel (the write-back was single-threaded across rows: much of 0.37 s for a 24 MP
+    // feather field).
+    let mut cols = vec![0f32; width * height];
+    cols.par_chunks_mut(height)
+        .enumerate()
+        .for_each(|(x, col)| {
+            for (y, v) in col.iter_mut().enumerate() {
+                *v = if seed[y * width + x] { 0.0 } else { INF };
+            }
             let (mut v, mut z, mut d) = (
                 vec![0usize; height],
                 vec![0f32; height + 1],
                 vec![0f32; height],
             );
-            edt_1d(&mut f, &mut v, &mut z, &mut d);
-            f
-        })
-        .collect();
-    for (x, col) in cols.iter_mut().enumerate() {
-        for (y, &val) in col.iter().enumerate() {
-            g[y * width + x] = val;
+            edt_1d(col, &mut v, &mut z, &mut d);
+        });
+    let mut g = vec![0f32; width * height];
+    g.par_chunks_mut(width).enumerate().for_each(|(y, row)| {
+        for (x, v) in row.iter_mut().enumerate() {
+            *v = cols[x * height + y];
         }
-    }
-    g.par_chunks_mut(width).for_each(|row| {
         let (mut v, mut z, mut d) = (
             vec![0usize; width],
             vec![0f32; width + 1],
@@ -251,13 +255,15 @@ impl SignedField {
                 coverage[y * width + x]
             }
         };
-        let inside: Vec<bool> = (0..h)
-            .flat_map(|y| (0..w).map(move |x| (x, y)))
-            .map(|(x, y)| at(x, y) >= 128)
+        let inside: Vec<bool> = (0..w * h)
+            .into_par_iter()
+            .map(|i| at(i % w, i / w) >= 128)
             .collect();
-        let outside: Vec<bool> = inside.iter().map(|b| !b).collect();
-        let d_in = squared_distance(&inside, w, h);
-        let d_out = squared_distance(&outside, w, h);
+        let outside: Vec<bool> = inside.par_iter().map(|b| !b).collect();
+        let (d_in, d_out) = rayon::join(
+            || squared_distance(&inside, w, h),
+            || squared_distance(&outside, w, h),
+        );
         let mut sd = vec![0f32; width * height];
         sd.par_chunks_mut(width).enumerate().for_each(|(y, row)| {
             for (x, s) in row.iter_mut().enumerate() {

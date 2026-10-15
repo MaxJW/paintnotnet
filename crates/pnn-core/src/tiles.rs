@@ -211,16 +211,20 @@ impl<T: Copy + PartialEq> TiledBuffer<T> {
 
     /// Free tiles whose every pixel equals the absent value (restores sparsity after
     /// whole-surface rewrites).
-    pub fn compact(&mut self) {
+    pub fn compact(&mut self)
+    where
+        T: Send + Sync,
+    {
+        use rayon::prelude::*;
         let absent = self.absent;
-        for slot in &mut self.tiles {
+        self.tiles.par_iter_mut().for_each(|slot| {
             if slot
                 .as_ref()
                 .is_some_and(|t| t.pixels().iter().all(|&p| p == absent))
             {
                 *slot = None;
             }
-        }
+        });
     }
 
     /// Number of allocated tiles (memory diagnostics, tests).
@@ -239,34 +243,54 @@ impl<T: Copy + PartialEq> TiledBuffer<T> {
         )
     }
 
-    /// Copy row-major pixels (exactly `width * height`) into the buffer.
-    pub fn write_pixels(&mut self, pixels: &[T]) {
+    /// Copy row-major pixels (exactly `width * height`) into the buffer. Tiles in parallel
+    /// (whole-image transforms of a 24 MP photo spent ~20 ms here, and again in `to_pixels`).
+    pub fn write_pixels(&mut self, pixels: &[T])
+    where
+        T: Send + Sync,
+    {
+        use rayon::prelude::*;
         assert_eq!(pixels.len(), (self.width as usize) * (self.height as usize));
-        let width = self.width as usize;
-        for c in self.tile_coords().collect::<Vec<_>>() {
-            let (x0, y0, w, h) = self.tile_bounds(c);
-            let tile = self.tile_mut(c);
+        let (width, height, tiles_x, absent) = (self.width, self.height, self.tiles_x, self.absent);
+        self.tiles.par_iter_mut().enumerate().for_each(|(i, slot)| {
+            let (x0, y0) = (
+                (i as u32 % tiles_x) * TILE_SIZE,
+                (i as u32 / tiles_x) * TILE_SIZE,
+            );
+            let (w, h) = (TILE_SIZE.min(width - x0), TILE_SIZE.min(height - y0));
+            let tile = Arc::make_mut(slot.get_or_insert_with(|| Arc::new(Tile::filled(absent))));
             for row in 0..h {
-                let src_start = (y0 + row) as usize * width + x0 as usize;
+                let src_start = (y0 + row) as usize * width as usize + x0 as usize;
                 tile.row_mut(row)[..w as usize]
                     .copy_from_slice(&pixels[src_start..src_start + w as usize]);
             }
-        }
+        });
     }
 
-    /// Row-major copy of all pixels.
-    pub fn to_pixels(&self) -> Vec<T> {
+    /// Row-major copy of all pixels; bands of a tile's height in parallel.
+    pub fn to_pixels(&self) -> Vec<T>
+    where
+        T: Send + Sync,
+    {
+        use rayon::prelude::*;
         let width = self.width as usize;
         let mut out = vec![self.absent; width * self.height as usize];
-        for c in self.tile_coords() {
-            let Some(tile) = self.tile(c) else { continue };
-            let (x0, y0, w, h) = self.tile_bounds(c);
-            for row in 0..h {
-                let dst_start = (y0 + row) as usize * width + x0 as usize;
-                out[dst_start..dst_start + w as usize]
-                    .copy_from_slice(&tile.row(row)[..w as usize]);
-            }
+        if width == 0 {
+            return out;
         }
+        out.par_chunks_mut(width * TILE_SIZE as usize)
+            .enumerate()
+            .for_each(|(ty, band)| {
+                for tx in 0..self.tiles_x {
+                    let c = TileCoord { tx, ty: ty as u32 };
+                    let Some(tile) = self.tile(c) else { continue };
+                    let (x0, _, w, h) = self.tile_bounds(c);
+                    for row in 0..h {
+                        let dst = row as usize * width + x0 as usize;
+                        band[dst..dst + w as usize].copy_from_slice(&tile.row(row)[..w as usize]);
+                    }
+                }
+            });
         out
     }
 }

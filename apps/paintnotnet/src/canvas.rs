@@ -387,15 +387,23 @@ pub fn show(
     // A complex selection (the Magic Wand on a photo: tens of thousands of outlines) gets its
     // ants from the GPU, drawn from the selection's mask: as egui lines they cost tens of
     // milliseconds every frame and the whole app lagged.
-    let contours = (!tab.doc.selection().is_empty()).then(|| tab.ant_contours(ui.ctx()));
+    // Decided on the selection's own outline: the polygon ants of a feathered selection are
+    // its outline offset, which takes seconds for a complex one (3.1 s for a Magic Wand
+    // selection of a photo), so complex selections never compute them. The GPU ants draw the
+    // mask's half-coverage line, which is the same contour.
+    let points: usize = tab.doc.selection().contours().iter().map(Vec::len).sum();
     let gpu_ants = gpu.is_some()
         && std::env::var_os("PNN_GPU_ANTS").is_none_or(|v| v != "0")
-        && contours
-            .as_ref()
-            .is_some_and(|c| c.iter().map(Vec::len).sum::<usize>() > GPU_ANTS_POINTS);
+        && points > GPU_ANTS_POINTS;
+    let contours =
+        (!tab.doc.selection().is_empty() && !gpu_ants).then(|| tab.ant_contours(ui.ctx()));
     let ants_offset = ((ui.input(|i| i.time) * 12.0) % 8.0).floor() as f32;
     if let Some(gpu) = gpu {
-        sync_gpu(gpu, tab);
+        let a = view.screen_to_image([0.0, 0.0], vp);
+        let b = view.screen_to_image(vp, vp);
+        if sync_gpu(gpu, tab, Some([a[0], a[1], b[0], b[1]])) {
+            ui.ctx().request_repaint();
+        }
         if let Some((rev, mask)) = &state.overlay {
             sync_overlay(gpu, tab, *rev, mask);
         }
@@ -464,13 +472,11 @@ pub fn show(
         // The panels over the canvas show this blurred (see `glass`).
         crate::glass::set_backdrop(ui.ctx(), Some(area));
     }
-    if let Some(contours) = contours {
-        if gpu_ants {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(80));
-        } else {
-            marching_ants(ui, &contours, &view, canvas_rect, area, vp, ppp);
-        }
+    if gpu_ants {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(80));
+    } else if let Some(contours) = contours {
+        marching_ants(ui, &contours, &view, canvas_rect, area, vp, ppp);
     }
     if let Some(handles) = state.handles {
         let painter = ui.painter().with_clip_rect(area);
@@ -808,11 +814,17 @@ fn sync_ants(gpu: &egui_wgpu::RenderState, tab: &mut DocumentTab, rev: u64, mask
     tab.gpu.ants_revision = rev;
 }
 
-fn sync_gpu(gpu: &egui_wgpu::RenderState, tab: &mut DocumentTab) {
+/// Tiles composited and shown per frame when many changed at once (undo of a whole-image
+/// change on a 24 MP photo is ~370 tiles, ~96 MB of uploads: 15–35 ms in one frame). The
+/// visible ones go first; the rest follow over the next frames.
+const TILES_PER_FRAME: usize = 96;
+
+/// Composite and show what changed. Returns true if tiles are left for the next frames.
+fn sync_gpu(gpu: &egui_wgpu::RenderState, tab: &mut DocumentTab, visible: Option<Rect2>) -> bool {
     let (w, h) = (tab.doc.width(), tab.doc.height());
     let mut renderer = gpu.renderer.write();
     let Some(canvas) = renderer.callback_resources.get_mut::<CanvasRenderer>() else {
-        return;
+        return false;
     };
     let recreated = canvas.ensure_canvas(&gpu.device, tab.key, w, h);
     let (tx, ty) = (tab.doc.tiles_x(), tab.doc.tiles_y());
@@ -835,12 +847,26 @@ fn sync_gpu(gpu: &egui_wgpu::RenderState, tab: &mut DocumentTab) {
     });
     let all = preview != sync.shown_preview;
     sync.shown_preview = preview;
-    let stale: Vec<TileCoord> = (0..ty)
+    let mut stale: Vec<TileCoord> = (0..ty)
         .flat_map(|ty| (0..tx).map(move |tx| TileCoord { tx, ty }))
         .filter(|&c| all || doc.tile_revision(c) != sync.revisions[(c.ty * tx + c.tx) as usize])
         .collect();
     if stale.is_empty() {
-        return;
+        return false;
+    }
+    // The live gradient redraws everything at once (no half-updated frames while it moves).
+    let mut more = false;
+    if !all && stale.len() > TILES_PER_FRAME {
+        let t = pnn_core::TILE_SIZE as f64;
+        if let Some([x0, y0, x1, y1]) = visible {
+            stale.sort_by_key(|c| {
+                let (cx0, cy0) = (c.tx as f64 * t, c.ty as f64 * t);
+                let on_screen = cx0 + t > x0 && cx0 < x1 && cy0 + t > y0 && cy0 < y1;
+                !on_screen
+            });
+        }
+        stale.truncate(TILES_PER_FRAME);
+        more = true;
     }
     let layers: Vec<pnn_render::LayerInput<'_>> = doc
         .layers()
@@ -867,7 +893,11 @@ fn sync_gpu(gpu: &egui_wgpu::RenderState, tab: &mut DocumentTab) {
     for &c in &stale {
         sync.revisions[(c.ty * tx + c.tx) as usize] = doc.tile_revision(c);
     }
+    more
 }
+
+/// Image-space rectangle [x0, y0, x1, y1].
+type Rect2 = [f64; 4];
 
 fn scrollbars(ui: &mut egui::Ui, full: Rect, canvas: Rect, tab: &mut DocumentTab, ppp: f64) {
     let img = tab.image_size();

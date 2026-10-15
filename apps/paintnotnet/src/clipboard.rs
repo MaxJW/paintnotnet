@@ -26,16 +26,84 @@ pub trait Clipboard {
     fn set_text(&mut self, text: String) -> Result<(), String>;
 }
 
-/// The desktop clipboard.
-pub struct SystemClipboard(Option<arboard::Clipboard>);
+/// The desktop clipboard, served by a thread of its own: setting an image converts it to PNG
+/// for the desktop (arboard does that on Wayland), which took ~0.3 s on a 24 MP photo on the
+/// UI thread. Copying hands the image over and returns; reading waits for the answer.
+pub struct SystemClipboard {
+    tx: Option<std::sync::mpsc::Sender<ClipRequest>>,
+}
+
+enum ClipRequest {
+    SetImage(ClipImage),
+    SetText(String),
+    GetImage(std::sync::mpsc::Sender<Option<ClipImage>>),
+    GetText(std::sync::mpsc::Sender<Option<String>>),
+}
 
 impl SystemClipboard {
     pub fn new() -> Self {
-        Self(
-            arboard::Clipboard::new()
-                .map_err(|e| log::warn!("clipboard unavailable: {e}"))
-                .ok(),
-        )
+        let (tx, rx) = std::sync::mpsc::channel::<ClipRequest>();
+        let started = std::thread::Builder::new()
+            .name("clipboard".into())
+            .spawn(move || {
+                let mut cb = match arboard::Clipboard::new() {
+                    Ok(cb) => cb,
+                    Err(e) => {
+                        log::warn!("clipboard unavailable: {e}");
+                        // Answer reads with nothing until the app ends.
+                        for req in rx {
+                            match req {
+                                ClipRequest::GetImage(reply) => drop(reply.send(None)),
+                                ClipRequest::GetText(reply) => drop(reply.send(None)),
+                                _ => {}
+                            }
+                        }
+                        return;
+                    }
+                };
+                for req in rx {
+                    match req {
+                        ClipRequest::SetImage(image) => {
+                            let r = cb.set_image(arboard::ImageData {
+                                width: image.width as usize,
+                                height: image.height as usize,
+                                bytes: image.rgba.into(),
+                            });
+                            if let Err(e) = r {
+                                log::warn!("clipboard: couldn't copy the image: {e}");
+                            }
+                        }
+                        ClipRequest::SetText(text) => {
+                            if let Err(e) = cb.set_text(text) {
+                                log::warn!("clipboard: couldn't copy the text: {e}");
+                            }
+                        }
+                        ClipRequest::GetImage(reply) => {
+                            let img = cb.get_image().ok().map(|img| ClipImage {
+                                width: img.width as u32,
+                                height: img.height as u32,
+                                rgba: img.bytes.into_owned(),
+                            });
+                            let _ = reply.send(img);
+                        }
+                        ClipRequest::GetText(reply) => {
+                            let _ = reply.send(cb.get_text().ok());
+                        }
+                    }
+                }
+            })
+            .is_ok();
+        Self {
+            tx: started.then_some(tx),
+        }
+    }
+
+    fn send(&self, req: ClipRequest) -> Result<(), String> {
+        self.tx
+            .as_ref()
+            .ok_or("clipboard unavailable")?
+            .send(req)
+            .map_err(|_| "clipboard unavailable".to_owned())
     }
 }
 
@@ -47,34 +115,23 @@ impl Default for SystemClipboard {
 
 impl Clipboard for SystemClipboard {
     fn get_image(&mut self) -> Option<ClipImage> {
-        let img = self.0.as_mut()?.get_image().ok()?;
-        Some(ClipImage {
-            width: img.width as u32,
-            height: img.height as u32,
-            rgba: img.bytes.into_owned(),
-        })
+        let (reply, answer) = std::sync::mpsc::channel();
+        self.send(ClipRequest::GetImage(reply)).ok()?;
+        answer.recv().ok().flatten()
     }
 
     fn set_image(&mut self, image: ClipImage) -> Result<(), String> {
-        let cb = self.0.as_mut().ok_or("clipboard unavailable")?;
-        cb.set_image(arboard::ImageData {
-            width: image.width as usize,
-            height: image.height as usize,
-            bytes: image.rgba.into(),
-        })
-        .map_err(|e| e.to_string())
+        self.send(ClipRequest::SetImage(image))
     }
 
     fn get_text(&mut self) -> Option<String> {
-        self.0.as_mut()?.get_text().ok()
+        let (reply, answer) = std::sync::mpsc::channel();
+        self.send(ClipRequest::GetText(reply)).ok()?;
+        answer.recv().ok().flatten()
     }
 
     fn set_text(&mut self, text: String) -> Result<(), String> {
-        self.0
-            .as_mut()
-            .ok_or("clipboard unavailable")?
-            .set_text(text)
-            .map_err(|e| e.to_string())
+        self.send(ClipRequest::SetText(text))
     }
 }
 
@@ -103,33 +160,38 @@ impl Clipboard for MemoryClipboard {
 }
 
 /// Pixels of `surface` inside the selection (whole surface when nothing is selected), as
-/// RGBA with alpha scaled by selection coverage.
-fn copy_region(surface: &Surface, selection: &Selection, antialias: bool) -> Option<ClipImage> {
+/// RGBA with alpha scaled by selection coverage (`mask`, the selection's cached mask). Rows in
+/// parallel.
+fn copy_region(
+    surface: &Surface,
+    selection: &Selection,
+    mask: Option<&pnn_core::Mask>,
+) -> Option<ClipImage> {
+    use rayon::prelude::*;
     let (w, h) = (surface.width(), surface.height());
-    let (r, mask) = if selection.is_empty() {
-        (
-            Rect {
-                x: 0,
-                y: 0,
-                width: w,
-                height: h,
-            },
-            None,
-        )
-    } else {
-        (
-            selection.pixel_bounds(w, h)?,
-            Some(selection.rasterize(w, h, antialias)),
-        )
-    };
-    let mut rgba = Vec::with_capacity((r.width * r.height * 4) as usize);
-    for y in r.y..r.y + r.height {
-        for x in r.x..r.x + r.width {
-            let p = surface.get(x, y);
-            let m = mask.as_ref().map_or(255, |m| m.get(x, y) as u32);
-            rgba.extend_from_slice(&[p.r, p.g, p.b, (p.a as u32 * m / 255) as u8]);
+    let r = if selection.is_empty() {
+        Rect {
+            x: 0,
+            y: 0,
+            width: w,
+            height: h,
         }
-    }
+    } else {
+        selection.pixel_bounds(w, h)?
+    };
+    let mask = mask.filter(|_| !selection.is_empty());
+    let mut rgba = vec![0u8; (r.width * r.height * 4) as usize];
+    rgba.par_chunks_mut((r.width * 4) as usize)
+        .enumerate()
+        .for_each(|(j, row)| {
+            let y = r.y + j as u32;
+            for (i, px) in row.chunks_mut(4).enumerate() {
+                let x = r.x + i as u32;
+                let p = surface.get(x, y);
+                let m = mask.map_or(255, |m| m.get(x, y) as u32);
+                px.copy_from_slice(&[p.r, p.g, p.b, (p.a as u32 * m / 255) as u8]);
+            }
+        });
     Some(ClipImage {
         width: r.width,
         height: r.height,
@@ -138,25 +200,42 @@ fn copy_region(surface: &Surface, selection: &Selection, antialias: bool) -> Opt
 }
 
 fn to_surface(img: &ClipImage, at: (u32, u32), canvas: (u32, u32)) -> Surface {
+    use rayon::prelude::*;
     let mut s = Surface::new_transparent(canvas.0, canvas.1);
-    for y in 0..img.height {
-        for x in 0..img.width {
-            let (cx, cy) = (at.0 + x, at.1 + y);
-            if cx >= canvas.0 || cy >= canvas.1 {
-                continue;
-            }
-            let i = ((y * img.width + x) * 4) as usize;
-            let c = ColorBgra::from_rgba(
-                img.rgba[i],
-                img.rgba[i + 1],
-                img.rgba[i + 2],
-                img.rgba[i + 3],
-            );
-            if c.a > 0 {
-                s.set(cx, cy, c);
+    let r = Rect {
+        x: at.0.min(canvas.0),
+        y: at.1.min(canvas.1),
+        width: img.width.min(canvas.0.saturating_sub(at.0)),
+        height: img.height.min(canvas.1.saturating_sub(at.1)),
+    };
+    if r.width == 0 || r.height == 0 {
+        return s;
+    }
+    // Tiles in parallel (a pixel at a time took ~0.15 s for a 24 MP paste).
+    let t = pnn_core::TILE_SIZE;
+    s.slots_in(r).into_par_iter().for_each(|(c, slot)| {
+        let mut tile = pnn_core::Tile::filled(ColorBgra::TRANSPARENT);
+        let mut any = false;
+        let (tx0, ty0) = (c.tx * t, c.ty * t);
+        for cy in ty0.max(r.y)..(ty0 + t).min(r.y + r.height) {
+            for cx in tx0.max(r.x)..(tx0 + t).min(r.x + r.width) {
+                let i = (((cy - at.1) * img.width + (cx - at.0)) * 4) as usize;
+                let c = ColorBgra::from_rgba(
+                    img.rgba[i],
+                    img.rgba[i + 1],
+                    img.rgba[i + 2],
+                    img.rgba[i + 3],
+                );
+                if c.a > 0 {
+                    tile.set(cx - tx0, cy - ty0, c);
+                    any = true;
+                }
             }
         }
-    }
+        if any {
+            *slot = Some(std::sync::Arc::new(tile));
+        }
+    });
     s
 }
 
@@ -175,13 +254,14 @@ impl PaintNotNetApp {
                     return true;
                 };
                 let selection = tab.doc.selection().clone();
+                let mask = tab.selection_mask(antialias);
                 let image = if command == Command::CopyMerged {
-                    copy_region(&flatten(&tab.doc), &selection, antialias)
+                    copy_region(&flatten(&tab.doc), &selection, mask.as_deref())
                 } else {
                     copy_region(
                         &tab.doc.layer(tab.doc.active_index()).surface,
                         &selection,
-                        antialias,
+                        mask.as_deref(),
                     )
                 };
                 let Some(image) = image else { return true };
@@ -194,12 +274,12 @@ impl PaintNotNetApp {
                         return true;
                     };
                     let (w, h) = (tab.doc.width(), tab.doc.height());
-                    let mask = if selection.is_empty() {
-                        Selection::all(w, h)
-                    } else {
-                        selection.clone()
-                    }
-                    .rasterize(w, h, antialias);
+                    let mask = match tab.selection_mask(antialias) {
+                        Some(m) => m,
+                        None => {
+                            std::sync::Arc::new(Selection::all(w, h).rasterize(w, h, antialias))
+                        }
+                    };
                     let a = tab.doc.active_index();
                     let bounds = selection.pixel_bounds(w, h);
                     tab.doc.modify_layer(a, bounds, |l| {
@@ -362,10 +442,12 @@ mod tests {
     fn copy_region_scales_alpha_by_coverage() {
         let mut s = Surface::new_transparent(4, 4);
         s.fill(ColorBgra::from_rgba(10, 20, 30, 255));
-        let img = copy_region(&s, &Selection::rect(1.0, 1.0, 3.0, 2.0), false).unwrap();
+        let sel = Selection::rect(1.0, 1.0, 3.0, 2.0);
+        let mask = sel.rasterize(4, 4, false);
+        let img = copy_region(&s, &sel, Some(&mask)).unwrap();
         assert_eq!((img.width, img.height), (2, 1));
         assert_eq!(&img.rgba[0..4], &[10, 20, 30, 255]);
-        let all = copy_region(&s, &Selection::none(), false).unwrap();
+        let all = copy_region(&s, &Selection::none(), None).unwrap();
         assert_eq!((all.width, all.height), (4, 4));
     }
 

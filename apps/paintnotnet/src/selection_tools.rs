@@ -71,19 +71,52 @@ fn history_name(tool: ToolKind) -> (&'static str, Icon) {
     }
 }
 
+/// What a selection mask depends on: the outline (its geometry id), the feather, the
+/// quality and the image size.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MaskKey {
+    geometry: u64,
+    feather: pnn_core::selection::Feather,
+    antialias: bool,
+    size: (u32, u32),
+}
+
+/// Masks kept per image (each one byte per pixel).
+const MASKS_KEPT: usize = 4;
+
 impl DocumentTab {
+    fn mask_key(&self, antialias: bool) -> MaskKey {
+        let sel = self.doc.selection();
+        MaskKey {
+            geometry: sel.geometry_id(),
+            feather: sel.feather(),
+            antialias,
+            size: (self.doc.width(), self.doc.height()),
+        }
+    }
+
+    /// Keep `mask` as the current selection's.
+    pub fn prime_mask(&mut self, antialias: bool, mask: Arc<Mask>) {
+        let key = self.mask_key(antialias);
+        self.mask_cache.retain(|(k, _)| *k != key);
+        self.mask_cache.push((key, mask));
+        if self.mask_cache.len() > MASKS_KEPT {
+            self.mask_cache.remove(0);
+        }
+    }
+
     /// Coverage mask of the selection (cached per selection and quality). `None` when
     /// nothing is selected.
     pub fn selection_mask(&mut self, antialias: bool) -> Option<Arc<Mask>> {
         if self.doc.selection().is_empty() {
             return None;
         }
-        let rev = self.doc.selection_revision();
-        if let Some((r, aa, m)) = &self.mask_cache
-            && *r == rev
-            && *aa == antialias
-        {
-            return Some(m.clone());
+        let key = self.mask_key(antialias);
+        if let Some(i) = self.mask_cache.iter().position(|(k, _)| *k == key) {
+            let entry = self.mask_cache.remove(i);
+            let m = entry.1.clone();
+            self.mask_cache.push(entry);
+            return Some(m);
         }
         let (w, h) = (self.doc.width(), self.doc.height());
         let sel = self.doc.selection();
@@ -95,7 +128,18 @@ impl DocumentTab {
             let field = match &self.feather_field {
                 Some(f) if sel.field_matches(f, antialias) => f.clone(),
                 _ => {
-                    let f = Arc::new(sel.distance_field(w, h, antialias)?);
+                    // The unfeathered mask, if kept, saves rasterising the outline again.
+                    let hard_key = MaskKey {
+                        feather: pnn_core::selection::Feather::NONE,
+                        ..self.mask_key(antialias)
+                    };
+                    let hard = self
+                        .mask_cache
+                        .iter()
+                        .find(|(k, _)| *k == hard_key)
+                        .map(|(_, m)| m.clone());
+                    let sel = self.doc.selection();
+                    let f = Arc::new(sel.distance_field_from(w, h, antialias, hard.as_deref())?);
                     self.feather_field = Some(f.clone());
                     f
                 }
@@ -103,7 +147,7 @@ impl DocumentTab {
             sel.shape_field(&field, w, h)
         };
         let m = Arc::new(m);
-        self.mask_cache = Some((rev, antialias, m.clone()));
+        self.prime_mask(antialias, m.clone());
         Some(m)
     }
 }
@@ -323,13 +367,69 @@ impl PaintNotNetApp {
             tab.doc.set_selection(combined);
             tab.commit("Magic Wand", Icon::MagicWand);
             if let Some(mask) = mask {
-                tab.mask_cache = Some((tab.doc.selection_revision(), antialias, mask));
+                tab.prime_mask(antialias, mask);
+            }
+        });
+    }
+
+    /// Edit › Invert Selection. On a large image (a Magic Wand selection of a photo is
+    /// hundreds of thousands of points; the polygon XOR took 0.2 s) it works on a snapshot in
+    /// the background; the cached mask, inverted, comes along so nothing is rasterised again.
+    fn invert_selection(&mut self) {
+        let antialias = self.antialiased_selection();
+        let Some(tab) = self.workspace.active_mut() else {
+            return;
+        };
+        let (w, h, key) = (tab.doc.width(), tab.doc.height(), tab.key);
+        let selection = tab.doc.selection().clone();
+        let mask = (selection.feather().is_none())
+            .then(|| tab.selection_mask(antialias))
+            .flatten();
+        let work = move || {
+            let inverted = selection.invert(w, h);
+            let mask = mask.map(|m| {
+                use rayon::prelude::*;
+                let full = Arc::new(pnn_core::Tile::filled(255u8));
+                let tiles: Vec<_> = m
+                    .tile_coords()
+                    .collect::<Vec<_>>()
+                    .into_par_iter()
+                    .map(|c| match m.tile(c) {
+                        None => (c, Some(full.clone())),
+                        Some(t) => {
+                            let mut t = (**t).clone();
+                            t.pixels_mut().iter_mut().for_each(|v| *v = 255 - *v);
+                            (c, Some(Arc::new(t)))
+                        }
+                    })
+                    .collect();
+                let mut out = Mask::new(w, h, 0);
+                for (c, t) in tiles {
+                    out.set_tile(c, t);
+                }
+                out.compact();
+                Arc::new(out)
+            });
+            (inverted, mask)
+        };
+        self.run_click_job(w as u64 * h as u64, work, move |app, (inverted, mask)| {
+            let Some(tab) = app.workspace.tab_mut(key) else {
+                return;
+            };
+            tab.doc.set_selection(inverted);
+            tab.commit("Invert Selection", Icon::InvertSelection);
+            if let Some(mask) = mask {
+                tab.prime_mask(antialias, mask);
             }
         });
     }
 
     /// Edit menu selection commands. Returns false if `command` isn't one.
     pub(crate) fn selection_command(&mut self, command: Command) -> bool {
+        if command == Command::InvertSelection && self.workspace.active().is_some() {
+            self.invert_selection();
+            return true;
+        }
         let antialias = self.antialiased_selection();
         let (primary, secondary) = (self.settings.primary, self.settings.secondary);
         let vp = self.canvas.viewport;
@@ -482,8 +582,28 @@ pub struct ClickJob {
 /// Sets a finished click job's result on the app.
 type ApplyResult = Box<dyn FnOnce(&mut PaintNotNetApp) + Send>;
 
+impl ClickJob {
+    /// Run `work` on the effect threads; `apply` its result on the UI thread when it's done.
+    pub(crate) fn spawn<T: Send + 'static>(
+        ctx: Option<eframe::egui::Context>,
+        work: impl FnOnce() -> T + Send + 'static,
+        apply: impl FnOnce(&mut PaintNotNetApp, T) + Send + 'static,
+    ) -> ClickJob {
+        let (tx, rx) = std::sync::mpsc::channel();
+        crate::effect_runner::effect_pool().spawn(move || {
+            let t = work();
+            let done: ApplyResult = Box::new(move |app| apply(app, t));
+            let _ = tx.send(done);
+            if let Some(ctx) = ctx {
+                ctx.request_repaint();
+            }
+        });
+        ClickJob { rx }
+    }
+}
+
 /// Images up to this many pixels run a click's work at once (and tests stay synchronous).
-const CLICK_AT_ONCE: u64 = 1_000_000;
+pub(crate) const CLICK_AT_ONCE: u64 = 1_000_000;
 
 impl PaintNotNetApp {
     /// Run `work` (on a snapshot) and then `apply` its result here. On a large image `work`
@@ -500,17 +620,7 @@ impl PaintNotNetApp {
             apply(self, t);
             return;
         }
-        let (tx, rx) = std::sync::mpsc::channel();
-        let ctx = self.ctx.clone();
-        crate::effect_runner::effect_pool().spawn(move || {
-            let t = work();
-            let done: ApplyResult = Box::new(move |app| apply(app, t));
-            let _ = tx.send(done);
-            if let Some(ctx) = ctx {
-                ctx.request_repaint();
-            }
-        });
-        self.click_job = Some(ClickJob { rx });
+        self.click_job = Some(ClickJob::spawn(self.ctx.clone(), work, apply));
     }
 
     /// Apply a finished click job (every frame). True while one is still running.
