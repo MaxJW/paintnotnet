@@ -10,7 +10,18 @@ fn main() {
     let doc = pnn_io::load(std::path::Path::new(&args[1])).expect("load");
     let (w, h) = (doc.width(), doc.height());
     println!("load {:?} {w}x{h}", t.elapsed());
+    let t = Instant::now();
     let pixels = doc.layer(0).surface.to_pixels();
+    println!("to_pixels {:?}", t.elapsed());
+    {
+        use rayon::prelude::*;
+        let t = Instant::now();
+        let n = pixels
+            .par_iter()
+            .filter(|&&c| pnn_core::color::oklab(c)[0] > 0.5)
+            .count();
+        println!("oklab of every pixel (parallel) {:?} ({n})", t.elapsed());
+    }
     let seeds: Vec<(u32, u32)> = if args.len() > 3 {
         args[2..]
             .chunks(2)

@@ -206,7 +206,60 @@ pub struct EffectSession {
     gpu: Option<Arc<pnn_render::GpuEffects>>,
     /// Remove Background: finding the layer's subject.
     pub matte: Option<crate::ai::MatteJob>,
+    /// OK was pressed before the preview finished (a large image): the rest renders in the
+    /// background and the effect is committed when it's done.
+    applying: bool,
+    /// For repaints from the background (set when the session opens).
+    ctx: Option<egui::Context>,
 }
+
+/// What building an effect's renderer needs, so it can be built on a worker thread: some
+/// effects do whole-image work up front (Surface Blur's tables, Quantize's palette, the
+/// distance fields of Bevel and Inner Shadow), which froze the UI for up to 1.6 s on a 24 MP
+/// photo when it ran here.
+struct RendererRecipe {
+    build: pnn_effects::framework::Build,
+    values: Vec<Value>,
+    custom: Option<Custom>,
+    matte: Option<Arc<crate::ai::Matte>>,
+    before: Surface,
+    env: Env,
+    gpu: Option<Arc<pnn_render::GpuEffects>>,
+}
+
+impl RendererRecipe {
+    fn make(self) -> Box<dyn Renderer> {
+        let cpu = match &self.custom {
+            Some(Custom::RemoveBackground(rb)) => match &self.matte {
+                Some(m) => matte_renderer(m, rb),
+                // No matte yet: the layer as it is.
+                None => Box::new(pnn_effects::framework::PixelOp(|c| c)),
+            },
+            Some(Custom::Curves(c)) => c.renderer(),
+            Some(Custom::Levels { levels, .. }) => levels.renderer(),
+            None => (self.build)(&self.values, &self.before, &self.env),
+        };
+        pnn_render::gpu_renderer(self.gpu.as_ref(), cpu, &self.before, self.env.bounds)
+    }
+}
+
+/// Effects render on their own threads, one fewer than the CPU has. On rayon's global pool a
+/// slow effect's tiles (Surface Blur, a few seconds on a 24 MP photo) queued ahead of the
+/// UI thread's own parallel work, and frames stalled for up to 2.4 s while it previewed.
+pub fn effect_pool() -> &'static rayon::ThreadPool {
+    static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
+    POOL.get_or_init(|| {
+        let n = std::thread::available_parallelism().map_or(2, |n| n.get());
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(n.saturating_sub(1).max(1))
+            .thread_name(|i| format!("effect-{i}"))
+            .build()
+            .expect("effect threads")
+    })
+}
+
+/// Images up to this many pixels apply at once on OK; larger ones finish in the background.
+pub const APPLY_AT_ONCE: u64 = 1_000_000;
 
 impl Drop for Job {
     fn drop(&mut self) {
@@ -288,35 +341,34 @@ impl EffectSession {
 
     /// The renderer for the current values. Remove Background's (refining the matte) is
     /// built here only when rendering synchronously; previews build it on a worker.
+    fn recipe(&self) -> RendererRecipe {
+        // Missing trailing values (from before an effect gained options) take their defaults.
+        let mut values = self.values.clone();
+        if values.len() < self.def.props.len() {
+            values.extend(
+                self.def.props[values.len()..]
+                    .iter()
+                    .map(|p| p.default_in(&self.env)),
+            );
+        }
+        RendererRecipe {
+            build: self.def.build,
+            values,
+            custom: self.custom.clone(),
+            matte: self.matte.as_ref().and_then(|j| j.matte()).cloned(),
+            before: self.before.clone(),
+            env: self.env.clone(),
+            gpu: self.gpu.clone(),
+        }
+    }
+
     fn renderer(&self) -> Box<dyn Renderer> {
-        let cpu = match &self.custom {
-            Some(Custom::RemoveBackground(rb)) => match self.matte.as_ref().and_then(|j| j.matte())
-            {
-                Some(m) => matte_renderer(m, rb),
-                // No matte yet: the layer as it is.
-                None => Box::new(pnn_effects::framework::PixelOp(|c| c)),
-            },
-            Some(Custom::Curves(c)) => c.renderer(),
-            Some(Custom::Levels { levels, .. }) => levels.renderer(),
-            None => self.def.renderer(&self.values, &self.before, &self.env),
-        };
-        pnn_render::gpu_renderer(self.gpu.as_ref(), cpu, &self.before, self.env.bounds)
+        self.recipe().make()
     }
 
     fn spawn(&mut self, ctx: &egui::Context) {
-        // Remove Background reshapes the whole matte before any tile renders: do that on the
-        // worker, not here.
-        let make: Box<dyn FnOnce() -> Box<dyn Renderer> + Send> =
-            match (&self.custom, self.matte.as_ref().and_then(|j| j.matte())) {
-                (Some(Custom::RemoveBackground(rb)), Some(m)) => {
-                    let (m, rb) = (m.clone(), *rb);
-                    Box::new(move || matte_renderer(&m, &rb))
-                }
-                _ => {
-                    let r = self.renderer();
-                    Box::new(move || r)
-                }
-            };
+        // The renderer is built on the worker (see `RendererRecipe`).
+        let recipe = self.recipe();
         let (tx, rx) = channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let tiles = self.tiles();
@@ -334,9 +386,9 @@ impl EffectSession {
             self.env.bounds,
             ctx.clone(),
         );
-        rayon::spawn(move || {
+        effect_pool().spawn(move || {
             use rayon::prelude::*;
-            let renderer = make();
+            let renderer = recipe.make();
             if cancel.load(Ordering::Relaxed) {
                 return;
             }
@@ -357,10 +409,13 @@ impl EffectSession {
         use rayon::prelude::*;
         let renderer = self.renderer();
         let (src, selection, bounds) = (&self.before, self.selection.as_deref(), self.env.bounds);
-        self.tiles()
-            .par_iter()
-            .map(|&c| (c, render_tile(renderer.as_ref(), src, selection, bounds, c)))
-            .collect()
+        let tiles = self.tiles();
+        effect_pool().install(|| {
+            tiles
+                .par_iter()
+                .map(|&c| (c, render_tile(renderer.as_ref(), src, selection, bounds, c)))
+                .collect()
+        })
     }
 
     /// Set the settings and restart the preview (tests, scripted use).
@@ -403,7 +458,7 @@ impl EffectSession {
             || self.matte.as_ref().is_some_and(|j| j.matte().is_some())
     }
 
-    fn preview_done(&self) -> bool {
+    pub fn preview_done(&self) -> bool {
         self.ready()
             && self.job.as_ref().is_some_and(|j| {
                 j.values == self.values && j.custom == self.custom && j.received == j.total
@@ -434,6 +489,7 @@ impl PaintNotNetApp {
         let Some(mut session) = self.effect_session(target, def, Vec::new(), None) else {
             return;
         };
+        session.ctx = Some(ctx.clone());
         session.values = session.def.defaults_in(&session.env);
         session.custom = target.custom(&session.before, session.env.bounds, &self.ai);
         if let Some(Custom::RemoveBackground(rb)) = &session.custom {
@@ -504,6 +560,8 @@ impl PaintNotNetApp {
             job: None,
             gpu: self.gpu_effects.clone(),
             matte: None,
+            applying: false,
+            ctx: None,
         })
     }
 
@@ -527,7 +585,8 @@ impl PaintNotNetApp {
             }
             return true;
         }
-        if let Some(s) = self.effect_session(target, def, values, custom) {
+        if let Some(mut s) = self.effect_session(target, def, values, custom) {
+            s.ctx = Some(ctx.clone());
             self.effect = Some(s);
             self.finish_effect(true);
         }
@@ -553,6 +612,34 @@ impl PaintNotNetApp {
             if let Some(tab) = self.workspace.tab_mut(s.key) {
                 put_tiles(tab, s.layer, tiles);
             }
+        }
+        // OK was pressed on a large image: commit once the last tile is in; until then a
+        // small progress window instead of the dialog.
+        if s.applying {
+            if s.preview_done() {
+                self.finish_effect(true);
+                return;
+            }
+            let (got, total) = s
+                .job
+                .as_ref()
+                .map_or((0, 1), |j| (j.received, j.total.max(1)));
+            let name = s.def.name;
+            crate::glass::window(
+                ctx,
+                egui::Window::new(name)
+                    .id(egui::Id::new(("effect_dialog", name)))
+                    .collapsible(false)
+                    .resizable(false)
+                    .pivot(egui::Align2::CENTER_CENTER)
+                    .default_pos(ctx.content_rect().center()),
+                |ui| {
+                    ui.set_min_width(260.0);
+                    ui.label(format!("Applying {name}…"));
+                    ui.add(egui::ProgressBar::new(got as f32 / total as f32));
+                },
+            );
+            return;
         }
         let mut outcome = None;
         let mut changed = false;
@@ -694,6 +781,22 @@ impl PaintNotNetApp {
             return;
         }
         if !s.preview_done() {
+            let b = s.env.bounds;
+            if b.width as u64 * b.height as u64 > APPLY_AT_ONCE && s.ready() && s.ctx.is_some() {
+                // Let the background finish rather than render it all here: `run_effect`
+                // commits when the last tile is in.
+                if !s
+                    .job
+                    .as_ref()
+                    .is_some_and(|j| j.values == s.values && j.custom == s.custom)
+                    && let Some(ctx) = s.ctx.clone()
+                {
+                    s.spawn(&ctx);
+                }
+                s.applying = true;
+                self.effect = Some(s);
+                return;
+            }
             s.job = None;
             let tiles = s.render_all();
             put_tiles(tab, s.layer, tiles);

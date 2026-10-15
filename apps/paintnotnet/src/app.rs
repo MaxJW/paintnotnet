@@ -75,6 +75,12 @@ pub struct PaintNotNetApp {
     pub(crate) units: Units,
     /// Open Layer Properties / Resize / Canvas Size / Rotate-Zoom dialog.
     pub(crate) doc_dialog: Option<crate::doc_dialogs::DocDialog>,
+    /// A document dialog's result being worked out in the background (large images).
+    pub(crate) doc_job: Option<crate::actions::DocJob>,
+    /// A tool click's work running in the background (Magic Wand, Paint Bucket).
+    pub(crate) click_job: Option<crate::selection_tools::ClickJob>,
+    /// For repaints requested from background work.
+    pub(crate) ctx: Option<egui::Context>,
     /// Pencil stroke in progress.
     pub(crate) stroke: Option<crate::actions::PencilStroke>,
     pub(crate) brush: Option<crate::paint_tools::BrushStroke>,
@@ -186,6 +192,9 @@ impl PaintNotNetApp {
             rulers: false,
             units: Units::Pixels,
             doc_dialog: None,
+            doc_job: None,
+            click_job: None,
+            ctx: Some(cc.egui_ctx.clone()),
             stroke: None,
             brush: None,
             gradient: None,
@@ -264,6 +273,16 @@ impl PaintNotNetApp {
     /// Select Subject is waiting (for the download question, a download or the model).
     pub fn selecting_subject(&self) -> bool {
         self.select_subject.is_some()
+    }
+
+    /// A document dialog's result is being worked out in the background.
+    pub fn doc_job_running(&self) -> bool {
+        self.doc_job.is_some()
+    }
+
+    /// A tool click's work (Magic Wand, Paint Bucket) is running in the background.
+    pub fn click_job_running(&self) -> bool {
+        self.click_job.is_some()
     }
 
     pub fn effect_mut(&mut self) -> Option<&mut crate::effect_runner::EffectSession> {
@@ -357,6 +376,8 @@ impl PaintNotNetApp {
     /// Run a command as if chosen from a menu or shortcut.
     pub fn execute(&mut self, ctx: &egui::Context, t: Triggered) {
         if self.doc_dialog.is_some()
+            || self.doc_job.is_some()
+            || self.click_job.is_some()
             || self.effect.is_some()
             || self.select_subject.is_some()
             || self.stroke.is_some()
@@ -1944,6 +1965,12 @@ impl eframe::App for PaintNotNetApp {
                 .is_some_and(|d| d.wants_feather_preview());
         let antialias = self.antialiased_selection();
         self.canvas.antialias = antialias;
+        let active = self.workspace.active().map(|t| t.key);
+        self.canvas.ants_shift = self
+            .move_session
+            .as_ref()
+            .filter(|s| Some(s.key) == active)
+            .and_then(|s| s.ants_shift());
         self.canvas.overlay = match self.workspace.active_mut() {
             Some(tab) if preview => tab
                 .selection_mask(antialias)
@@ -1983,7 +2010,17 @@ impl eframe::App for PaintNotNetApp {
         self.panels = panels;
         self.brush_resize();
         let tool_events = std::mem::take(&mut self.canvas.events);
-        if self.modal.is_none() && self.doc_dialog.is_none() {
+        // A finished Magic Wand / Paint Bucket job lands first; while one runs, tool input
+        // waits (it works on a snapshot of the image).
+        let click_running = self.take_click_job();
+        if click_running {
+            ctx.set_cursor_icon(egui::CursorIcon::Progress);
+        }
+        if self.modal.is_none()
+            && self.doc_dialog.is_none()
+            && self.doc_job.is_none()
+            && !click_running
+        {
             self.tool_events(tool_events);
         }
         self.run_doc_dialog(&ctx);

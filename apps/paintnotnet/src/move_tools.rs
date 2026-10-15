@@ -10,6 +10,8 @@
 //! keeps the document as it was before; every change redraws the lifted pixels, transformed,
 //! onto that snapshot. With nothing selected the whole layer moves, as in paint.net.
 
+use std::sync::Arc;
+
 use pnn_core::transform::{self, Affine, IDENTITY, Sampling};
 use pnn_core::{ColorBgra, Document, Rect, Selection, Surface};
 use pnn_tools::{Resampling, ToolKind};
@@ -58,9 +60,25 @@ pub struct MoveSession {
     drag: Option<MoveDrag>,
     /// Something moved since lifting (Finish records a step only then).
     pub changed: bool,
+    /// The selection's mask when lifted, with its identity: moved by whole pixels, the
+    /// marching ants reuse it shifted instead of rasterising the moved outline each frame.
+    pub base_mask: Option<(u64, Arc<pnn_core::Mask>)>,
 }
 
 impl MoveSession {
+    /// The ants mask and how far it has moved, while the session is a whole-pixel move.
+    pub fn ants_shift(&self) -> Option<(u64, Arc<pnn_core::Mask>, [f64; 2])> {
+        let m = self.m;
+        let translation = m[0] == 1.0
+            && m[1] == 0.0
+            && m[3] == 0.0
+            && m[4] == 1.0
+            && m[2].fract() == 0.0
+            && m[5].fract() == 0.0;
+        let (id, mask) = self.base_mask.clone()?;
+        translation.then_some((id, mask, [m[2], m[5]]))
+    }
+
     /// Nub positions in image coordinates.
     pub fn handles(&self) -> [[f64; 2]; 8] {
         let [x0, y0, x1, y1] = self.bounds;
@@ -144,21 +162,38 @@ impl PaintNotNetApp {
             height: h,
         });
         let layer = tab.doc.active_index();
+        let base_mask = tab
+            .selection_mask(antialias)
+            .map(|m| (tab.doc.selection_revision() * 2 + u64::from(antialias), m));
         let mut base = tab.doc.clone();
         base.set_selection(selection.clone());
         let mut pixels = Surface::new_transparent(w, h);
         if kind == MoveKind::Pixels {
-            let mask = selection.rasterize(w, h, antialias);
+            // The cached mask when there is a selection (a Magic Wand selection's comes free);
+            // tiles in parallel (a pixel at a time took ~0.5 s on a 24 MP photo).
+            let mask = match &base_mask {
+                Some((_, m)) => m.clone(),
+                None => Arc::new(selection.rasterize(w, h, antialias)),
+            };
             let src = &tab.doc.layer(layer).surface;
-            for y in rect.y..rect.y + rect.height {
-                for x in rect.x..rect.x + rect.width {
-                    let m = mask.get(x, y) as u32;
-                    if m == 0 {
-                        continue;
-                    }
-                    let p = src.get(x, y);
-                    pixels.set(x, y, p.with_alpha((p.a as u32 * m / 255) as u8));
-                }
+            let coords: Vec<_> = mask.tile_coords().collect();
+            let lifted: Vec<_> = {
+                use rayon::prelude::*;
+                coords
+                    .into_par_iter()
+                    .filter_map(|c| {
+                        let mt = mask.tile(c)?;
+                        let st = src.tile(c)?;
+                        let mut t = (**st).clone();
+                        for (p, &m) in t.pixels_mut().iter_mut().zip(mt.pixels()) {
+                            *p = p.with_alpha((p.a as u32 * m as u32 / 255) as u8);
+                        }
+                        Some((c, Arc::new(t)))
+                    })
+                    .collect()
+            };
+            for (c, t) in lifted {
+                pixels.set_tile(c, Some(t));
             }
             if !copy {
                 base.modify_layer(layer, Some(rect), |l| {
@@ -178,6 +213,7 @@ impl PaintNotNetApp {
             m: IDENTITY,
             drag: None,
             changed: false,
+            base_mask,
         });
         true
     }
@@ -211,6 +247,7 @@ impl PaintNotNetApp {
             m: IDENTITY,
             drag: None,
             changed: true,
+            base_mask: None,
         });
         self.render_move();
     }
@@ -340,8 +377,14 @@ impl PaintNotNetApp {
                 };
                 let Some(d) = s.drag.as_ref() else { return };
                 s.m = match d.mode {
+                    // Whole pixels, as paint.net (3.36 `MoveToolBase`: the offset is the
+                    // difference of integer image positions): a fractional move would blur
+                    // the pixels, and resample all of them on every frame of the drag.
                     DragMode::Move => transform::compose(
-                        &transform::translation(pos[0] - d.start[0], pos[1] - d.start[1]),
+                        &transform::translation(
+                            (pos[0] - d.start[0]).round(),
+                            (pos[1] - d.start[1]).round(),
+                        ),
                         &d.m0,
                     ),
                     DragMode::Rotate {

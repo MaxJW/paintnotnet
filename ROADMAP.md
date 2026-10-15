@@ -738,8 +738,34 @@ this just a great modern paint.net replacement for linux."
 ### 19b. Plan (proposed 2026-10-15, to work through in this order)
 - [ ] **No lag from anything:** measure every tool, selection tool, effect preview, dialog, layer operation, undo/redo,
       open and save on a 24 MP photo in the release build; budget: frames under 7 ms at 165 Hz, nothing on the UI
-      thread over ~100 ms (longer work on a worker with progress, like effects). Known: the wand's 0.25 s still runs
-      on the UI thread
+      thread over ~100 ms (longer work on a worker with progress, like effects)
+  - [x] **The audit** (`tests/ui/perf_audit.rs`, opt-in: `PNN_PERF_IMAGE=<photo>`, release build; `PNN_PERF_ONLY=a,b`
+        picks actions): 340 actions — view, every painting and selection tool, moves, selection commands, clipboard,
+        layer and image commands, document dialogs, all 13 adjustments and every effect (open, preview to the end,
+        OK, undo), saving in six formats — each frame's UI-thread time, worst and total. First run on the user's
+        24 MP photo: painting, view, undo and idle all within a few ms; **40 actions with a frame over 100 ms**
+  - [x] **Effects** (about 30 of them froze 0.1–1.6 s when opening): the renderer is built on the worker
+        (`RendererRecipe`), and effects render on their own thread pool (`effect_pool`, cores − 1): on rayon's global
+        pool a slow effect's tiles queued ahead of the UI thread's own parallel work (Surface Blur: 2.4 s frames).
+        OK before the preview finishes on a large image shows "Applying…" and commits when the last tile is in.
+        After: no effect over 100 ms; worst frames are undo of a whole-image change (17–24 ms, GPU re-upload)
+  - [x] **Document dialogs** (Resize, Canvas Size, Rotate / Zoom, Feather Object, Blur Selection Edge) work on the
+        effect threads on a large image: previews arrive when ready (newest wins), OK shows "Applying…"
+        (Feather Object froze 0.5 s per change)
+  - [x] **Magic Wand and Paint Bucket** work on a snapshot on the effect threads; the result lands when done (about
+        0.2 s on the photo) while the window keeps drawing; tool input and commands wait meanwhile (busy cursor).
+        Worst frame 250 / 200 ms → 5 ms. (A faster cube root for OKLab was tried: 12 % on the colour tests, not kept)
+  - [x] **Moving a complex selection:** the ants have a whole-image mask texture (when the image fits the device's
+        texture limit, 8192 px by default) sampled with a shift, so a selection moved by whole pixels keeps its mask
+        instead of being rasterised every frame (Move Selection 155 → 10 ms frames); this also draws ants across chunk
+        seams. Moves go by whole pixels as in paint.net 3.36 (`MoveToolBase.cs`: integer offsets), so no resampling
+        or blur; lifting pixels and `fill_masked` work per tile in parallel; `draw_transformed` writes destination
+        tiles in parallel. Move Selected Pixels on the whole photo: 7.4 s → 0.84 s for a 24-frame drag (worst frame,
+        the lift, 552 → 136 ms; ~30 ms frames while dragging). To do: draw the floating pixels on the GPU
+  - [ ] Still over budget: Invert Selection (200 ms, polygon XOR of 700k points), Rotate Image 90° (88 ms), Flip
+        (45 ms), Copy / Paste of the whole photo (300 / 440 ms frames), undo/redo of whole-image changes (15–35 ms,
+        Canvas Size 99 ms), the first frame with a complex selection (12 ms, mask upload), saving (to measure: the
+        audit now flattens first)
 - [ ] **Everything functional:** the disabled commands (Print, Acquire, Color Profile, the image's right-click menu,
       the shape tool's line style, caps and shape cycling) either work or leave the menus; Sketch Blur (no published
       maths) likewise; every tool option does what it says

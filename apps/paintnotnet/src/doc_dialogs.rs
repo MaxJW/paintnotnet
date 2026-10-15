@@ -21,6 +21,7 @@ pub enum Outcome {
     Cancel,
 }
 
+#[derive(Clone)]
 pub struct LayerProperties {
     pub index: usize,
     pub name: String,
@@ -58,6 +59,7 @@ impl CanvasFill {
     }
 }
 
+#[derive(Clone)]
 pub struct SizeFields {
     pub by_percent: bool,
     pub percent: u32,
@@ -158,12 +160,14 @@ impl SizeFields {
     }
 }
 
+#[derive(Clone)]
 pub struct Resize {
     pub fields: SizeFields,
     pub resampling: Resampling,
     pub gamma_correct: bool,
 }
 
+#[derive(Clone)]
 pub struct CanvasSize {
     pub fields: SizeFields,
     pub anchor: Anchor,
@@ -192,6 +196,7 @@ impl Default for FeatherObject {
     }
 }
 
+#[derive(Clone)]
 pub enum Kind {
     LayerProperties(LayerProperties),
     Resize(Resize),
@@ -205,6 +210,7 @@ pub enum Kind {
     BlurSelectionEdge(Feather),
 }
 
+#[derive(Clone)]
 pub struct DocDialog {
     pub key: u64,
     pub original: Document,
@@ -318,6 +324,18 @@ impl DocDialog {
     }
 
     /// Whether the dialog previews live on the canvas (size-changing ones apply on OK).
+    /// Kinds whose result takes whole-image work (done in the background on large images).
+    pub fn heavy(&self) -> bool {
+        matches!(
+            self.kind,
+            Kind::Resize(_)
+                | Kind::CanvasSize(_)
+                | Kind::RotateZoom(_)
+                | Kind::FeatherObject(_)
+                | Kind::BlurSelectionEdge(_)
+        )
+    }
+
     pub fn live_preview(&self) -> bool {
         !matches!(self.kind, Kind::Resize(_) | Kind::CanvasSize(_))
     }

@@ -99,47 +99,51 @@ impl PaintNotNetApp {
             return;
         }
         let layer = tab.doc.active_index();
-        let pixels = match sampling {
-            SamplingMode::Layer => tab.doc.layer(layer).surface.to_pixels(),
-            SamplingMode::Image => pnn_core::flatten(&tab.doc).to_pixels(),
-        };
-        let mut stencil = pnn_core::selection::flood_stencil(&pixels, w, h, seed, tol, contiguous);
-        if let Some(m) = &selection {
-            // 3.36 limits the flood to the selection; a contiguous fill doesn't leak
-            // through unselected pixels.
-            if contiguous {
-                stencil = limited_flood(&pixels, w, h, seed, tol, m);
-            } else {
-                for (i, s) in stencil.iter_mut().enumerate() {
-                    *s &= m.get(i as u32 % w, i as u32 / w) > 0;
+        // The fill works on a snapshot (in the background on a large image, see
+        // `run_click_job`); the new layer pixels land when it's done.
+        let doc = tab.doc.clone();
+        let key = tab.key;
+        let work = move || {
+            let pixels = match sampling {
+                SamplingMode::Layer => doc.layer(layer).surface.to_pixels(),
+                SamplingMode::Image => pnn_core::flatten(&doc).to_pixels(),
+            };
+            let mut stencil =
+                pnn_core::selection::flood_stencil(&pixels, w, h, seed, tol, contiguous);
+            if let Some(m) = &selection {
+                // 3.36 limits the flood to the selection; a contiguous fill doesn't leak
+                // through unselected pixels.
+                if contiguous {
+                    stencil = limited_flood(&pixels, w, h, seed, tol, m);
+                } else {
+                    for (i, s) in stencil.iter_mut().enumerate() {
+                        *s &= m.get(i as u32 % w, i as u32 / w) > 0;
+                    }
                 }
             }
-        }
-        let mut mask: Mask = pnn_core::TiledBuffer::new(w, h, 0);
-        let coverage: Vec<u8> = stencil.iter().map(|&s| if s { 255 } else { 0 }).collect();
-        mask.write_pixels(&coverage);
-        mask.compact();
-        let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
-        for (y, row) in stencil.chunks(w as usize).enumerate() {
-            if let (Some(a), Some(b)) = (row.iter().position(|&s| s), row.iter().rposition(|&s| s))
-            {
-                (x0, x1) = (x0.min(a as u32), x1.max(b as u32));
-                (y0, y1) = (y0.min(y as u32), y1.max(y as u32));
+            let mut mask: Mask = pnn_core::TiledBuffer::new(w, h, 0);
+            let coverage: Vec<u8> = stencil.iter().map(|&s| if s { 255 } else { 0 }).collect();
+            mask.write_pixels(&coverage);
+            mask.compact();
+            let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+            for (y, row) in stencil.chunks(w as usize).enumerate() {
+                if let (Some(a), Some(b)) =
+                    (row.iter().position(|&s| s), row.iter().rposition(|&s| s))
+                {
+                    (x0, x1) = (x0.min(a as u32), x1.max(b as u32));
+                    (y0, y1) = (y0.min(y as u32), y1.max(y as u32));
+                }
             }
-        }
-        let bounds = (x0 <= x1).then(|| Rect {
-            x: x0,
-            y: y0,
-            width: x1 - x0 + 1,
-            height: y1 - y0 + 1,
-        });
-        let Some(r) = bounds else {
-            return;
-        };
-        let before = tab.doc.layer(layer).surface.clone();
-        tab.doc.modify_layer(layer, Some(r), |l| {
+            let r = (x0 <= x1).then(|| Rect {
+                x: x0,
+                y: y0,
+                width: x1 - x0 + 1,
+                height: y1 - y0 + 1,
+            })?;
+            let before = doc.layer(layer).surface.clone();
+            let mut out = before.clone();
             brush::composite(
-                &mut l.surface,
+                &mut out,
                 &before,
                 &mask,
                 selection.as_deref(),
@@ -150,9 +154,17 @@ impl PaintNotNetApp {
                     FillStyle::Hatch(i) if brush::hatch_on(i, x, y) => fore,
                     FillStyle::Hatch(_) => back,
                 },
-            )
+            );
+            Some((r, out))
+        };
+        self.run_click_job(w as u64 * h as u64, work, move |app, result| {
+            let Some((r, out)) = result else { return };
+            let Some(tab) = app.workspace.tab_mut(key) else {
+                return;
+            };
+            tab.doc.modify_layer(layer, Some(r), |l| l.surface = out);
+            tab.commit("Paint Bucket", Icon::PaintBucket);
         });
-        tab.commit("Paint Bucket", Icon::PaintBucket);
     }
 
     /// The gradient the current settings describe for `session`.

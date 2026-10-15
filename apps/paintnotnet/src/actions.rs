@@ -262,52 +262,137 @@ impl PaintNotNetApp {
         true
     }
 
-    /// Show the open document dialog, previewing changes and committing on OK.
+    /// Show the open document dialog, previewing changes and committing on OK. On a large
+    /// image the heavy kinds (Resize, Canvas Size, Rotate / Zoom, Feather Object, Blur
+    /// Selection Edge) work on the effect threads: previews arrive when ready (the newest
+    /// wins) and OK shows "Applying…" until the result is in, instead of freezing the window
+    /// (Feather Object took 0.5 s per change on a 24 MP photo).
     pub(crate) fn run_doc_dialog(&mut self, ctx: &egui::Context) {
+        let (primary, secondary) = (self.settings.primary, self.settings.secondary);
+        let antialias = self.settings.selection_quality == pnn_tools::SelectionQuality::Antialiased;
+        // Results from the background.
+        if let Some(job) = self.doc_job.as_mut() {
+            let newest = job.generation;
+            if let Some((_, doc)) = job.rx.try_iter().filter(|(g, _)| *g == newest).last() {
+                let job = self.doc_job.take().expect("checked");
+                match job.ok {
+                    Some(dialog) => {
+                        self.commit_doc_dialog(dialog, doc);
+                        return;
+                    }
+                    None => {
+                        if let Some(d) = self.doc_dialog.as_ref()
+                            && let Some(tab) = self.workspace.tab_mut(d.key)
+                        {
+                            tab.doc = doc;
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(DocJob {
+            ok: Some(dialog), ..
+        }) = &self.doc_job
+        {
+            let name = dialog.history_name();
+            crate::glass::window(
+                ctx,
+                egui::Window::new(name)
+                    .id(egui::Id::new("doc_dialog_applying"))
+                    .collapsible(false)
+                    .resizable(false)
+                    .pivot(egui::Align2::CENTER_CENTER)
+                    .default_pos(ctx.content_rect().center()),
+                |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(format!("Applying {name}…"));
+                    });
+                },
+            );
+            return;
+        }
         let Some(dialog) = self.doc_dialog.as_mut() else {
             return;
         };
         let outcome = dialog.show(ctx);
-        let (primary, secondary) = (self.settings.primary, self.settings.secondary);
-        let antialias = self.settings.selection_quality == pnn_tools::SelectionQuality::Antialiased;
         let key = dialog.key;
+        let background = dialog.heavy()
+            && dialog.original.width() as u64 * dialog.original.height() as u64
+                > crate::effect_runner::APPLY_AT_ONCE;
         match outcome {
             Outcome::Pending { changed }
                 if dialog.live_preview() && (changed || !dialog.previewed) =>
             {
                 dialog.previewed = true;
-                let preview = dialog.apply(primary, secondary, antialias);
-                if let Some(tab) = self.workspace.tab_mut(key) {
-                    tab.doc = preview;
+                if background {
+                    let copy = dialog.clone();
+                    self.start_doc_job(ctx, copy, None, primary, secondary, antialias);
+                } else {
+                    let preview = dialog.apply(primary, secondary, antialias);
+                    if let Some(tab) = self.workspace.tab_mut(key) {
+                        tab.doc = preview;
+                    }
                 }
             }
             Outcome::Pending { .. } => {}
             Outcome::Ok => {
                 let dialog = self.doc_dialog.take().expect("open");
-                let result = dialog.apply(primary, secondary, antialias);
-                if let Some(tab) = self.workspace.tab_mut(key) {
-                    let unchanged = result.revision() == dialog.original.revision()
-                        && result.selection_revision() == dialog.original.selection_revision();
-                    tab.doc = result;
-                    if !unchanged {
-                        let icon = match dialog.kind {
-                            doc_dialogs::Kind::LayerProperties(_) => Icon::LayerProperties,
-                            doc_dialogs::Kind::Resize(_) => Icon::Resize,
-                            doc_dialogs::Kind::CanvasSize(_) => Icon::CanvasSize,
-                            doc_dialogs::Kind::RotateZoom(_) => Icon::RotateZoom,
-                            doc_dialogs::Kind::FeatherSelection(_)
-                            | doc_dialogs::Kind::FeatherObject(_)
-                            | doc_dialogs::Kind::BlurSelectionEdge(_) => Icon::Selection,
-                        };
-                        tab.commit(dialog.history_name(), icon);
-                    }
+                if background {
+                    let copy = dialog.clone();
+                    self.start_doc_job(ctx, copy, Some(dialog), primary, secondary, antialias);
+                } else {
+                    let result = dialog.apply(primary, secondary, antialias);
+                    self.commit_doc_dialog(dialog, result);
                 }
             }
             Outcome::Cancel => {
+                self.doc_job = None;
                 let dialog = self.doc_dialog.take().expect("open");
                 if let Some(tab) = self.workspace.tab_mut(key) {
                     tab.doc = dialog.original;
                 }
+            }
+        }
+    }
+
+    /// Work out `dialog`'s result on the effect threads; `ok` = commit it when it arrives.
+    fn start_doc_job(
+        &mut self,
+        ctx: &egui::Context,
+        dialog: DocDialog,
+        ok: Option<DocDialog>,
+        primary: pnn_core::ColorBgra,
+        secondary: pnn_core::ColorBgra,
+        antialias: bool,
+    ) {
+        let generation = self.doc_job.as_ref().map_or(0, |j| j.generation) + 1;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ctx = ctx.clone();
+        crate::effect_runner::effect_pool().spawn(move || {
+            let doc = dialog.apply(primary, secondary, antialias);
+            let _ = tx.send((generation, doc));
+            ctx.request_repaint();
+        });
+        self.doc_job = Some(DocJob { generation, rx, ok });
+    }
+
+    fn commit_doc_dialog(&mut self, dialog: DocDialog, result: pnn_core::Document) {
+        if let Some(tab) = self.workspace.tab_mut(dialog.key) {
+            let unchanged = result.revision() == dialog.original.revision()
+                && result.selection_revision() == dialog.original.selection_revision();
+            tab.doc = result;
+            if !unchanged {
+                let icon = match dialog.kind {
+                    doc_dialogs::Kind::LayerProperties(_) => Icon::LayerProperties,
+                    doc_dialogs::Kind::Resize(_) => Icon::Resize,
+                    doc_dialogs::Kind::CanvasSize(_) => Icon::CanvasSize,
+                    doc_dialogs::Kind::RotateZoom(_) => Icon::RotateZoom,
+                    doc_dialogs::Kind::FeatherSelection(_)
+                    | doc_dialogs::Kind::FeatherObject(_)
+                    | doc_dialogs::Kind::BlurSelectionEdge(_) => Icon::Selection,
+                };
+                tab.commit(dialog.history_name(), icon);
             }
         }
     }
@@ -502,6 +587,15 @@ pub fn line(from: (i64, i64), to: (i64, i64)) -> Vec<(i64, i64)> {
         }
     }
     out
+}
+
+/// A document dialog's result being worked out on the effect threads.
+pub struct DocJob {
+    /// Newest request; older results are dropped.
+    generation: u64,
+    rx: std::sync::mpsc::Receiver<(u64, Document)>,
+    /// OK was pressed: commit this dialog's result when it arrives.
+    ok: Option<DocDialog>,
 }
 
 #[cfg(test)]

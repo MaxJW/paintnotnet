@@ -555,122 +555,129 @@ pub fn draw_transformed(
     } else {
         ((1.0 / min_scale.max(1e-3)).ceil() as usize).clamp(1, 8)
     };
-    let rows: Vec<(i64, Vec<ColorBgra>)> = (y0..y1)
-        .into_par_iter()
-        .map(|y| {
-            let mut row = Vec::with_capacity((x1 - x0) as usize);
-            for x in x0..x1 {
-                if integer {
-                    let (sx, sy) = (x - m[2] as i64, y - m[5] as i64);
-                    let c = if sx < sx0 || sy < sy0 || sx >= sx1 || sy >= sy1 {
-                        ColorBgra::TRANSPARENT
-                    } else {
-                        src.get(sx as u32, sy as u32)
+    // The transformed source at destination pixel (x, y).
+    let pixel_at = |x: i64, y: i64| -> ColorBgra {
+        if integer {
+            let (sx, sy) = (x - m[2] as i64, y - m[5] as i64);
+            return if sx < sx0 || sy < sy0 || sx >= sx1 || sy >= sy1 {
+                ColorBgra::TRANSPARENT
+            } else {
+                src.get(sx as u32, sy as u32)
+            };
+        }
+        let sample_at = |q: [f64; 2]| -> [f32; 4] {
+            match sampling {
+                Sampling::NearestNeighbor => fetch(q[0].floor() as i64, q[1].floor() as i64),
+                Sampling::Bilinear => {
+                    let (fx, fy) = (q[0] - 0.5, q[1] - 0.5);
+                    let (ix, iy) = (fx.floor() as i64, fy.floor() as i64);
+                    let (tx, ty) = ((fx - ix as f64) as f32, (fy - iy as f64) as f32);
+                    let (a, b, c, d) = (
+                        fetch(ix, iy),
+                        fetch(ix + 1, iy),
+                        fetch(ix, iy + 1),
+                        fetch(ix + 1, iy + 1),
+                    );
+                    std::array::from_fn(|k| {
+                        let top = a[k] + (b[k] - a[k]) * tx;
+                        let bot = c[k] + (d[k] - c[k]) * tx;
+                        top + (bot - top) * ty
+                    })
+                }
+                Sampling::Bicubic => {
+                    let (fx, fy) = (q[0] - 0.5, q[1] - 0.5);
+                    let (ix, iy) = (fx.floor() as i64, fy.floor() as i64);
+                    let (tx, ty) = (fx - ix as f64, fy - iy as f64);
+                    let cr = |t: f64| -> [f32; 4] {
+                        // Catmull-Rom weights for offsets -1, 0, 1, 2.
+                        let t2 = t * t;
+                        let t3 = t2 * t;
+                        [
+                            (-0.5 * t3 + t2 - 0.5 * t) as f32,
+                            (1.5 * t3 - 2.5 * t2 + 1.0) as f32,
+                            (-1.5 * t3 + 2.0 * t2 + 0.5 * t) as f32,
+                            (0.5 * t3 - 0.5 * t2) as f32,
+                        ]
                     };
-                    row.push(c);
+                    let (wx, wy) = (cr(tx), cr(ty));
+                    let mut acc = [0f32; 4];
+                    for (j, wyj) in wy.iter().enumerate() {
+                        for (i, wxi) in wx.iter().enumerate() {
+                            let p = fetch(ix + i as i64 - 1, iy + j as i64 - 1);
+                            for k in 0..4 {
+                                acc[k] += p[k] * wxi * wyj;
+                            }
+                        }
+                    }
+                    acc
+                }
+            }
+        };
+        // Shrinking: average sub × sub samples (sub ≈ the shrink factor) so detail
+        // averages out instead of aliasing; one sample per pixel otherwise.
+        let acc = if sub == 1 {
+            sample_at(apply(&inv, [x as f64 + 0.5, y as f64 + 0.5]))
+        } else {
+            let mut sum = [0f32; 4];
+            for sj in 0..sub {
+                for si in 0..sub {
+                    let p = sample_at(apply(
+                        &inv,
+                        [
+                            x as f64 + (si as f64 + 0.5) / sub as f64,
+                            y as f64 + (sj as f64 + 0.5) / sub as f64,
+                        ],
+                    ));
+                    for k in 0..4 {
+                        sum[k] += p[k];
+                    }
+                }
+            }
+            sum.map(|v| v / (sub * sub) as f32)
+        };
+        let a = acc[3].clamp(0.0, 255.0);
+        let un = |v: f32| {
+            if a > 0.0 {
+                (v * 255.0 / a).round().clamp(0.0, 255.0) as u8
+            } else {
+                0
+            }
+        };
+        ColorBgra::from_rgba(un(acc[0]), un(acc[1]), un(acc[2]), a.round() as u8)
+    };
+    // Each destination tile in parallel, drawn over what's there (a pixel at a time took
+    // ~0.1 s per frame while dragging a 24 MP selection).
+    let area = crate::Rect {
+        x: x0 as u32,
+        y: y0 as u32,
+        width: (x1 - x0) as u32,
+        height: (y1 - y0) as u32,
+    };
+    let absent = dst.absent();
+    let t = crate::TILE_SIZE as i64;
+    dst.slots_in(area).into_par_iter().for_each(|(c, slot)| {
+        let (tx0, ty0) = (c.tx as i64 * t, c.ty as i64 * t);
+        let mut tile: Option<crate::Tile<ColorBgra>> = None;
+        for y in y0.max(ty0)..y1.min(ty0 + t) {
+            for x in x0.max(tx0)..x1.min(tx0 + t) {
+                let p = pixel_at(x, y);
+                if p.a == 0 {
                     continue;
                 }
-                let sample_at = |q: [f64; 2]| -> [f32; 4] {
-                    match sampling {
-                        Sampling::NearestNeighbor => {
-                            fetch(q[0].floor() as i64, q[1].floor() as i64)
-                        }
-                        Sampling::Bilinear => {
-                            let (fx, fy) = (q[0] - 0.5, q[1] - 0.5);
-                            let (ix, iy) = (fx.floor() as i64, fy.floor() as i64);
-                            let (tx, ty) = ((fx - ix as f64) as f32, (fy - iy as f64) as f32);
-                            let (a, b, c, d) = (
-                                fetch(ix, iy),
-                                fetch(ix + 1, iy),
-                                fetch(ix, iy + 1),
-                                fetch(ix + 1, iy + 1),
-                            );
-                            std::array::from_fn(|k| {
-                                let top = a[k] + (b[k] - a[k]) * tx;
-                                let bot = c[k] + (d[k] - c[k]) * tx;
-                                top + (bot - top) * ty
-                            })
-                        }
-                        Sampling::Bicubic => {
-                            let (fx, fy) = (q[0] - 0.5, q[1] - 0.5);
-                            let (ix, iy) = (fx.floor() as i64, fy.floor() as i64);
-                            let (tx, ty) = (fx - ix as f64, fy - iy as f64);
-                            let cr = |t: f64| -> [f32; 4] {
-                                // Catmull-Rom weights for offsets -1, 0, 1, 2.
-                                let t2 = t * t;
-                                let t3 = t2 * t;
-                                [
-                                    (-0.5 * t3 + t2 - 0.5 * t) as f32,
-                                    (1.5 * t3 - 2.5 * t2 + 1.0) as f32,
-                                    (-1.5 * t3 + 2.0 * t2 + 0.5 * t) as f32,
-                                    (0.5 * t3 - 0.5 * t2) as f32,
-                                ]
-                            };
-                            let (wx, wy) = (cr(tx), cr(ty));
-                            let mut acc = [0f32; 4];
-                            for (j, wyj) in wy.iter().enumerate() {
-                                for (i, wxi) in wx.iter().enumerate() {
-                                    let p = fetch(ix + i as i64 - 1, iy + j as i64 - 1);
-                                    for k in 0..4 {
-                                        acc[k] += p[k] * wxi * wyj;
-                                    }
-                                }
-                            }
-                            acc
-                        }
-                    }
-                };
-                // Shrinking: average sub × sub samples (sub ≈ the shrink factor) so detail
-                // averages out instead of aliasing; one sample per pixel otherwise.
-                let acc = if sub == 1 {
-                    sample_at(apply(&inv, [x as f64 + 0.5, y as f64 + 0.5]))
-                } else {
-                    let mut sum = [0f32; 4];
-                    for sj in 0..sub {
-                        for si in 0..sub {
-                            let p = sample_at(apply(
-                                &inv,
-                                [
-                                    x as f64 + (si as f64 + 0.5) / sub as f64,
-                                    y as f64 + (sj as f64 + 0.5) / sub as f64,
-                                ],
-                            ));
-                            for k in 0..4 {
-                                sum[k] += p[k];
-                            }
-                        }
-                    }
-                    sum.map(|v| v / (sub * sub) as f32)
-                };
-                let a = acc[3].clamp(0.0, 255.0);
-                let un = |v: f32| {
-                    if a > 0.0 {
-                        (v * 255.0 / a).round().clamp(0.0, 255.0) as u8
-                    } else {
-                        0
-                    }
-                };
-                row.push(ColorBgra::from_rgba(
-                    un(acc[0]),
-                    un(acc[1]),
-                    un(acc[2]),
-                    a.round() as u8,
-                ));
+                let tile = tile.get_or_insert_with(|| {
+                    slot.as_deref()
+                        .cloned()
+                        .unwrap_or_else(|| crate::Tile::filled(absent))
+                });
+                let (lx, ly) = ((x - tx0) as u32, (y - ty0) as u32);
+                let below = tile.get(lx, ly);
+                tile.set(lx, ly, crate::BlendMode::Normal.apply(below, p, 255));
             }
-            (y, row)
-        })
-        .collect();
-    for (y, row) in rows {
-        for (i, c) in row.into_iter().enumerate() {
-            if c.a == 0 {
-                continue;
-            }
-            let x = (x0 + i as i64) as u32;
-            let y = y as u32;
-            let below = dst.get(x, y);
-            dst.set(x, y, crate::BlendMode::Normal.apply(below, c, 255));
         }
-    }
+        if let Some(tile) = tile {
+            *slot = Some(std::sync::Arc::new(tile));
+        }
+    });
 }
 
 #[cfg(test)]

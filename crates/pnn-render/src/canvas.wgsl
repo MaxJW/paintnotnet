@@ -17,6 +17,9 @@ struct View {
     srgb_target: f32,       // 1.0 = framebuffer is sRGB, so output linear values
     overlay: f32,           // 1.0 = tint outside the selection (feather preview)
     ants: f32,              // 0 = off; else 1 + dash offset: marching ants from the mask
+    ants_shift: vec2<f32>,  // image px the ants mask is drawn moved by (a selection being moved)
+    ants_full: f32,         // 1.0 = `ants_tex` holds the whole image's mask
+    _pad: f32,
 };
 
 struct Chunk {
@@ -27,6 +30,7 @@ struct Chunk {
 @group(0) @binding(0) var<uniform> view: View;
 @group(0) @binding(1) var nearest_sampler: sampler;
 @group(0) @binding(2) var linear_sampler: sampler;
+@group(0) @binding(3) var ants_tex: texture_2d<f32>;
 @group(1) @binding(0) var<uniform> chunk: Chunk;
 @group(1) @binding(1) var chunk_tex: texture_2d<f32>;
 @group(1) @binding(2) var overlay_tex: texture_2d<f32>;
@@ -60,9 +64,17 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
     return select(hi, lo, c <= vec3(0.04045));
 }
 
-// Selected (coverage at least half) at image point `img`. Outside the image is unselected;
-// beyond this chunk (a neighbour across a chunk seam) counts as `fallback`.
+// Selected (coverage at least half) at image point `img`. Outside the image is unselected.
+// With the whole-image mask any point can be read (shifted while a selection moves); with
+// only the chunk overlays, a point beyond this chunk counts as `fallback`.
 fn selected_at(img: vec2<f32>, fallback: bool) -> bool {
+    if (view.ants_full > 0.5) {
+        let src = img - view.ants_shift;
+        if (any(src < vec2(0.0)) || any(src >= view.image_size)) {
+            return false;
+        }
+        return textureLoad(ants_tex, vec2<i32>(floor(src)), 0).r >= 0.5;
+    }
     if (any(img < vec2(0.0)) || any(img >= view.image_size)) {
         return false;
     }

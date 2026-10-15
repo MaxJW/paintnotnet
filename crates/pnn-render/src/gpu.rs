@@ -33,6 +33,12 @@ pub struct ViewUniforms {
     /// Marching ants drawn from the selection mask (complex selections): 0 = off, else
     /// 1 + the dashes' offset in screen px (0–7).
     pub ants: f32,
+    /// Where the ants mask is drawn, relative to where it was made (image px): a selection
+    /// being moved keeps its mask.
+    pub ants_shift: [f32; 2],
+    /// 1.0 = the whole-image ants mask is there (else each chunk's overlay is used).
+    pub ants_full: f32,
+    pub _pad: f32,
 }
 
 #[repr(C)]
@@ -56,6 +62,11 @@ struct Chunk {
 struct GpuCanvas {
     width: u32,
     height: u32,
+    /// The selection mask for the marching ants, the whole image in one texture (R8), so the
+    /// shader can sample it anywhere (shifted while a selection moves); 1 × 1 when the image
+    /// is larger than the device allows.
+    ants: wgpu::Texture,
+    ants_full: bool,
     chunks_x: u32,
     chunks: Vec<Chunk>,
     view_buffer: wgpu::Buffer,
@@ -126,6 +137,7 @@ impl CanvasRenderer {
                 uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
                 sampler_entry(1),
                 sampler_entry(2),
+                texture_entry(3),
             ],
         });
         let chunk_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -298,6 +310,31 @@ impl CanvasRenderer {
                 });
             }
         }
+        let max = device.limits().max_texture_dimension_2d;
+        let ants_full = width <= max && height <= max;
+        let ants = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("canvas ants mask"),
+            size: if ants_full {
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                }
+            } else {
+                wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                }
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let ants_view = ants.create_view(&Default::default());
         let view_group = |label| {
             let buffer =
                 create_uniform_buffer(device, label, bytemuck::bytes_of(&ViewUniforms::default()));
@@ -317,6 +354,10 @@ impl CanvasRenderer {
                         binding: 2,
                         resource: wgpu::BindingResource::Sampler(&self.linear),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(&ants_view),
+                    },
                 ],
             });
             (buffer, group)
@@ -328,6 +369,8 @@ impl CanvasRenderer {
             GpuCanvas {
                 width,
                 height,
+                ants,
+                ants_full,
                 chunks_x,
                 chunks,
                 view_buffer,
@@ -415,6 +458,55 @@ impl CanvasRenderer {
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &chunk.overlay,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x, y, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            coverage.unwrap_or(&ZERO),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(TILE_SIZE),
+                rows_per_image: Some(h),
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    /// Whether document `key` has the whole-image ants mask (else ants use the chunk overlays).
+    pub fn ants_full(&self, key: u64) -> bool {
+        self.canvases.get(&key).is_some_and(|c| c.ants_full)
+    }
+
+    /// Write one tile of the ants mask (`None` = unselected).
+    pub fn upload_ants(
+        &self,
+        queue: &wgpu::Queue,
+        key: u64,
+        c: TileCoord,
+        coverage: Option<&[u8]>,
+    ) {
+        static ZERO: [u8; (TILE_SIZE * TILE_SIZE) as usize] = [0; (TILE_SIZE * TILE_SIZE) as usize];
+        let Some(canvas) = self.canvases.get(&key) else {
+            return;
+        };
+        if !canvas.ants_full {
+            return;
+        }
+        let (x, y) = (c.tx * TILE_SIZE, c.ty * TILE_SIZE);
+        if x >= canvas.width || y >= canvas.height {
+            return;
+        }
+        let (w, h) = (
+            TILE_SIZE.min(canvas.width - x),
+            TILE_SIZE.min(canvas.height - y),
+        );
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &canvas.ants,
                 mip_level: 0,
                 origin: wgpu::Origin3d { x, y, z: 0 },
                 aspect: wgpu::TextureAspect::All,
@@ -585,7 +677,7 @@ mod tests {
 
     #[test]
     fn uniforms_match_wgsl_layout() {
-        assert_eq!(std::mem::size_of::<ViewUniforms>(), 48);
+        assert_eq!(std::mem::size_of::<ViewUniforms>(), 64);
         assert_eq!(std::mem::size_of::<ChunkUniforms>(), 16);
     }
 }

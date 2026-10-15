@@ -286,36 +286,46 @@ impl PaintNotNetApp {
         if pos[0] < 0.0 || pos[1] < 0.0 || pos[0] >= w as f64 || pos[1] >= h as f64 {
             return;
         }
-        let pixels = match sampling {
-            SamplingMode::Layer => tab.doc.layer(tab.doc.active_index()).surface.to_pixels(),
-            SamplingMode::Image => flatten(&tab.doc).to_pixels(),
+        // The fill, outline and combine work on a snapshot (in the background on a large
+        // image, see `run_click_job`); the result is set when it's done.
+        let doc = tab.doc.clone();
+        let size = w as u64 * h as u64;
+        let seed = (pos[0] as u32, pos[1] as u32);
+        let work = move || {
+            let pixels = match sampling {
+                SamplingMode::Layer => doc.layer(doc.active_index()).surface.to_pixels(),
+                SamplingMode::Image => flatten(&doc).to_pixels(),
+            };
+            let stencil = flood_stencil(&pixels, w, h, seed, tolerance, contiguous);
+            let shape = Selection::from_stencil(&stencil, w, h).with_feather(feather);
+            let combined = doc.selection().combine(&shape, mode);
+            // A new selection's mask is the stencil itself (its outline runs along pixel
+            // edges, so rasterising it, antialiased or not, gives back exactly these
+            // pixels): keep it rather than rasterise tens of thousands of outlines again
+            // (~0.1 s on a 24 MP photo).
+            let mask = (mode == CombineMode::Replace && feather.is_none()).then(|| {
+                use rayon::prelude::*;
+                let bytes: Vec<u8> = stencil
+                    .par_iter()
+                    .map(|&s| if s { 255 } else { 0 })
+                    .collect();
+                let mut mask = Mask::new(w, h, 0);
+                mask.write_pixels(&bytes);
+                mask.compact();
+                Arc::new(mask)
+            });
+            (combined, mask)
         };
-        let stencil = flood_stencil(
-            &pixels,
-            w,
-            h,
-            (pos[0] as u32, pos[1] as u32),
-            tolerance,
-            contiguous,
-        );
-        let shape = Selection::from_stencil(&stencil, w, h).with_feather(feather);
-        let combined = tab.doc.selection().combine(&shape, mode);
-        tab.doc.set_selection(combined);
-        tab.commit("Magic Wand", Icon::MagicWand);
-        // A new selection's mask is the stencil itself (its outline runs along pixel edges, so
-        // rasterising it, antialiased or not, gives back exactly these pixels): keep it rather
-        // than rasterise tens of thousands of outlines again (~0.1 s on a 24 MP photo).
-        if mode == CombineMode::Replace && feather.is_none() {
-            use rayon::prelude::*;
-            let bytes: Vec<u8> = stencil
-                .par_iter()
-                .map(|&s| if s { 255 } else { 0 })
-                .collect();
-            let mut mask = Mask::new(w, h, 0);
-            mask.write_pixels(&bytes);
-            mask.compact();
-            tab.mask_cache = Some((tab.doc.selection_revision(), antialias, Arc::new(mask)));
-        }
+        self.run_click_job(size, work, move |app, (combined, mask)| {
+            let Some(tab) = app.workspace.tab_mut(key) else {
+                return;
+            };
+            tab.doc.set_selection(combined);
+            tab.commit("Magic Wand", Icon::MagicWand);
+            if let Some(mask) = mask {
+                tab.mask_cache = Some((tab.doc.selection_revision(), antialias, mask));
+            }
+        });
     }
 
     /// Edit menu selection commands. Returns false if `command` isn't one.
@@ -416,9 +426,21 @@ impl PaintNotNetApp {
 /// and Erase Selection), partial coverage at antialiased edges interpolates in premultiplied
 /// space.
 pub fn fill_masked(surface: &mut pnn_core::Surface, mask: &Mask, color: pnn_core::ColorBgra) {
-    for c in mask.tile_coords().collect::<Vec<_>>() {
-        let Some(mtile) = mask.tile(c) else { continue };
-        let tile = surface.tile_mut(c);
+    use rayon::prelude::*;
+    let absent = surface.absent();
+    let all = pnn_core::Rect {
+        x: 0,
+        y: 0,
+        width: surface.width(),
+        height: surface.height(),
+    };
+    // Tiles in parallel (one at a time took ~0.1 s on a 24 MP photo).
+    surface.slots_in(all).into_par_iter().for_each(|(c, slot)| {
+        let Some(mtile) = mask.tile(c) else { return };
+        let mut tile = slot
+            .as_deref()
+            .cloned()
+            .unwrap_or_else(|| pnn_core::Tile::filled(absent));
         for (p, &m) in tile.pixels_mut().iter_mut().zip(mtile.pixels()) {
             if m == 0 {
                 continue;
@@ -429,7 +451,8 @@ pub fn fill_masked(surface: &mut pnn_core::Surface, mask: &Mask, color: pnn_core
                 lerp_premultiplied(*p, color, m)
             };
         }
-    }
+        *slot = Some(Arc::new(tile));
+    });
 }
 
 pub use pnn_core::color::lerp_premultiplied;
@@ -448,6 +471,66 @@ fn crop_masked(surface: &pnn_core::Surface, mask: &Mask, r: pnn_core::Rect) -> p
     out.write_pixels(&px);
     out.compact();
     out
+}
+
+/// A tool click's work running in the background (Magic Wand, Paint Bucket on a large image):
+/// what to do with the result, sent back when it's done.
+pub struct ClickJob {
+    rx: std::sync::mpsc::Receiver<ApplyResult>,
+}
+
+/// Sets a finished click job's result on the app.
+type ApplyResult = Box<dyn FnOnce(&mut PaintNotNetApp) + Send>;
+
+/// Images up to this many pixels run a click's work at once (and tests stay synchronous).
+const CLICK_AT_ONCE: u64 = 1_000_000;
+
+impl PaintNotNetApp {
+    /// Run `work` (on a snapshot) and then `apply` its result here. On a large image `work`
+    /// runs on the effect threads and the window keeps drawing; tool input and commands wait
+    /// until `apply` has run (`take_click_job`), so nothing changes under it.
+    pub(crate) fn run_click_job<T: Send + 'static>(
+        &mut self,
+        pixels: u64,
+        work: impl FnOnce() -> T + Send + 'static,
+        apply: impl FnOnce(&mut PaintNotNetApp, T) + Send + 'static,
+    ) {
+        if pixels <= CLICK_AT_ONCE {
+            let t = work();
+            apply(self, t);
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ctx = self.ctx.clone();
+        crate::effect_runner::effect_pool().spawn(move || {
+            let t = work();
+            let done: ApplyResult = Box::new(move |app| apply(app, t));
+            let _ = tx.send(done);
+            if let Some(ctx) = ctx {
+                ctx.request_repaint();
+            }
+        });
+        self.click_job = Some(ClickJob { rx });
+    }
+
+    /// Apply a finished click job (every frame). True while one is still running.
+    pub(crate) fn take_click_job(&mut self) -> bool {
+        let Some(job) = &self.click_job else {
+            return false;
+        };
+        match job.rx.try_recv() {
+            Ok(apply) => {
+                self.click_job = None;
+                apply(self);
+                false
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => true,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.click_job = None;
+                false
+            }
+        }
+    }
 }
 
 #[cfg(test)]

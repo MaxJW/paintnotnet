@@ -79,6 +79,9 @@ pub struct CanvasState {
     pub overlay: Option<(u64, std::sync::Arc<pnn_core::Mask>)>,
     /// Selections are antialiased (set by the app; picks which cached mask the GPU ants use).
     pub antialias: bool,
+    /// While a selection moves by whole pixels: its mask from before the move (identity,
+    /// mask) and the shift, for the GPU ants (set by the app).
+    pub ants_shift: Option<(u64, std::sync::Arc<pnn_core::Mask>, [f64; 2])>,
     /// Clone Stamp source marker (image coordinates).
     pub clone_source: Option<[f64; 2]>,
     /// Text caret (top, bottom) and move nub (image coordinates).
@@ -128,6 +131,9 @@ pub struct GpuSync {
     overlay_revision: u64,
     /// Identity of each uploaded overlay tile (0 = empty), to upload only what changed.
     overlay_tiles: Vec<usize>,
+    /// The same for the whole-image ants mask.
+    ants_revision: u64,
+    ants_tiles: Vec<usize>,
 }
 
 /// A live gradient for the GPU compositor to draw on `layer`.
@@ -392,10 +398,43 @@ pub fn show(
         sync_gpu(gpu, tab);
         if let Some((rev, mask)) = &state.overlay {
             sync_overlay(gpu, tab, *rev, mask);
-        } else if gpu_ants && let Some(mask) = tab.selection_mask(state.antialias) {
-            let rev = tab.doc.selection_revision() * 2 + u64::from(state.antialias);
-            sync_overlay(gpu, tab, rev, &mask);
         }
+    }
+    // The ants mask: the moving selection's from before the move, shifted, or the current one.
+    let mut ants_shift = [0.0f32; 2];
+    let mut ants_full = false;
+    if let Some(gpu) = gpu
+        && gpu_ants
+    {
+        let full = {
+            let renderer = gpu.renderer.read();
+            renderer
+                .callback_resources
+                .get::<CanvasRenderer>()
+                .is_some_and(|c| c.ants_full(tab.key))
+        };
+        let source = match &state.ants_shift {
+            Some((id, mask, shift)) if full => {
+                ants_shift = [shift[0] as f32, shift[1] as f32];
+                Some((*id, mask.clone()))
+            }
+            _ => tab.selection_mask(state.antialias).map(|m| {
+                (
+                    tab.doc.selection_revision() * 2 + u64::from(state.antialias),
+                    m,
+                )
+            }),
+        };
+        if let Some((rev, mask)) = source {
+            if full {
+                sync_ants(gpu, tab, rev, &mask);
+                ants_full = true;
+            } else if state.overlay.is_none() {
+                sync_overlay(gpu, tab, rev, &mask);
+            }
+        }
+    }
+    if gpu.is_some() {
         // The view's coordinates start at the free area; the callback covers all of `area`.
         let origin = view.image_to_screen([0.0, 0.0], vp);
         let shift = (canvas_rect.min - area.min) * ppp as f32;
@@ -408,6 +447,8 @@ pub fn show(
             grid: if state.pixel_grid { 1.0 } else { 0.0 },
             overlay: if state.overlay.is_some() { 1.0 } else { 0.0 },
             ants: if gpu_ants { 1.0 + ants_offset } else { 0.0 },
+            ants_shift,
+            ants_full: if ants_full { 1.0 } else { 0.0 },
             ..Default::default()
         };
         ui.painter()
@@ -741,6 +782,32 @@ fn sync_overlay(
     tab.gpu.overlay_revision = rev;
 }
 
+/// Upload the whole-image ants mask when it changed since the last upload (changed tiles only).
+fn sync_ants(gpu: &egui_wgpu::RenderState, tab: &mut DocumentTab, rev: u64, mask: &pnn_core::Mask) {
+    if tab.gpu.ants_revision == rev {
+        return;
+    }
+    let renderer = gpu.renderer.read();
+    let Some(canvas) = renderer.callback_resources.get::<CanvasRenderer>() else {
+        return;
+    };
+    let n = (mask.tiles_x() * mask.tiles_y()) as usize;
+    if tab.gpu.ants_tiles.len() != n || tab.gpu.ants_revision == 0 {
+        tab.gpu.ants_tiles = vec![usize::MAX; n];
+    }
+    let tiles_x = mask.tiles_x();
+    for c in mask.tile_coords() {
+        let tile = mask.tile(c);
+        let id = tile.map_or(0, |t| std::sync::Arc::as_ptr(t) as usize);
+        let slot = &mut tab.gpu.ants_tiles[(c.ty * tiles_x + c.tx) as usize];
+        if *slot != id {
+            canvas.upload_ants(&gpu.queue, tab.key, c, tile.map(|t| t.pixels()));
+            *slot = id;
+        }
+    }
+    tab.gpu.ants_revision = rev;
+}
+
 fn sync_gpu(gpu: &egui_wgpu::RenderState, tab: &mut DocumentTab) {
     let (w, h) = (tab.doc.width(), tab.doc.height());
     let mut renderer = gpu.renderer.write();
@@ -754,6 +821,8 @@ fn sync_gpu(gpu: &egui_wgpu::RenderState, tab: &mut DocumentTab) {
         sync.revisions = vec![0; (tx * ty) as usize];
         sync.overlay_revision = 0;
         sync.overlay_tiles.clear();
+        sync.ants_revision = 0;
+        sync.ants_tiles.clear();
     }
     let doc = &tab.doc;
     // A new or changed live gradient (or its end) redraws everything.
