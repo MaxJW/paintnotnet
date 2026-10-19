@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata: what software centres (Discover, GNOME Software) show. -->
+<component type="desktop-application">
+  <id>paintnotnet</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>paintnotnet</name>
+  <summary>Image and photo editor modelled on paint.net</summary>
+  <developer>
+    <name>Max Wilson</name>
+  </developer>
+  <description>
+    <p>
+      A modern paint.net for Linux: layers with blend modes, selections with live feathering,
+      painting and shape tools, adjustments and effects, and paint.net's keyboard shortcuts.
+    </p>
+    <ul>
+      <li>Opens and saves paint.net .pdn and OpenRaster files with their layers</li>
+      <li>PNG, JPEG, WebP, BMP, GIF, TIFF and TGA</li>
+      <li>Remove Background and Select Subject with a local AI model</li>
+      <li>Drawn on the GPU, with large photos staying responsive</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">paintnotnet.desktop</launchable>
+  <provides>
+    <binary>paintnotnet</binary>
+  </provides>
+  <categories>
+    <category>Graphics</category>
+    <category>2DGraphics</category>
+    <category>RasterGraphics</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-10-19"/>
+  </releases>
+</component>
