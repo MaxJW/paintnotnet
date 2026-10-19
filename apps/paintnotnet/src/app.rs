@@ -804,6 +804,9 @@ impl PaintNotNetApp {
                     format,
                     flattened: false,
                     close_after,
+                    choose_type: false,
+                    configured: false,
+                    picked: None,
                 },
             ),
             _ => {
@@ -820,14 +823,17 @@ impl PaintNotNetApp {
         let Some(tab) = self.workspace.tab_mut(key) else {
             return;
         };
-        if tab.doc.layers().len() > 1 && !target.flattened && !target.format.layered() {
-            self.modal = Some(Modal::FlattenForSave { key, then: target });
-        } else if target.format.has_options() {
+        // The type and its settings first: whether to flatten depends on the type.
+        if !target.configured && (target.choose_type || target.format.has_options()) {
+            let mut then = target;
+            then.picked = Some(then.path.clone());
             self.modal = Some(Modal::SaveConfig {
                 key,
                 options: tab.save_options,
-                then: target,
+                then,
             });
+        } else if tab.doc.layers().len() > 1 && !target.flattened && !target.format.layered() {
+            self.modal = Some(Modal::FlattenForSave { key, then: target });
         } else {
             self.write(key, target);
         }
@@ -871,6 +877,9 @@ impl PaintNotNetApp {
                     format: tab.format.expect("has format"),
                     flattened: false,
                     close_after: false,
+                    choose_type: false,
+                    configured: true,
+                    picked: None,
                 };
                 self.write(key, target);
             } else {
@@ -912,6 +921,9 @@ impl PaintNotNetApp {
                                 format,
                                 flattened: false,
                                 close_after,
+                                choose_type: true,
+                                configured: false,
+                                picked: None,
                             },
                         );
                     }
@@ -981,11 +993,16 @@ impl PaintNotNetApp {
                     a.clear_recoverable();
                 }
             }
-            ModalResult::SaveConfigured { key, options, then } => {
+            ModalResult::SaveConfigured {
+                key,
+                options,
+                mut then,
+            } => {
                 if let Some(tab) = self.workspace.tab_mut(key) {
                     tab.save_options = options;
                 }
-                self.write(key, then);
+                then.configured = true;
+                self.begin_save(key, then);
             }
             ModalResult::PasteExpand { new_layer, expand } => {
                 if let Some(image) = self.pending_paste.take() {

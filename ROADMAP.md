@@ -871,6 +871,13 @@ this just a great modern paint.net replacement for linux."
         - narrow window: the title bar's right group ran over the menus (the search box becomes a magnifier when
           tabs would have < 200 px), tab names shorten with "…" before scrolling, and the options bar's quick
           buttons and brush-size presets wrap instead of running under the right dock
+  - [x] **One save options dialog** (user, 2026-10-19: "can we have the dropdown be each image type and then show
+        options depending on that, rather than an entirely unique webp dialog?"): "Save options" with a File type
+        dropdown of every format; the rows below follow the type (JPEG quality; WebP preset, quality, effort,
+        lossless; otherwise a note on layers and transparency). Changing the type changes the extension, and says if
+        that replaces an existing file. Shown on every Save As, and on Save for JPEG and WebP as before; the flatten
+        question now comes after it (it depends on the type). Test: JPEG → PNG on a two-layer image saves
+        `picture.png` after the flatten question, and the tab follows the new file
   - [ ] Left: dialog titles still come in two styles (the message boxes' left-aligned heading with an icon; the
         effect and document dialogs' centred title bar); Help; menu icons
 - [ ] **Packaged nicely:** build and install the PKGBUILD with makepkg (not yet tried), AppStream metainfo,

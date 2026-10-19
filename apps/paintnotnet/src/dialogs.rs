@@ -27,7 +27,8 @@ pub enum Modal {
     UnsavedOnExit {
         count: usize,
     },
-    /// paint.net's Save Configuration dialog for formats with settings (JPEG, WebP).
+    /// Save options: the file type (a dropdown of every format) and that format's settings
+    /// (paint.net's Save Configuration dialog, for every type in one).
     SaveConfig {
         key: u64,
         options: pnn_io::SaveOptions,
@@ -51,6 +52,13 @@ pub struct SaveTarget {
     pub close_after: bool,
     /// The flatten prompt has been answered for this save.
     pub flattened: bool,
+    /// Save As: the save options dialog shows (to pick the file type) even for a format
+    /// without settings.
+    pub choose_type: bool,
+    /// The save options dialog has been answered for this save.
+    pub configured: bool,
+    /// The path chosen before the save options dialog (`None` until it opens).
+    pub picked: Option<std::path::PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -199,57 +207,53 @@ impl Modal {
                         )
                     }
                     Modal::SaveConfig { key, options, then } => {
-                        let (title, what) = match then.format {
-                            pnn_io::FileFormat::WebP => ("WebP options", "WebP"),
-                            _ => ("JPEG options", "JPEG"),
-                        };
+                        let name = then
+                            .path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
                         header(
                             ui,
                             icons,
-                            None,
-                            title,
-                            Some(&format!("How to save this image as {what}.")),
+                            Some(Icon::Save),
+                            "Save options",
+                            Some(&name),
                             &palette,
                         );
                         egui::Grid::new("save_config")
                             .num_columns(2)
                             .spacing(egui::vec2(14.0, 10.0))
-                            .show(ui, |ui| match then.format {
-                                pnn_io::FileFormat::WebP => {
-                                    // pdn-webp's controls (bundled with paint.net 5).
-                                    field_label(ui, "Preset", &palette);
-                                    egui::ComboBox::from_id_salt("webp_preset")
-                                        .selected_text(options.webp_preset.name())
-                                        .show_ui(ui, |ui| {
-                                            for p in pnn_io::WebPPreset::ALL {
-                                                ui.selectable_value(
-                                                    &mut options.webp_preset,
-                                                    p,
-                                                    p.name(),
-                                                );
-                                            }
-                                        });
-                                    ui.end_row();
-                                    field_label(ui, "Quality", &palette);
-                                    ui.add_enabled(
-                                        !options.webp_lossless,
-                                        egui::Slider::new(&mut options.webp_quality, 0..=100),
-                                    );
-                                    ui.end_row();
-                                    field_label(ui, "Effort", &palette);
-                                    ui.add(egui::Slider::new(&mut options.webp_effort, 0..=9))
-                                        .on_hover_text("Higher is slower and smaller");
-                                    ui.end_row();
-                                    ui.label("");
-                                    crate::controls::checkbox(ui, &mut options.webp_lossless, "Lossless");
-                                    ui.end_row();
+                            .show(ui, |ui| {
+                                field_label(ui, "File type", &palette);
+                                let mut format = then.format;
+                                egui::ComboBox::from_id_salt("save_file_type")
+                                    .selected_text(type_label(format))
+                                    .show_ui(ui, |ui| {
+                                        for f in pnn_io::FileFormat::ALL {
+                                            ui.selectable_value(&mut format, f, type_label(f));
+                                        }
+                                    });
+                                ui.end_row();
+                                if format != then.format {
+                                    then.format = format;
+                                    then.path.set_extension(format.extensions()[0]);
                                 }
-                                _ => {
-                                    field_label(ui, "Quality", &palette);
-                                    ui.add(egui::Slider::new(&mut options.jpeg_quality, 0..=100));
-                                    ui.end_row();
-                                }
+                                format_options(ui, then.format, options, &palette);
                             });
+                        // Another type means another file name: say if that replaces a file.
+                        if then.path.exists() && Some(&then.path) != picked_path(then) {
+                            ui.add_space(4.0);
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} already exists and will be replaced.",
+                                    then.path
+                                        .file_name()
+                                        .map(|n| n.to_string_lossy())
+                                        .unwrap_or_default()
+                                ))
+                                .color(palette.weak_text),
+                            );
+                        }
                         let ok = ModalResult::SaveConfigured {
                             key: *key,
                             options: *options,
@@ -427,6 +431,72 @@ fn header(
         ui.label(egui::RichText::new(d).color(palette.weak_text));
     }
     ui.add_space(4.0);
+}
+
+/// "WebP (.webp)": a file type in the save options' dropdown.
+fn type_label(f: pnn_io::FileFormat) -> String {
+    format!("{} (.{})", f.name(), f.extensions()[0])
+}
+
+/// The path the save started with (before the file type changed), kept in `picked`.
+fn picked_path(then: &SaveTarget) -> Option<&std::path::PathBuf> {
+    then.picked.as_ref()
+}
+
+/// The settings rows for saving as `format`; formats without settings get a note on what
+/// saving keeps.
+fn format_options(
+    ui: &mut egui::Ui,
+    format: pnn_io::FileFormat,
+    options: &mut pnn_io::SaveOptions,
+    palette: &theme::Palette,
+) {
+    use pnn_io::FileFormat;
+    match format {
+        FileFormat::WebP => {
+            // pdn-webp's controls (bundled with paint.net 5).
+            field_label(ui, "Preset", palette);
+            egui::ComboBox::from_id_salt("webp_preset")
+                .selected_text(options.webp_preset.name())
+                .show_ui(ui, |ui| {
+                    for p in pnn_io::WebPPreset::ALL {
+                        ui.selectable_value(&mut options.webp_preset, p, p.name());
+                    }
+                });
+            ui.end_row();
+            field_label(ui, "Quality", palette);
+            ui.add_enabled(
+                !options.webp_lossless,
+                egui::Slider::new(&mut options.webp_quality, 0..=100),
+            );
+            ui.end_row();
+            field_label(ui, "Effort", palette);
+            ui.add(egui::Slider::new(&mut options.webp_effort, 0..=9))
+                .on_hover_text("Higher is slower and smaller");
+            ui.end_row();
+            ui.label("");
+            crate::controls::checkbox(ui, &mut options.webp_lossless, "Lossless");
+            ui.end_row();
+        }
+        FileFormat::Jpeg => {
+            field_label(ui, "Quality", palette);
+            ui.add(egui::Slider::new(&mut options.jpeg_quality, 0..=100));
+            ui.end_row();
+        }
+        f => {
+            let mut note = if f.layered() {
+                "Keeps the layers.".to_owned()
+            } else {
+                "Saved as one layer.".to_owned()
+            };
+            if !f.has_alpha() {
+                note.push_str(" Transparent areas become white.");
+            }
+            ui.label("");
+            ui.label(egui::RichText::new(note).color(palette.weak_text));
+            ui.end_row();
+        }
+    }
 }
 
 fn field_label(ui: &mut egui::Ui, text: &str, palette: &theme::Palette) {

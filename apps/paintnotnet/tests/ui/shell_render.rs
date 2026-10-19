@@ -1108,6 +1108,23 @@ fn dialog_gallery() {
         ("flatten-prompt", None),
         ("unsaved-close", None),
     ];
+    use paintnotnet::commands::MenuId;
+    let shots: Vec<(&str, Option<Command>)> = shots
+        .into_iter()
+        .chain([
+            ("menu-file", Some(Command::OpenMenu(MenuId::File))),
+            ("menu-edit", Some(Command::OpenMenu(MenuId::Edit))),
+            ("menu-view", Some(Command::OpenMenu(MenuId::View))),
+            ("menu-image", Some(Command::OpenMenu(MenuId::Image))),
+            ("menu-layers", Some(Command::OpenMenu(MenuId::Layers))),
+            (
+                "menu-adjustments",
+                Some(Command::OpenMenu(MenuId::Adjustments)),
+            ),
+            ("menu-effects", Some(Command::OpenMenu(MenuId::Effects))),
+            ("menu-help", Some(Command::OpenMenu(MenuId::Help))),
+        ])
+        .collect();
     let tmp = tempfile::tempdir().unwrap();
     for (size, w, hh) in [("large", 1202.0, 867.0), ("small", 860.0, 600.0)] {
         for (theme, pref) in [
@@ -1141,7 +1158,11 @@ fn dialog_gallery() {
                 match (command, *name) {
                     (Some(c), _) => h.state_mut().execute(&ctx, Triggered::once(*c)),
                     (None, "save-jpeg" | "save-webp" | "flatten-prompt") => {
-                        let ext = if *name == "save-webp" { "webp" } else { "jpg" };
+                        let ext = match *name {
+                            "save-webp" => "webp",
+                            "save-jpeg" => "jpg",
+                            _ => "png",
+                        };
                         if *name == "flatten-prompt" {
                             h.state_mut()
                                 .execute(&ctx, Triggered::once(Command::AddNewLayer));
