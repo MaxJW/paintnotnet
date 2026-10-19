@@ -1010,3 +1010,60 @@ fn collapsing_glides_but_dragging_does_not() {
         wider.width()
     );
 }
+
+/// The move tools' nubs and pivot before a move, then after the pivot is dragged to the
+/// top-left nub and the pixels turned from just outside the bottom-right corner.
+#[test]
+fn move_pivot_render() {
+    use crate::common::drag;
+    use eframe::egui::{Modifiers, PointerButton};
+    let mut h = harness();
+    {
+        let tab = h.state_mut().workspace_mut().active_mut().unwrap();
+        let mut s = pnn_core::Surface::new_transparent(800, 600);
+        for y in 150..400 {
+            for x in 200..500 {
+                let c = ((x / 25 + y / 25) % 2) as u8 * 200;
+                s.set(x, y, pnn_core::ColorBgra::from_rgba(230, c, 255 - c, 255));
+            }
+        }
+        tab.doc.modify_layer(0, None, |l| l.surface = s);
+        tab.doc
+            .set_selection(pnn_core::Selection::rect(200.0, 150.0, 500.0, 400.0));
+    }
+    h.state_mut()
+        .set_tool(pnn_tools::ToolKind::MoveSelectedPixels);
+    for _ in 0..3 {
+        h.step();
+    }
+    assert_eq!(h.state().canvas().move_pivot, Some([350.0, 275.0]));
+    let dir = std::env::var("PNN_RENDER_DUMP").ok();
+    if let Some(dir) = &dir
+        && let Ok(image) = h.render()
+    {
+        image.save(format!("{dir}/shell-move-frame.png")).unwrap();
+    }
+    drag(
+        &mut h,
+        PointerButton::Primary,
+        Modifiers::NONE,
+        &[(350.0, 275.0), (260.0, 200.0), (201.0, 151.0)],
+    );
+    assert_eq!(h.state().canvas().move_pivot, Some([200.0, 150.0]));
+    let zoom = h.state().workspace().active().unwrap().view.unwrap().zoom;
+    let d = 10.0 / zoom;
+    drag(
+        &mut h,
+        PointerButton::Primary,
+        Modifiers::SHIFT,
+        &[(500.0 + d, 400.0 + d), (470.0, 440.0), (420.0, 480.0)],
+    );
+    for _ in 0..3 {
+        h.step();
+    }
+    if let Some(dir) = &dir
+        && let Ok(image) = h.render()
+    {
+        image.save(format!("{dir}/shell-move-rotated.png")).unwrap();
+    }
+}

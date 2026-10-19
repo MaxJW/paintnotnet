@@ -2,9 +2,14 @@
 //!
 //! Behaviour from paint.net 5's shortcut table: drag inside to move; drag a corner/edge nub
 //! to scale (Shift keeps proportions, Alt scales about the centre); drag with the right
-//! button, or the left button outside the selection, to rotate (Shift snaps to 15°); Ctrl
-//! when grabbing moves a copy; arrow keys nudge 1 px (Ctrl: 10 px). History steps use paint.net
-//! 3.36's names: Move/Scale/Rotate Pixels (or Selection) and Finish Pixels (Selection).
+//! button to rotate (Shift snaps to 15°); Ctrl when grabbing moves a copy; arrow keys nudge
+//! 1 px (Ctrl: 10 px). History steps use paint.net 3.36's names: Move/Scale/Rotate Pixels (or
+//! Selection) and Finish Pixels (Selection).
+//!
+//! paintnotnet's own (user, 2026-10-19): rotation turns about a pivot, drawn at the centre,
+//! that can be dragged (it snaps to the centre and the nubs); the left button rotates only
+//! from just outside a corner, and anywhere else outside the selection moves it. paint.net
+//! 3.36 rotates about the centre from anywhere outside (`MoveToolBase.cs`).
 //!
 //! Lifting copies the selected pixels (scaled by selection coverage) out of the layer and
 //! keeps the document as it was before; every change redraws the lifted pixels, transformed,
@@ -36,6 +41,8 @@ enum DragMode {
         center: [f64; 2],
         start_angle: f64,
     },
+    /// Dragging the rotation pivot.
+    Pivot,
 }
 
 struct MoveDrag {
@@ -58,6 +65,8 @@ pub struct MoveSession {
     bounds: [f64; 4],
     pub m: Affine,
     drag: Option<MoveDrag>,
+    /// Rotation pivot in the selection's own coordinates (`None`: its centre).
+    pivot: Option<[f64; 2]>,
     /// Something moved since lifting (Finish records a step only then).
     pub changed: bool,
     /// The selection's mask when lifted, with its identity: moved by whole pixels, the
@@ -96,12 +105,139 @@ fn shift_mask(mask: &pnn_core::Mask, dx: i64, dy: i64) -> pnn_core::Mask {
     m
 }
 
-/// See `move_hover`.
+/// What a left-button drag from a point does; see `MoveFrame::hit`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MoveHover {
+    /// Scale by nub `i` (NW clockwise).
     Handle(usize),
-    Inside,
-    Outside,
+    Pivot,
+    Rotate,
+    Move,
+}
+
+/// A selection's bounds, by (tab, selection revision).
+pub(crate) type BoundsCache = ((u64, u64), Option<[f64; 4]>);
+
+/// How near a nub or the pivot the pointer grabs it, in screen pixels.
+const REACH: f64 = 6.0;
+/// How far from a corner, in screen pixels, a drag outside the selection's box rotates.
+const ROTATE_CORNER: f64 = 24.0;
+/// The pivot, at the centre, would cover too much of a selection smaller than this on screen
+/// (pixels, its shorter side): it isn't shown, and the middle moves the selection.
+const PIVOT_MIN_BOX: f64 = 48.0;
+/// The pivot's radius on screen, as drawn; it is grabbed within this.
+const PIVOT_RADIUS: f64 = 6.5;
+
+/// The move tools' frame on the canvas: the selection's box in its own (untransformed)
+/// coordinates, the transform placing it, and the rotation pivot.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct MoveFrame {
+    bounds: [f64; 4],
+    m: Affine,
+    /// In the selection's own coordinates.
+    pivot: [f64; 2],
+    /// Drawn on the canvas (the pivot can only be grabbed then).
+    pub shown: bool,
+}
+
+impl MoveFrame {
+    fn new(bounds: [f64; 4], m: Affine, pivot: Option<[f64; 2]>, shown: bool) -> Self {
+        let [x0, y0, x1, y1] = bounds;
+        let pivot = pivot.unwrap_or([(x0 + x1) / 2.0, (y0 + y1) / 2.0]);
+        Self {
+            bounds,
+            m,
+            pivot,
+            shown,
+        }
+    }
+
+    /// The selection's own nub positions: corners and edge middles, NW clockwise.
+    fn own_handles(&self) -> [[f64; 2]; 8] {
+        let [x0, y0, x1, y1] = self.bounds;
+        let (mx, my) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+        [
+            [x0, y0],
+            [mx, y0],
+            [x1, y0],
+            [x1, my],
+            [x1, y1],
+            [mx, y1],
+            [x0, y1],
+            [x0, my],
+        ]
+    }
+
+    /// Nub positions in image coordinates.
+    pub fn handles(&self) -> [[f64; 2]; 8] {
+        self.own_handles().map(|p| transform::apply(&self.m, p))
+    }
+
+    /// The pivot in image coordinates.
+    pub fn pivot(&self) -> [f64; 2] {
+        transform::apply(&self.m, self.pivot)
+    }
+
+    /// Whether the pivot is drawn and can be grabbed at `zoom`.
+    pub fn pivot_shown(&self, zoom: f64) -> bool {
+        let h = self.handles();
+        let side = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]) * zoom;
+        self.shown && side(h[0], h[2]).min(side(h[0], h[6])) >= PIVOT_MIN_BOX
+    }
+
+    /// What a left-button drag from `pos` (image coordinates) does at `zoom` screen pixels
+    /// per image pixel; `inside` says whether `pos` is in the selection. The pivot comes
+    /// before the nubs, so that one snapped onto a nub can still be dragged off it.
+    fn hit(&self, pos: [f64; 2], zoom: f64, inside: impl FnOnce() -> bool) -> MoveHover {
+        let reach = REACH / zoom;
+        let dist = |p: [f64; 2]| (p[0] - pos[0]).hypot(p[1] - pos[1]);
+        if self.pivot_shown(zoom) && dist(self.pivot()) * zoom <= PIVOT_RADIUS {
+            return MoveHover::Pivot;
+        }
+        let handles = self.handles();
+        if let Some(i) = handles
+            .iter()
+            .position(|h| (h[0] - pos[0]).abs() <= reach && (h[1] - pos[1]).abs() <= reach)
+        {
+            return MoveHover::Handle(i);
+        }
+        if inside() {
+            return MoveHover::Move;
+        }
+        // Just outside a corner of the (transformed) box rotates; elsewhere moves.
+        let Some(inv) = transform::invert(&self.m) else {
+            return MoveHover::Move;
+        };
+        let [qx, qy] = transform::apply(&inv, pos);
+        let [x0, y0, x1, y1] = self.bounds;
+        let outside_box = qx < x0 || qx > x1 || qy < y0 || qy > y1;
+        let near_corner = [0, 2, 4, 6]
+            .iter()
+            .any(|&i| dist(handles[i]) * zoom <= ROTATE_CORNER);
+        if outside_box && near_corner {
+            MoveHover::Rotate
+        } else {
+            MoveHover::Move
+        }
+    }
+
+    /// The pivot (own coordinates) for the pointer at `pos`: snapped to the centre or a nub
+    /// within reach.
+    fn pivot_at(&self, pos: [f64; 2], zoom: f64) -> [f64; 2] {
+        let [x0, y0, x1, y1] = self.bounds;
+        let centre = [(x0 + x1) / 2.0, (y0 + y1) / 2.0];
+        let snap = std::iter::once(centre)
+            .chain(self.own_handles())
+            .map(|p| (p, transform::apply(&self.m, p)))
+            .map(|(p, q)| (p, (q[0] - pos[0]).hypot(q[1] - pos[1])))
+            .filter(|(_, d)| d * zoom <= REACH * 1.5)
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        match (snap, transform::invert(&self.m)) {
+            (Some((p, _)), _) => p,
+            (None, Some(inv)) => transform::apply(&inv, pos),
+            (None, None) => self.pivot,
+        }
+    }
 }
 
 fn next_serial() -> u64 {
@@ -167,26 +303,21 @@ impl MoveSession {
         })
     }
 
-    /// Nub positions in image coordinates.
-    pub fn handles(&self) -> [[f64; 2]; 8] {
-        let [x0, y0, x1, y1] = self.bounds;
-        let (mx, my) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
-        [
-            [x0, y0],
-            [mx, y0],
-            [x1, y0],
-            [x1, my],
-            [x1, y1],
-            [mx, y1],
-            [x0, y1],
-            [x0, my],
-        ]
-        .map(|p| transform::apply(&self.m, p))
+    /// The nubs and pivot where the session has put them.
+    pub(crate) fn frame(&self) -> MoveFrame {
+        MoveFrame::new(self.bounds, self.m, self.pivot, true)
     }
 
-    fn center(&self) -> [f64; 2] {
-        let [x0, y0, x1, y1] = self.bounds;
-        transform::apply(&self.m, [(x0 + x1) / 2.0, (y0 + y1) / 2.0])
+    /// Whether image point `pos` is in the moved selection: a lookup in the lifted mask when
+    /// there is one (a Magic Wand outline has ~700k points), else the outline.
+    fn contains(&self, pos: [f64; 2], w: f64, h: f64) -> bool {
+        match self.ants_transform() {
+            Some((_, mask, inv)) => {
+                let [x, y] = transform::apply(&inv, pos);
+                x >= 0.0 && y >= 0.0 && x < w && y < h && mask.get(x as u32, y as u32) >= 128
+            }
+            None => self.current_selection().contains(pos),
+        }
     }
 
     pub fn current_selection(&self) -> Selection {
@@ -209,10 +340,10 @@ fn names(kind: MoveKind, mode: DragMode) -> (&'static str, Icon) {
         Icon::MoveSelection
     };
     let name = match (kind, mode) {
-        (MoveKind::Pixels, DragMode::Move) => "Move Pixels",
+        (MoveKind::Pixels, DragMode::Move | DragMode::Pivot) => "Move Pixels",
         (MoveKind::Pixels, DragMode::Scale(_)) => "Scale Pixels",
         (MoveKind::Pixels, DragMode::Rotate { .. }) => "Rotate Pixels",
-        (MoveKind::Selection, DragMode::Move) => "Move Selection",
+        (MoveKind::Selection, DragMode::Move | DragMode::Pivot) => "Move Selection",
         (MoveKind::Selection, DragMode::Scale(_)) => "Scale Selection",
         (MoveKind::Selection, DragMode::Rotate { .. }) => "Rotate Selection",
     };
@@ -300,6 +431,7 @@ impl PaintNotNetApp {
             bounds,
             m: IDENTITY,
             drag: None,
+            pivot: None,
             changed: false,
             base_mask,
             serial: next_serial(),
@@ -336,6 +468,7 @@ impl PaintNotNetApp {
             bounds,
             m: IDENTITY,
             drag: None,
+            pivot: None,
             changed: true,
             base_mask: None,
             serial: next_serial(),
@@ -460,17 +593,14 @@ impl PaintNotNetApp {
                 let Some(s) = self.move_session.as_mut() else {
                     return;
                 };
-                let reach = 6.0 / zoom;
-                let handle = s
-                    .handles()
-                    .iter()
-                    .position(|h| (h[0] - pos[0]).abs() <= reach && (h[1] - pos[1]).abs() <= reach);
-                let inside = s.current_selection().contains(pos);
-                let mode = match (button, handle, inside) {
-                    (ToolButton::Primary, Some(i), _) => DragMode::Scale(i),
-                    (ToolButton::Primary, None, true) => DragMode::Move,
+                let (w, h) = (s.base.width() as f64, s.base.height() as f64);
+                let frame = s.frame();
+                let mode = match (button, frame.hit(pos, zoom, || s.contains(pos, w, h))) {
+                    (ToolButton::Primary, MoveHover::Handle(i)) => DragMode::Scale(i),
+                    (ToolButton::Primary, MoveHover::Pivot) => DragMode::Pivot,
+                    (ToolButton::Primary, MoveHover::Move) => DragMode::Move,
                     _ => {
-                        let c = s.center();
+                        let c = frame.pivot();
                         DragMode::Rotate {
                             center: c,
                             start_angle: (pos[1] - c[1]).atan2(pos[0] - c[0]),
@@ -486,7 +616,10 @@ impl PaintNotNetApp {
                 // lasts, when they fit in one of its buffers: no CPU drawing or uploads per
                 // frame (a rotation redrew a 24 MP layer on every core, ~0.45 s a frame).
                 let bytes = s.rect.width as u64 * s.rect.height as u64 * 4;
-                if s.kind == MoveKind::Pixels && bytes <= self.gpu_float_limit {
+                if s.kind == MoveKind::Pixels
+                    && mode != DragMode::Pivot
+                    && bytes <= self.gpu_float_limit
+                {
                     s.gpu_drag = true;
                     let selection = s.current_selection();
                     let mut doc = s.base.clone();
@@ -502,7 +635,13 @@ impl PaintNotNetApp {
                     return;
                 };
                 let Some(d) = s.drag.as_ref() else { return };
+                if d.mode == DragMode::Pivot {
+                    // Not a change to the document: no history, nothing redrawn.
+                    s.pivot = Some(s.frame().pivot_at(pos, zoom));
+                    return;
+                }
                 s.m = match d.mode {
+                    DragMode::Pivot => return,
                     // Whole pixels, as paint.net (3.36 `MoveToolBase`: the offset is the
                     // difference of integer image positions): a fractional move would blur
                     // the pixels, and resample all of them on every frame of the drag.
@@ -661,84 +800,68 @@ impl PaintNotNetApp {
         }
     }
 
-    /// What dragging from the pointer would do with a move tool, for its cursor: scale by
-    /// handle `i` (paint.net's nubs, NW clockwise), move (inside the selection) or rotate
-    /// (outside). Before a move starts the handles sit on the selection's bounds, where the
-    /// move will put them. Inside is a mask lookup for complex selections.
+    /// What dragging from the pointer would do with a move tool, for its cursor. Before a
+    /// move starts the frame sits on the selection's bounds, where the move will put it.
+    /// Inside is a mask lookup for complex selections.
     pub(crate) fn move_hover(&mut self) -> Option<MoveHover> {
         let pos = self.canvas.cursor?;
         let antialias = self.antialiased_selection();
+        let frame = self.move_frame()?;
         let tab = self.workspace.active_mut()?;
         let zoom = tab.view.map_or(1.0, |v| v.zoom);
-        let reach = 6.0 / zoom;
         let (w, h) = (tab.doc.width() as f64, tab.doc.height() as f64);
-        let session = self.move_session.as_ref().filter(|s| s.key == tab.key);
-        let complex = |sel: &Selection| {
-            sel.contours().iter().map(Vec::len).sum::<usize>() > crate::canvas::GPU_ANTS_POINTS
-        };
-        let (handles, inside) = match session {
-            Some(s) => {
-                let inside = match s.ants_transform() {
-                    Some((_, mask, inv)) => {
-                        let [x, y] = transform::apply(&inv, pos);
-                        x >= 0.0
-                            && y >= 0.0
-                            && x < w
-                            && y < h
-                            && mask.get(x as u32, y as u32) >= 128
-                    }
-                    None => s.current_selection().contains(pos),
-                };
-                (s.handles(), inside)
+        let in_image = pos[0] >= 0.0 && pos[1] >= 0.0 && pos[0] < w && pos[1] < h;
+        let inside = match self.move_session.as_ref().filter(|s| s.key == tab.key) {
+            Some(s) => s.contains(pos, w, h),
+            // Nothing selected: the whole layer moves.
+            None if tab.doc.selection().is_empty() => in_image,
+            None if tab
+                .doc
+                .selection()
+                .contours()
+                .iter()
+                .map(Vec::len)
+                .sum::<usize>()
+                > crate::canvas::GPU_ANTS_POINTS =>
+            {
+                in_image
+                    && tab
+                        .selection_mask(antialias)
+                        .is_some_and(|m| m.get(pos[0] as u32, pos[1] as u32) >= 128)
             }
-            None => {
-                let sel = tab.doc.selection().clone();
-                let [x0, y0, x1, y1] = sel.bounds().unwrap_or([0.0, 0.0, w, h]);
-                let (mx, my) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
-                let handles = [
-                    [x0, y0],
-                    [mx, y0],
-                    [x1, y0],
-                    [x1, my],
-                    [x1, y1],
-                    [mx, y1],
-                    [x0, y1],
-                    [x0, my],
-                ];
-                let inside = if sel.is_empty() {
-                    // Nothing selected: the whole layer moves.
-                    pos[0] >= 0.0 && pos[1] >= 0.0 && pos[0] < w && pos[1] < h
-                } else if complex(&sel) {
-                    tab.selection_mask(antialias).is_some_and(|m| {
-                        pos[0] >= 0.0
-                            && pos[1] >= 0.0
-                            && pos[0] < w
-                            && pos[1] < h
-                            && m.get(pos[0] as u32, pos[1] as u32) >= 128
-                    })
-                } else {
-                    sel.contains(pos)
-                };
-                (handles, inside)
-            }
+            None => tab.doc.selection().contains(pos),
         };
-        if let Some(i) = handles
-            .iter()
-            .position(|p| (p[0] - pos[0]).abs() <= reach && (p[1] - pos[1]).abs() <= reach)
-        {
-            return Some(MoveHover::Handle(i));
+        Some(frame.hit(pos, zoom, || inside))
+    }
+
+    /// The move tools' frame on the active document: the session's, or before a move starts,
+    /// on the selection's bounds (the whole image, not drawn, with nothing selected). The
+    /// bounds are kept per selection revision (a Magic Wand outline has ~700k points).
+    pub(crate) fn move_frame(&mut self) -> Option<MoveFrame> {
+        let tab = self.workspace.active()?;
+        if let Some(s) = self.move_session.as_ref().filter(|s| s.key == tab.key) {
+            return Some(s.frame());
         }
-        Some(if inside {
-            MoveHover::Inside
-        } else {
-            MoveHover::Outside
+        let id = (tab.key, tab.doc.selection_revision());
+        let bounds = match self.selection_bounds {
+            Some((k, b)) if k == id => b,
+            _ => {
+                let b = tab.doc.selection().bounds();
+                self.selection_bounds = Some((id, b));
+                b
+            }
+        };
+        let (w, h) = (tab.doc.width() as f64, tab.doc.height() as f64);
+        Some(match bounds {
+            Some(b) => MoveFrame::new(b, IDENTITY, None, true),
+            None => MoveFrame::new([0.0, 0.0, w, h], IDENTITY, None, false),
         })
     }
 
-    /// Nubs to draw on the canvas for the active session.
-    pub(crate) fn move_handles(&self) -> Option<[[f64; 2]; 8]> {
-        let s = self.move_session.as_ref()?;
-        (self.workspace.active()?.key == s.key && self.move_kind().is_some()).then(|| s.handles())
+    /// Nubs and pivot to draw on the canvas while a move tool is chosen.
+    pub(crate) fn move_handles(&mut self) -> Option<MoveFrame> {
+        self.move_kind()?;
+        self.move_frame().filter(|f| f.shown)
     }
 }
 
@@ -763,6 +886,80 @@ mod tests {
         let back = shift_mask(&s, -30, 15);
         assert_eq!(back.get(255, 20), 200);
         assert_eq!(back.get(275, 20), 0, "the part that left the image is gone");
+    }
+
+    #[test]
+    fn left_drags_rotate_only_just_outside_a_corner() {
+        let f = MoveFrame::new([0.0, 0.0, 100.0, 80.0], IDENTITY, None, true);
+        let hit = |p: [f64; 2], inside: bool| f.hit(p, 1.0, || inside);
+        assert_eq!(hit([50.0, 40.0], true), MoveHover::Pivot, "the centre");
+        assert_eq!(hit([20.0, 20.0], true), MoveHover::Move, "inside");
+        assert_eq!(hit([1.0, -2.0], false), MoveHover::Handle(0), "a nub");
+        assert_eq!(
+            hit([-10.0, -10.0], false),
+            MoveHover::Rotate,
+            "outside a corner"
+        );
+        assert_eq!(hit([110.0, 92.0], false), MoveHover::Rotate);
+        assert_eq!(
+            hit([50.0, -10.0], false),
+            MoveHover::Move,
+            "outside an edge"
+        );
+        assert_eq!(
+            hit([-30.0, -30.0], false),
+            MoveHover::Move,
+            "far from the corner"
+        );
+        assert_eq!(
+            hit([10.0, 10.0], false),
+            MoveHover::Move,
+            "in the box but not the selection (an ellipse's corner)"
+        );
+        // The zones turn with the selection: a quarter turn about the centre puts the
+        // top-left corner at (90, -10) and the bottom-left at (10, -10).
+        let r = MoveFrame::new(
+            [0.0, 0.0, 100.0, 80.0],
+            transform::rotation_about(std::f64::consts::FRAC_PI_2, [50.0, 40.0]),
+            None,
+            true,
+        );
+        assert_eq!(r.hit([100.0, -20.0], 1.0, || false), MoveHover::Rotate);
+        assert_eq!(r.hit([50.0, -20.0], 1.0, || false), MoveHover::Move);
+        // At 4× the reaches are a quarter as far in image pixels.
+        assert_eq!(f.hit([-5.0, -5.0], 4.0, || false), MoveHover::Move);
+        assert_eq!(f.hit([-3.0, -3.0], 4.0, || false), MoveHover::Rotate);
+    }
+
+    #[test]
+    fn a_small_selection_has_no_pivot_to_grab() {
+        let f = MoveFrame::new([0.0, 0.0, 40.0, 100.0], IDENTITY, None, true);
+        assert!(!f.pivot_shown(1.0));
+        assert_eq!(f.hit([20.0, 50.0], 1.0, || true), MoveHover::Move);
+        assert!(f.pivot_shown(2.0), "80 screen pixels at 2×");
+        assert_eq!(f.hit([20.0, 50.0], 2.0, || true), MoveHover::Pivot);
+        let hidden = MoveFrame::new([0.0, 0.0, 400.0, 400.0], IDENTITY, None, false);
+        assert_eq!(hidden.hit([200.0, 200.0], 1.0, || true), MoveHover::Move);
+    }
+
+    #[test]
+    fn the_pivot_snaps_and_follows_the_selection() {
+        let m = transform::translation(10.0, 5.0);
+        let f = MoveFrame::new([0.0, 0.0, 100.0, 80.0], m, None, true);
+        assert_eq!(f.pivot(), [60.0, 45.0], "the moved centre");
+        assert_eq!(f.pivot_at([33.0, 21.0], 1.0), [23.0, 16.0], "free");
+        assert_eq!(
+            f.pivot_at([112.0, 87.0], 1.0),
+            [100.0, 80.0],
+            "snapped to a corner"
+        );
+        assert_eq!(
+            f.pivot_at([58.0, 47.0], 1.0),
+            [50.0, 40.0],
+            "snapped to the centre"
+        );
+        let moved = MoveFrame::new([0.0, 0.0, 100.0, 80.0], m, Some([100.0, 80.0]), true);
+        assert_eq!(moved.pivot(), [110.0, 85.0]);
     }
 
     #[test]

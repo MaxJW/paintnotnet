@@ -804,6 +804,16 @@ this just a great modern paint.net replacement for linux."
         into the document on the effect threads (with the moved selection's mask) while the GPU keeps showing it.
         Tests: rotated/scaled GPU preview within a level of the CPU; the same rotation drag with and without the GPU
         leaves identical pixels and history. Rotate drag on the photo: 2–3 ms frames (was ~0.45 s a frame)
+  - [x] **Rotation pivot; rotate only from the corners** (user, 2026-10-19: "a pivot point that I can move, and it
+        should only be at the corners that the selection can be rotated. Clicking outside otherwise should just move
+        the selected item"): the move tools draw their nubs and a pivot (the Shapes tool's circle with a cross) on the
+        selection before a move starts too; dragging the pivot moves it (snaps to the centre and the nubs, no history
+        step) and rotation turns about it; it follows the selection and resets when the move is finished. A left-drag
+        rotates only from within 24 screen px of a corner, outside the box; anywhere else outside moves. Right-drag
+        still rotates from anywhere (paint.net's shortcut). On selections under 48 screen px the pivot is hidden so
+        the middle still moves them. Status hint reworded (our own text, not paint.net's). `move_hover` no longer
+        copies the selection every frame; the pre-move bounds are cached per selection revision. Tests: hit zones,
+        snapping, small selections (unit); pivot drag, corner rotation about it, outside move (UI); cursors; render
   - [x] **Session log** (user asked for logs of their own use): `~/.local/state/paintnotnet/paintnotnet.log` (the
         previous one kept as `.log.1`) has commands, tool presses, slow frames (≥ 50 ms) with what was going on,
         background jobs, memory every 10 s, and a watchdog line for every second the UI thread is stuck in a frame

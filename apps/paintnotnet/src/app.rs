@@ -83,6 +83,8 @@ pub struct PaintNotNetApp {
     pub(crate) ctx: Option<egui::Context>,
     /// Draw moved pixels on the CPU even with a GPU (tests compare the two paths).
     pub(crate) cpu_floating: bool,
+    /// The selection's bounds for the move tools' frame, by (tab, selection revision).
+    pub(crate) selection_bounds: Option<crate::move_tools::BoundsCache>,
     /// Notes slow and stuck frames in the session log (set by `main`).
     pub(crate) watchdog: Option<crate::session_log::Watchdog>,
     /// Largest floating-pixel block the GPU can draw (its storage buffer limit; 0 = no GPU,
@@ -205,6 +207,7 @@ impl PaintNotNetApp {
             gpu_float_limit: 0,
             watchdog: None,
             cpu_floating: false,
+            selection_bounds: None,
             stroke: None,
             brush: None,
             gradient: None,
@@ -2002,9 +2005,10 @@ impl PaintNotNetApp {
                             C::ResizeWest,
                         ][i],
                     ),
-                    Some(MoveHover::Outside) => {
+                    Some(MoveHover::Rotate) => {
                         canvas::ToolCursor::Drawn(self.icons.texture(Icon::RotateCursor).id())
                     }
+                    Some(MoveHover::Pivot) => canvas::ToolCursor::System(C::Crosshair),
                     _ => canvas::ToolCursor::System(C::Move),
                 }
             }
@@ -2019,7 +2023,16 @@ impl PaintNotNetApp {
             self.row2.font_families = fonts.families.clone();
         }
         self.canvas.vector_handles = self.vector_handles();
-        self.canvas.handles = self.move_handles();
+        let move_frame = self.move_handles();
+        self.canvas.handles = move_frame.map(|f| f.handles());
+        let zoom = self
+            .workspace
+            .active()
+            .and_then(|t| t.view)
+            .map_or(1.0, |v| v.zoom);
+        self.canvas.move_pivot = move_frame
+            .filter(|f| f.pivot_shown(zoom))
+            .map(|f| f.pivot());
         self.canvas.gradient_nubs = self.gradient_nubs();
         // Tools with a width can be resized with Alt + right-drag; brushes have a hardness too.
         let brushes = matches!(

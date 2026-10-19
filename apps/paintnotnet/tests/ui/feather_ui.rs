@@ -89,11 +89,12 @@ fn moving_feathered_pixels_carries_soft_alpha() {
         &[(10.0, 10.0), (40.0, 40.0)],
     );
     press(&mut h, Modifiers::NONE, Key::M);
+    // Off the centre, where the rotation pivot is.
     drag(
         &mut h,
         PointerButton::Primary,
         Modifiers::NONE,
-        &[(25.0, 25.0), (75.0, 25.0)],
+        &[(22.0, 22.0), (72.0, 22.0)],
     );
     press(&mut h, Modifiers::NONE, Key::Enter);
     let s = &doc(&h).layer(0).surface;

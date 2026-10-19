@@ -362,6 +362,71 @@ fn nub_scales_and_right_drag_rotates() {
     assert_eq!(history_names(&h).last().unwrap(), "Rotate Selection");
 }
 
+/// paintnotnet's pivot: dragged to a corner (it snaps), a left-drag from just outside the
+/// opposite corner turns the selection about it, and a left-drag elsewhere outside moves it.
+#[test]
+fn pivot_drags_and_corners_rotate_about_it() {
+    let mut h = harness_with(red_block());
+    press(&mut h, Modifiers::NONE, Key::S);
+    drag(
+        &mut h,
+        PointerButton::Primary,
+        Modifiers::NONE,
+        &[(40.0, 30.0), (60.0, 50.0)],
+    );
+    press(&mut h, Modifiers::SHIFT, Key::M);
+    h.step();
+    let zoom = h.state().workspace().active().unwrap().view.unwrap().zoom;
+    let pivot = |h: &egui_kittest::Harness<'_, paintnotnet::app::PaintNotNetApp>| {
+        h.state().canvas().move_pivot.expect("pivot shown")
+    };
+    let bounds = |h: &egui_kittest::Harness<'_, paintnotnet::app::PaintNotNetApp>| {
+        doc(h)
+            .selection()
+            .bounds()
+            .unwrap()
+            .map(|v| (v * 1e6).round() / 1e6)
+    };
+    assert_eq!(pivot(&h), [50.0, 40.0], "at the centre ({zoom}×)");
+    let steps = history_names(&h).len();
+
+    drag(
+        &mut h,
+        PointerButton::Primary,
+        Modifiers::NONE,
+        &[(50.0, 40.0), (45.0, 35.0), (40.3, 30.2)],
+    );
+    assert_eq!(pivot(&h), [40.0, 30.0], "snapped to the top-left nub");
+    assert_eq!(bounds(&h), [40.0, 30.0, 60.0, 50.0], "nothing moved");
+    assert_eq!(history_names(&h).len(), steps, "no history step");
+
+    // 10 screen pixels out from the bottom-right corner, a quarter turn (Shift snaps).
+    let d = 10.0 / zoom;
+    drag(
+        &mut h,
+        PointerButton::Primary,
+        Modifiers::SHIFT,
+        &[(60.0 + d, 50.0 + d), (40.0, 58.0), (18.0, 52.0)],
+    );
+    assert_eq!(
+        bounds(&h),
+        [20.0, 30.0, 40.0, 50.0],
+        "turned about the pivot"
+    );
+    assert_eq!(history_names(&h).last().unwrap(), "Rotate Selection");
+
+    // Outside, away from the corners: moves.
+    drag(
+        &mut h,
+        PointerButton::Primary,
+        Modifiers::NONE,
+        &[(80.0, 10.0), (85.0, 15.0)],
+    );
+    assert_eq!(bounds(&h), [25.0, 35.0, 45.0, 55.0]);
+    assert_eq!(history_names(&h).last().unwrap(), "Move Selection");
+    assert_eq!(pivot(&h), [45.0, 35.0], "the pivot moved with it");
+}
+
 #[test]
 fn move_with_nothing_selected_moves_the_layer() {
     let mut h = harness_with(red_block());

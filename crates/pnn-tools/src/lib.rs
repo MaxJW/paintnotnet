@@ -93,8 +93,9 @@ impl ToolKind {
             Self::RectangleSelect => {
                 "Click and drag to draw a rectangular selection. Hold shift to constrain to a square."
             }
+            // paintnotnet's own text: it rotates about a pivot, from the corners only.
             Self::MoveSelectedPixels | Self::MoveSelection => {
-                "Drag the selection to move. Drag the nubs to scale. Drag with right mouse button to rotate."
+                "Drag to move, a nub to scale, or just outside a corner to rotate (right-drag rotates from anywhere). Drag the pivot to turn about another point."
             }
             Self::LassoSelect => "Click and drag to draw the outline for a selection area.",
             Self::EllipseSelect => {

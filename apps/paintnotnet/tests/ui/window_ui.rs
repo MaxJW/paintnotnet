@@ -388,11 +388,16 @@ fn move_tool_cursor_shows_move_resize_and_rotate() {
     h.state_mut()
         .set_tool(pnn_tools::ToolKind::MoveSelectedPixels);
     h.step();
+    // Rotation only just outside a corner (10 screen pixels out); elsewhere outside moves.
+    let zoom = h.state().workspace().active().unwrap().view.unwrap().zoom;
+    let d = 10.0 / zoom;
     for (p, want) in [
-        ((40.0, 35.0), CursorIcon::Move),
+        ((30.0, 30.0), CursorIcon::Move),
         ((20.0, 20.0), CursorIcon::ResizeNorthWest),
         ((60.0, 35.0), CursorIcon::ResizeEast),
-        ((90.0, 70.0), CursorIcon::None),
+        ((60.0 + d, 50.0 + d), CursorIcon::None),
+        ((20.0 - d, 20.0 - d), CursorIcon::None),
+        ((60.0 + 4.0 * d, 35.0), CursorIcon::Move),
     ] {
         let s = screen(&h, p.0, p.1);
         h.event(Event::PointerMoved(s));

@@ -95,6 +95,8 @@ pub struct CanvasState {
     pub brush_outline: Option<f32>,
     /// Move tool nubs to draw (image coordinates).
     pub handles: Option<[[f64; 2]; 8]>,
+    /// The move tools' rotation pivot (image coordinates).
+    pub move_pivot: Option<[f64; 2]>,
     pub pixel_grid: bool,
     /// View > Rulers, drawn in these units.
     pub rulers: Option<(Units, f64)>,
@@ -514,6 +516,19 @@ pub fn show(
                 egui::StrokeKind::Inside,
             );
         }
+    }
+    if let Some(p) = state.move_pivot {
+        // Rotation pivot: a circle with a cross, as the Shapes tool's.
+        let painter = ui.painter().with_clip_rect(area);
+        let sp = view.image_to_screen(p, vp);
+        let c = egui::pos2(
+            canvas_rect.min.x + (sp[0] / ppp) as f32,
+            canvas_rect.min.y + (sp[1] / ppp) as f32,
+        );
+        let s = egui::Stroke::new(1.0, egui::Color32::BLACK);
+        painter.circle(c, 5.5, egui::Color32::WHITE, s);
+        painter.line_segment([c - vec2(5.5, 0.0), c + vec2(5.5, 0.0)], s);
+        painter.line_segment([c - vec2(0.0, 5.5), c + vec2(0.0, 5.5)], s);
     }
     if let Some(nubs) = state.gradient_nubs {
         // 3.36 draws the gradient's nubs as circles (`MoveNubShape.Circle`).
