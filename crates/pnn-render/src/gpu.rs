@@ -33,12 +33,14 @@ pub struct ViewUniforms {
     /// Marching ants drawn from the selection mask (complex selections): 0 = off, else
     /// 1 + the dashes' offset in screen px (0–7).
     pub ants: f32,
-    /// Where the ants mask is drawn, relative to where it was made (image px): a selection
-    /// being moved keeps its mask.
-    pub ants_shift: [f32; 2],
     /// 1.0 = the whole-image ants mask is there (else each chunk's overlay is used).
     pub ants_full: f32,
-    pub _pad: f32,
+    pub _pad: [f32; 3],
+    /// Where to read the ants mask for an image point, as `pnn_core::transform::apply`
+    /// (`ants_inv0` = m0..m3, `ants_inv1` = m4, m5): a selection being moved, rotated or
+    /// scaled keeps the mask it had. Identity otherwise.
+    pub ants_inv0: [f32; 4],
+    pub ants_inv1: [f32; 4],
 }
 
 #[repr(C)]
@@ -677,7 +679,7 @@ mod tests {
 
     #[test]
     fn uniforms_match_wgsl_layout() {
-        assert_eq!(std::mem::size_of::<ViewUniforms>(), 64);
+        assert_eq!(std::mem::size_of::<ViewUniforms>(), 96);
         assert_eq!(std::mem::size_of::<ChunkUniforms>(), 16);
     }
 }

@@ -466,6 +466,18 @@ impl PaintNotNetApp {
     pub(crate) fn tool_events(&mut self, events: Vec<ToolEvent>) {
         use pnn_tools::ToolKind;
         for event in events {
+            match &event {
+                ToolEvent::Down { pos, button, .. } => {
+                    log::info!(
+                        "{:?}: press {button:?} at {:.0},{:.0}",
+                        self.tool,
+                        pos[0],
+                        pos[1]
+                    )
+                }
+                ToolEvent::Up { .. } => log::info!("{:?}: release", self.tool),
+                _ => {}
+            }
             match self.tool {
                 ToolKind::Pencil => self.pencil(event),
                 ToolKind::Paintbrush

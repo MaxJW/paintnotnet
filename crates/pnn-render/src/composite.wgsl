@@ -51,8 +51,13 @@ struct Gradient {
 struct Floating {
     origin: vec2<i32>,  // where the rectangle was lifted from (image px)
     size: vec2<i32>,
-    offset: vec2<i32>,  // how far it has moved
+    offset: vec2<i32>,  // how far it has moved (whole pixels; `mode` 0)
     image: vec2<i32>,   // the image's size: nothing lands beyond it
+    // Otherwise (rotated or scaled), the inverse transform, as `transform::apply`:
+    // source = (inv0.x x + inv0.y y + inv0.z, inv0.w x + inv1.x y + inv1.y).
+    inv0: vec4<f32>,
+    inv1: vec4<f32>,    // .z: mode (0 whole-pixel offset, 1 bilinear, 2 nearest)
+    clip: vec4<i32>,    // rotated or scaled: only [x0, x1) × [y0, y1), as the CPU
 };
 
 const TILE: u32 = 256u;
@@ -246,15 +251,65 @@ fn gradient_pixel(x: u32, y: u32, before: vec4<u32>, cov: u32) -> vec4<u32> {
     return px;
 }
 
-// The floating pixels over `before` at image pixel (x, y): `transform::draw_transformed` for
-// a whole-pixel move (Normal over what's below).
+// A lifted pixel by image position (transparent outside the lifted rectangle), premultiplied
+// as `draw_transformed`'s `fetch`.
+fn fetch_floating(x: i32, y: i32) -> vec4<f32> {
+    let q = vec2<i32>(x, y) - fl.origin;
+    if (any(q < vec2<i32>(0)) || any(q >= fl.size)) {
+        return vec4<f32>(0.0);
+    }
+    let c = vec4<f32>(unpack(floating[u32(q.y * fl.size.x + q.x)]));
+    return vec4<f32>(c.xyz * c.w / 255.0, c.w);
+}
+
+// The floating pixels over `before` at image pixel (x, y), as `transform::draw_transformed`
+// (Normal over what's below): exact for a whole-pixel move; rotated or scaled, one bilinear
+// (or nearest) sample per pixel in f32 — the drag's preview; the document gets the CPU's
+// result when the drag ends.
 fn floating_over(x: u32, y: u32, before: vec4<u32>) -> vec4<u32> {
     let at = vec2<i32>(i32(x), i32(y));
-    let q = at - fl.offset - fl.origin;
-    if (any(q < vec2<i32>(0)) || any(q >= fl.size) || any(at >= fl.image)) {
+    if (any(at >= fl.image)) {
         return before;
     }
-    let px = unpack(floating[u32(q.y * fl.size.x + q.x)]);
+    var px: vec4<u32>;
+    let mode = u32(fl.inv1.z);
+    if (mode == 0u) {
+        let q = at - fl.offset - fl.origin;
+        if (any(q < vec2<i32>(0)) || any(q >= fl.size)) {
+            return before;
+        }
+        px = unpack(floating[u32(q.y * fl.size.x + q.x)]);
+    } else {
+        if (at.x < fl.clip.x || at.y < fl.clip.y || at.x >= fl.clip.z || at.y >= fl.clip.w) {
+            return before;
+        }
+        let p = vec2<f32>(f32(x) + 0.5, f32(y) + 0.5);
+        let s = vec2<f32>(
+            fl.inv0.x * p.x + fl.inv0.y * p.y + fl.inv0.z,
+            fl.inv0.w * p.x + fl.inv1.x * p.y + fl.inv1.y,
+        );
+        var acc: vec4<f32>;
+        if (mode == 2u) {
+            acc = fetch_floating(i32(floor(s.x)), i32(floor(s.y)));
+        } else {
+            let f = s - vec2<f32>(0.5);
+            let i = vec2<i32>(floor(f));
+            let t = f - floor(f);
+            let a = fetch_floating(i.x, i.y);
+            let b = fetch_floating(i.x + 1, i.y);
+            let c = fetch_floating(i.x, i.y + 1);
+            let d = fetch_floating(i.x + 1, i.y + 1);
+            let top = a + (b - a) * t.x;
+            let bot = c + (d - c) * t.x;
+            acc = top + (bot - top) * t.y;
+        }
+        let alpha = clamp(acc.w, 0.0, 255.0);
+        if (alpha <= 0.0) {
+            return before;
+        }
+        let rgb = clamp(round(acc.xyz * 255.0 / alpha), vec3<f32>(0.0), vec3<f32>(255.0));
+        px = vec4<u32>(vec3<u32>(rgb), u32(round(alpha)));
+    }
     if (px.w == 0u) {
         return before;
     }

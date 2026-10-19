@@ -591,7 +591,12 @@ impl ClickJob {
     ) -> ClickJob {
         let (tx, rx) = std::sync::mpsc::channel();
         crate::effect_runner::effect_pool().spawn(move || {
+            let start = std::time::Instant::now();
             let t = work();
+            log::info!(
+                "background job done in {:.0} ms",
+                start.elapsed().as_secs_f64() * 1e3
+            );
             let done: ApplyResult = Box::new(move |app| apply(app, t));
             let _ = tx.send(done);
             if let Some(ctx) = ctx {

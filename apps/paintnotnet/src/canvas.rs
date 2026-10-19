@@ -79,9 +79,10 @@ pub struct CanvasState {
     pub overlay: Option<(u64, std::sync::Arc<pnn_core::Mask>)>,
     /// Selections are antialiased (set by the app; picks which cached mask the GPU ants use).
     pub antialias: bool,
-    /// While a selection moves by whole pixels: its mask from before the move (identity,
-    /// mask) and the shift, for the GPU ants (set by the app).
-    pub ants_shift: Option<(u64, std::sync::Arc<pnn_core::Mask>, [f64; 2])>,
+    /// While a selection is moved, rotated or scaled: its mask from before (identity, mask)
+    /// and where to read it for an image point (the inverse transform), for the GPU ants
+    /// (set by the app).
+    pub ants_transform: Option<(u64, std::sync::Arc<pnn_core::Mask>, [f64; 6])>,
     /// Clone Stamp source marker (image coordinates).
     pub clone_source: Option<[f64; 2]>,
     /// Text caret (top, bottom) and move nub (image coordinates).
@@ -136,8 +137,8 @@ pub struct GpuSync {
     ants_tiles: Vec<usize>,
     /// Floating pixels being dragged (set by the app each frame).
     pub floating: Option<FloatingPreview>,
-    /// What the GPU last drew of `floating`: (layer, serial, offset).
-    shown_floating: Option<(pnn_core::LayerId, u64, [i32; 2])>,
+    /// What the GPU last drew of `floating`.
+    shown_floating: Option<FloatingKey>,
 }
 
 /// Floating pixels being dragged, for the GPU compositor to draw over `layer`.
@@ -148,6 +149,8 @@ pub struct FloatingPreview {
     pub pixels: pnn_core::Surface,
     pub rect: pnn_core::Rect,
     pub offset: [i32; 2],
+    /// Rotated or scaled (else moved by `offset`).
+    pub inverse: Option<pnn_render::FloatingTransform>,
 }
 
 /// A live gradient for the GPU compositor to draw on `layer`.
@@ -423,7 +426,7 @@ pub fn show(
         }
     }
     // The ants mask: the moving selection's from before the move, shifted, or the current one.
-    let mut ants_shift = [0.0f32; 2];
+    let mut ants_inv = [1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0];
     let mut ants_full = false;
     if let Some(gpu) = gpu
         && gpu_ants
@@ -435,9 +438,9 @@ pub fn show(
                 .get::<CanvasRenderer>()
                 .is_some_and(|c| c.ants_full(tab.key))
         };
-        let source = match &state.ants_shift {
-            Some((id, mask, shift)) if full => {
-                ants_shift = [shift[0] as f32, shift[1] as f32];
+        let source = match &state.ants_transform {
+            Some((id, mask, inv)) if full => {
+                ants_inv = inv.map(|v| v as f32);
                 Some((*id, mask.clone()))
             }
             _ => tab.selection_mask(state.antialias).map(|m| {
@@ -469,8 +472,9 @@ pub fn show(
             grid: if state.pixel_grid { 1.0 } else { 0.0 },
             overlay: if state.overlay.is_some() { 1.0 } else { 0.0 },
             ants: if gpu_ants { 1.0 + ants_offset } else { 0.0 },
-            ants_shift,
             ants_full: if ants_full { 1.0 } else { 0.0 },
+            ants_inv0: [ants_inv[0], ants_inv[1], ants_inv[2], ants_inv[3]],
+            ants_inv1: [ants_inv[4], ants_inv[5], 0.0, 0.0],
             ..Default::default()
         };
         ui.painter()
@@ -862,7 +866,7 @@ fn sync_gpu(gpu: &egui_wgpu::RenderState, tab: &mut DocumentTab, visible: Option
     let floating = sync
         .floating
         .as_ref()
-        .map(|f| (f.layer, f.serial, f.offset));
+        .map(|f| (f.layer, f.serial, f.offset, f.inverse));
     // A new gradient or floating position (or either ending) redraws everything at once.
     let all = preview != sync.shown_preview || floating != sync.shown_floating;
     sync.shown_preview = preview;
@@ -914,6 +918,7 @@ fn sync_gpu(gpu: &egui_wgpu::RenderState, tab: &mut DocumentTab, visible: Option
                     pixels: &f.pixels,
                     rect: f.rect,
                     offset: f.offset,
+                    inverse: f.inverse,
                 }),
         })
         .collect();
@@ -925,6 +930,14 @@ fn sync_gpu(gpu: &egui_wgpu::RenderState, tab: &mut DocumentTab, visible: Option
     }
     more
 }
+
+/// What identifies a floating preview's drawing: (layer, serial, offset, transform).
+type FloatingKey = (
+    pnn_core::LayerId,
+    u64,
+    [i32; 2],
+    Option<pnn_render::FloatingTransform>,
+);
 
 /// Image-space rectangle [x0, y0, x1, y1].
 type Rect2 = [f64; 4];

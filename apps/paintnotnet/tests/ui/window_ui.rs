@@ -241,33 +241,51 @@ fn invert_selection_keeps_an_exact_mask() {
 /// path, and the history step is recorded once, on release.
 #[test]
 fn gpu_drawn_pixel_move_matches_the_cpu() {
-    use eframe::egui::{Event, Modifiers, PointerButton};
+    use eframe::egui::PointerButton;
+    gpu_and_cpu_pixel_moves_agree(600, 400, PointerButton::Primary);
+    // Larger than a megapixel: the GPU path draws the result into the document in the
+    // background. Right button: a rotation.
+    gpu_and_cpu_pixel_moves_agree(1300, 900, PointerButton::Secondary);
+}
+
+fn gpu_and_cpu_pixel_moves_agree(w: u32, height: u32, drag_button: eframe::egui::PointerButton) {
+    use eframe::egui::{Event, Key, Modifiers};
     use pnn_core::{ColorBgra, Document, Layer, Selection, Surface};
-    let doc = || {
-        let (w, h) = (600u32, 400u32);
-        let mut s = Surface::new_transparent(w, h);
-        for y in 0..h {
-            for x in 0..w {
-                let v = ((x * 7 + y * 13) % 251) as u8;
-                s.set(x, y, ColorBgra::from_rgba(v, 255 - v, (x % 200) as u8, 255));
-            }
+    let mut s = Surface::new_transparent(w, height);
+    for y in 0..height {
+        for x in 0..w {
+            let v = ((x * 7 + y * 13) % 251) as u8;
+            s.set(x, y, ColorBgra::from_rgba(v, 255 - v, (x % 200) as u8, 255));
         }
-        let mut d = Document::from_layers(w, h, vec![Layer::new("Background", s)]);
-        d.set_selection(Selection::ellipse(100.0, 80.0, 380.0, 300.0));
-        d
-    };
-    let run = |gpu: bool| {
-        let mut b = egui_kittest::Harness::builder().with_size(eframe::egui::vec2(1280.0, 800.0));
-        if gpu {
-            b = b.wgpu();
-        }
-        let mut h =
-            b.build_eframe(|cc| paintnotnet::app::PaintNotNetApp::new(cc, None, Vec::new()));
-        h.state_mut().workspace_mut().add(doc(), None, None);
+    }
+    let mut d = Document::from_layers(w, height, vec![Layer::new("Background", s)]);
+    d.set_selection(Selection::ellipse(100.0, 80.0, 380.0, 300.0));
+    // One harness (one layout, so the same pointer positions in the image), the same drag
+    // twice: drawn by the GPU, undone, then drawn on the CPU.
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(eframe::egui::vec2(1280.0, 800.0))
+        .wgpu()
+        .build_eframe(|cc| paintnotnet::app::PaintNotNetApp::new(cc, None, Vec::new()));
+    h.state_mut().workspace_mut().add(d, None, None);
+    h.step();
+    h.step();
+    h.state_mut()
+        .set_tool(pnn_tools::ToolKind::MoveSelectedPixels);
+    for _ in 0..3 {
         h.step();
+    }
+    let original = h
+        .state()
+        .workspace()
+        .active()
+        .unwrap()
+        .doc
+        .layer(0)
+        .surface
+        .to_pixels();
+    let drag = |h: &mut egui_kittest::Harness<'_, paintnotnet::app::PaintNotNetApp>, gpu: bool| {
+        h.state_mut().set_cpu_floating(!gpu);
         h.step();
-        h.state_mut()
-            .set_tool(pnn_tools::ToolKind::MoveSelectedPixels);
         let rect = h.state().canvas().rect.unwrap();
         let view = h.state().workspace().active().unwrap().view.unwrap();
         let ppp = h.ctx.pixels_per_point() as f64;
@@ -281,7 +299,7 @@ fn gpu_drawn_pixel_move_matches_the_cpu() {
         };
         let button = |pressed, pos| Event::PointerButton {
             pos,
-            button: PointerButton::Primary,
+            button: drag_button,
             pressed,
             modifiers: Modifiers::NONE,
         };
@@ -296,7 +314,7 @@ fn gpu_drawn_pixel_move_matches_the_cpu() {
             )));
             h.step();
         }
-        let dragging_on_gpu = h
+        let on_gpu = h
             .state()
             .workspace()
             .active()
@@ -308,26 +326,54 @@ fn gpu_drawn_pixel_move_matches_the_cpu() {
         for _ in 0..4 {
             h.step();
         }
+        // A large image's result lands from the background.
+        let start = std::time::Instant::now();
+        while h.state().click_job_running() && start.elapsed().as_secs() < 20 {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         let tab = h.state().workspace().active().unwrap();
-        let names: Vec<String> = tab
-            .history
-            .entries()
-            .iter()
-            .map(|e| e.name.clone())
-            .collect();
-        (tab.doc.layer(0).surface.to_pixels(), names, dragging_on_gpu)
+        let last = tab.history.entries().last().map(|e| e.name.clone());
+        (tab.doc.layer(0).surface.to_pixels(), last, on_gpu)
     };
-    let (cpu, cpu_names, cpu_gpu) = run(false);
-    let (gpu, gpu_names, gpu_gpu) = run(true);
-    assert!(!cpu_gpu, "no GPU, no GPU drag");
-    if !gpu_gpu {
+    let (gpu, gpu_step, on_gpu) = drag(&mut h, true);
+    // Undo the move (and the lift) back to the original pixels.
+    for _ in 0..2 {
+        press(&mut h, ctrl(), Key::Z);
+        if h.state()
+            .workspace()
+            .active()
+            .unwrap()
+            .doc
+            .layer(0)
+            .surface
+            .to_pixels()
+            == original
+        {
+            break;
+        }
+    }
+    assert_eq!(
+        h.state()
+            .workspace()
+            .active()
+            .unwrap()
+            .doc
+            .layer(0)
+            .surface
+            .to_pixels(),
+        original,
+        "undone"
+    );
+    let (cpu, cpu_step, cpu_on_gpu) = drag(&mut h, false);
+    assert!(!cpu_on_gpu, "the CPU run drew on the CPU");
+    if !on_gpu {
         eprintln!("no wgpu adapter: the GPU path wasn't taken");
         return;
     }
-    assert_eq!(cpu_names, gpu_names, "same history");
-    assert_eq!(cpu.len(), gpu.len());
+    assert_eq!(gpu_step, cpu_step, "same history step ({w}×{height})");
     let diff = cpu.iter().zip(&gpu).filter(|(a, b)| a != b).count();
-    assert_eq!(diff, 0, "{diff} pixels differ");
+    assert_eq!(diff, 0, "{diff} pixels differ ({w}×{height})");
 }
 
 /// The move tools' cursor says what a drag would do: resize on a handle, move inside the

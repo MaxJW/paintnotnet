@@ -8,12 +8,11 @@ use eframe::{SurfaceConfig, WgpuConfiguration, egui};
 use paintnotnet::app::{PaintNotNetApp, SmokeTest};
 
 fn main() -> ExitCode {
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or(
-            "info,wgpu_core=warn,wgpu_hal=warn,naga=warn,zbus=warn,tracing=warn",
-        ),
-    )
-    .init();
+    // The session log file, except for the AI helper and smoke tests (which would push the
+    // user's last session aside).
+    let helper = std::env::args().nth(1).as_deref() == Some(paintnotnet::ai::WORKER_ARG);
+    let smoke_arg = std::env::args().any(|a| a == "--smoke-test");
+    paintnotnet::session_log::init(!helper && !smoke_arg);
 
     // The AI helper process (`ai.rs`): answer model requests on stdin, nothing else.
     if std::env::args().nth(1).as_deref() == Some(paintnotnet::ai::WORKER_ARG) {
@@ -90,6 +89,7 @@ fn main() -> ExitCode {
                 if let Some(dir) = paintnotnet::autosave::default_state_dir() {
                     app.enable_autosave(dir, std::time::Duration::from_secs(60));
                 }
+                app.enable_watchdog();
                 if let Some((config, path)) = config {
                     app.set_config(&cc.egui_ctx, config, Some(path));
                 }

@@ -17,9 +17,15 @@ struct View {
     srgb_target: f32,       // 1.0 = framebuffer is sRGB, so output linear values
     overlay: f32,           // 1.0 = tint outside the selection (feather preview)
     ants: f32,              // 0 = off; else 1 + dash offset: marching ants from the mask
-    ants_shift: vec2<f32>,  // image px the ants mask is drawn moved by (a selection being moved)
     ants_full: f32,         // 1.0 = `ants_tex` holds the whole image's mask
-    _pad: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
+    // Where to read the ants mask for an image point (a selection being moved, rotated or
+    // scaled keeps its mask): x' = a x + b y + c, y' = d x + e y + f with
+    // ants_inv0 = (a, b, c, d), ants_inv1 = (e, f, -, -).
+    ants_inv0: vec4<f32>,
+    ants_inv1: vec4<f32>,
 };
 
 struct Chunk {
@@ -69,7 +75,10 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
 // only the chunk overlays, a point beyond this chunk counts as `fallback`.
 fn selected_at(img: vec2<f32>, fallback: bool) -> bool {
     if (view.ants_full > 0.5) {
-        let src = img - view.ants_shift;
+        let src = vec2<f32>(
+            view.ants_inv0.x * img.x + view.ants_inv0.y * img.y + view.ants_inv0.z,
+            view.ants_inv0.w * img.x + view.ants_inv1.x * img.y + view.ants_inv1.y,
+        );
         if (any(src < vec2(0.0)) || any(src >= view.image_size)) {
             return false;
         }

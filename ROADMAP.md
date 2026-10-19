@@ -798,6 +798,15 @@ this just a great modern paint.net replacement for linux."
   - [x] **Move tool cursors** (user): a resize arrow over a handle (NW … W), the move cursor inside the selection,
         a rotate cursor (Lucide `rotate-cw`, drawn) outside, as paint.net; handles on the selection's bounds before a
         move starts; inside is a mask lookup for complex selections. UI test for all three
+  - [x] **Rotating and scaling moved pixels on the GPU** too: the compositor samples the lifted pixels through the
+        drag's inverse transform (bilinear, or nearest with Nearest Neighbor resampling), clipped to the box the CPU
+        would write; the GPU ants read the lifted mask through the same inverse. On release a large drag is drawn
+        into the document on the effect threads (with the moved selection's mask) while the GPU keeps showing it.
+        Tests: rotated/scaled GPU preview within a level of the CPU; the same rotation drag with and without the GPU
+        leaves identical pixels and history. Rotate drag on the photo: 2–3 ms frames (was ~0.45 s a frame)
+  - [x] **Session log** (user asked for logs of their own use): `~/.local/state/paintnotnet/paintnotnet.log` (the
+        previous one kept as `.log.1`) has commands, tool presses, slow frames (≥ 50 ms) with what was going on,
+        background jobs, memory every 10 s, and a watchdog line for every second the UI thread is stuck in a frame
   - [ ] Left:
         the feather field in the background; Resize's OK frame (50 ms), Gradient finish (37 ms bake), Fill Selection
         (30 ms), Flip/Rotate Layer (26–29 ms) on the UI thread; WebP saving takes 17 s in the background at default

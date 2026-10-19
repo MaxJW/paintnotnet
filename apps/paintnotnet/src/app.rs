@@ -81,6 +81,10 @@ pub struct PaintNotNetApp {
     pub(crate) click_job: Option<crate::selection_tools::ClickJob>,
     /// For repaints requested from background work.
     pub(crate) ctx: Option<egui::Context>,
+    /// Draw moved pixels on the CPU even with a GPU (tests compare the two paths).
+    pub(crate) cpu_floating: bool,
+    /// Notes slow and stuck frames in the session log (set by `main`).
+    pub(crate) watchdog: Option<crate::session_log::Watchdog>,
     /// Largest floating-pixel block the GPU can draw (its storage buffer limit; 0 = no GPU,
     /// moves are drawn on the CPU).
     pub(crate) gpu_float_limit: u64,
@@ -199,6 +203,8 @@ impl PaintNotNetApp {
             click_job: None,
             ctx: Some(cc.egui_ctx.clone()),
             gpu_float_limit: 0,
+            watchdog: None,
+            cpu_floating: false,
             stroke: None,
             brush: None,
             gradient: None,
@@ -287,6 +293,51 @@ impl PaintNotNetApp {
     /// A tool click's work (Magic Wand, Paint Bucket) is running in the background.
     pub fn click_job_running(&self) -> bool {
         self.click_job.is_some()
+    }
+
+    /// Draw moved pixels on the CPU even with a GPU (tests).
+    pub fn set_cpu_floating(&mut self, on: bool) {
+        self.cpu_floating = on;
+    }
+
+    /// Log slow and stuck frames (the app, not tests).
+    pub fn enable_watchdog(&mut self) {
+        self.watchdog = Some(crate::session_log::Watchdog::start());
+    }
+
+    /// What the app is busy with, for the session log.
+    fn activity(&self) -> String {
+        let mut parts = vec![format!("tool {:?}", self.tool)];
+        if let Some(tab) = self.workspace.active() {
+            parts.push(format!(
+                "image {}×{}, {} layers, selection {} pts",
+                tab.doc.width(),
+                tab.doc.height(),
+                tab.doc.layers().len(),
+                tab.doc
+                    .selection()
+                    .contours()
+                    .iter()
+                    .map(Vec::len)
+                    .sum::<usize>()
+            ));
+        }
+        if let Some(s) = &self.move_session {
+            parts.push(format!(
+                "moving {:?} (gpu drag {}, m {:?})",
+                s.kind, s.gpu_drag, s.m
+            ));
+        }
+        if self.effect.is_some() {
+            parts.push("effect dialog".into());
+        }
+        if self.doc_dialog.is_some() || self.doc_job.is_some() {
+            parts.push("document dialog".into());
+        }
+        if self.click_job.is_some() {
+            parts.push("background click job".into());
+        }
+        parts.join(", ")
     }
 
     pub fn effect_mut(&mut self) -> Option<&mut crate::effect_runner::EffectSession> {
@@ -379,6 +430,7 @@ impl PaintNotNetApp {
 
     /// Run a command as if chosen from a menu or shortcut.
     pub fn execute(&mut self, ctx: &egui::Context, t: Triggered) {
+        log::info!("command {:?}", t.command);
         if self.doc_dialog.is_some()
             || self.doc_job.is_some()
             || self.click_job.is_some()
@@ -1833,6 +1885,21 @@ impl eframe::App for PaintNotNetApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        if self.watchdog.is_some() {
+            let activity = self.activity();
+            if let Some(w) = self.watchdog.as_mut() {
+                w.frame_begin(activity);
+            }
+        }
+        self.frame(ui, frame);
+        if let Some(w) = self.watchdog.as_mut() {
+            w.frame_end();
+        }
+    }
+}
+
+impl PaintNotNetApp {
+    fn frame(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let now = Instant::now();
         let ctx = ui.ctx().clone();
         self.run_autosave(now);
@@ -1991,11 +2058,13 @@ impl eframe::App for PaintNotNetApp {
         self.canvas.antialias = antialias;
         self.gpu_float_limit = frame
             .wgpu_render_state()
+            .filter(|_| !self.cpu_floating)
             .map_or(0, |rs| rs.device.limits().max_storage_buffer_binding_size);
         // Floating pixels being dragged are drawn by the GPU compositor.
+        let nearest = self.settings.resampling == pnn_tools::Resampling::NearestNeighbor;
         let floating = self.move_session.as_ref().and_then(|s| {
             let tab = self.workspace.tab(s.key)?;
-            Some((s.key, s.floating_preview(&tab.doc)))
+            Some((s.key, s.floating_preview(&tab.doc, nearest)))
         });
         for tab in self.workspace.tabs_mut() {
             tab.gpu.floating = floating
@@ -2004,11 +2073,11 @@ impl eframe::App for PaintNotNetApp {
                 .and_then(|(_, f)| f.clone());
         }
         let active = self.workspace.active().map(|t| t.key);
-        self.canvas.ants_shift = self
+        self.canvas.ants_transform = self
             .move_session
             .as_ref()
             .filter(|s| Some(s.key) == active)
-            .and_then(|s| s.ants_shift());
+            .and_then(|s| s.ants_transform());
         self.canvas.overlay = match self.workspace.active_mut() {
             Some(tab) if preview => tab
                 .selection_mask(antialias)

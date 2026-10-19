@@ -11,5 +11,5 @@ pub mod view;
 pub use effects::{GpuEffects, gpu_renderer};
 pub use glass::{GlassCallback, GlassUniforms};
 pub use gpu::{CanvasCallback, CanvasRenderer, ViewUniforms};
-pub use layers::{LayerFloating, LayerGradient, LayerInput};
+pub use layers::{FloatingTransform, LayerFloating, LayerGradient, LayerInput};
 pub use view::View;

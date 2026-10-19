@@ -476,13 +476,9 @@ pub fn scale_about(sx: f64, sy: f64, c: [f64; 2]) -> Affine {
 /// Draw `src` (pixels in image coordinates, i.e. `src.get(x, y)` is image pixel (x, y))
 /// transformed by `m` onto `dst` with Normal blending, only where `src` has pixels inside
 /// `src_rect`. Integer translations copy exactly; anything else resamples.
-pub fn draw_transformed(
-    dst: &mut Surface,
-    src: &Surface,
-    src_rect: crate::Rect,
-    m: &Affine,
-    sampling: Sampling,
-) {
+/// The destination pixels `draw_transformed` writes: the bounding box of `src_rect`'s
+/// transformed corners within a `dw × dh` image, as [x0, y0, x1, y1) — `None` if empty.
+pub fn transformed_bounds(src_rect: crate::Rect, m: &Affine, dw: i64, dh: i64) -> Option<[i64; 4]> {
     let corners = [
         [src_rect.x as f64, src_rect.y as f64],
         [(src_rect.x + src_rect.width) as f64, src_rect.y as f64],
@@ -493,7 +489,6 @@ pub fn draw_transformed(
         ],
     ]
     .map(|p| apply(m, p));
-    let (dw, dh) = (dst.width() as i64, dst.height() as i64);
     let x0 = corners
         .iter()
         .map(|p| p[0])
@@ -519,8 +514,22 @@ pub fn draw_transformed(
         .ceil() as i64)
         .min(dh);
     if x1 <= x0 || y1 <= y0 {
-        return;
+        return None;
     }
+    Some([x0, y0, x1, y1])
+}
+
+pub fn draw_transformed(
+    dst: &mut Surface,
+    src: &Surface,
+    src_rect: crate::Rect,
+    m: &Affine,
+    sampling: Sampling,
+) {
+    let (dw, dh) = (dst.width() as i64, dst.height() as i64);
+    let Some([x0, y0, x1, y1]) = transformed_bounds(src_rect, m, dw, dh) else {
+        return;
+    };
     let Some(inv) = invert(m) else { return };
     let integer = m[0] == 1.0
         && m[1] == 0.0

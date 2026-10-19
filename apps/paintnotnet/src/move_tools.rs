@@ -120,6 +120,13 @@ fn is_whole_pixel_translation(m: &Affine) -> bool {
 }
 
 impl MoveSession {
+    /// The ants mask and where to read it for an image point (the inverse of the session's
+    /// transform), so the GPU ants follow a selection being moved, rotated or scaled.
+    pub fn ants_transform(&self) -> Option<(u64, Arc<pnn_core::Mask>, Affine)> {
+        let (id, mask) = self.base_mask.clone()?;
+        Some((id, mask, transform::invert(&self.m)?))
+    }
+
     /// The ants mask and how far it has moved, while the session is a whole-pixel move.
     pub fn ants_shift(&self) -> Option<(u64, Arc<pnn_core::Mask>, [f64; 2])> {
         let m = self.m;
@@ -128,13 +135,35 @@ impl MoveSession {
     }
 
     /// What the GPU draws while `gpu_drag`.
-    pub fn floating_preview(&self, doc: &Document) -> Option<crate::canvas::FloatingPreview> {
-        self.gpu_drag.then(|| crate::canvas::FloatingPreview {
+    pub fn floating_preview(
+        &self,
+        doc: &Document,
+        nearest: bool,
+    ) -> Option<crate::canvas::FloatingPreview> {
+        if !self.gpu_drag {
+            return None;
+        }
+        let m = self.m;
+        let inverse = if is_whole_pixel_translation(&m) {
+            None
+        } else {
+            let inv = transform::invert(&m)?;
+            let (w, h) = (doc.width() as i64, doc.height() as i64);
+            let clip = transform::transformed_bounds(self.rect, &m, w, h)
+                .map_or([0; 4], |b| b.map(|v| v as i32));
+            Some(pnn_render::FloatingTransform {
+                inverse: inv.map(|v| v as f32),
+                nearest,
+                clip,
+            })
+        };
+        Some(crate::canvas::FloatingPreview {
             layer: doc.layer(self.layer).id(),
             serial: self.serial,
             pixels: self.pixels.clone(),
             rect: self.rect,
-            offset: [self.m[2] as i32, self.m[5] as i32],
+            offset: [m[2] as i32, m[5] as i32],
+            inverse,
         })
     }
 
@@ -453,14 +482,11 @@ impl PaintNotNetApp {
                     start: pos,
                     m0: s.m,
                 });
-                // A whole-pixel move of lifted pixels is drawn by the GPU while it lasts, when
-                // they fit in one of its buffers: no CPU drawing or uploads per frame.
+                // Moving, rotating or scaling lifted pixels is drawn by the GPU while the drag
+                // lasts, when they fit in one of its buffers: no CPU drawing or uploads per
+                // frame (a rotation redrew a 24 MP layer on every core, ~0.45 s a frame).
                 let bytes = s.rect.width as u64 * s.rect.height as u64 * 4;
-                if mode == DragMode::Move
-                    && s.kind == MoveKind::Pixels
-                    && bytes <= self.gpu_float_limit
-                    && is_whole_pixel_translation(&s.m)
-                {
+                if s.kind == MoveKind::Pixels && bytes <= self.gpu_float_limit {
                     s.gpu_drag = true;
                     let selection = s.current_selection();
                     let mut doc = s.base.clone();
@@ -561,6 +587,63 @@ impl PaintNotNetApp {
                 }
             }
             ToolEvent::Up { .. } => {
+                // A large GPU-drawn drag: the pixels are drawn into the document on the effect
+                // threads (a rotation of a 24 MP layer takes ~0.45 s) while the GPU keeps
+                // showing them; the history step lands with them.
+                let resampling = sampling(self.settings.resampling);
+                if let Some(s) = self.move_session.as_mut()
+                    && s.gpu_drag
+                    && s.rect.width as u64 * s.rect.height as u64
+                        > crate::selection_tools::CLICK_AT_ONCE
+                    && let Some(d) = s.drag.take()
+                {
+                    if s.m == d.m0 {
+                        s.gpu_drag = false;
+                        self.render_move();
+                        return;
+                    }
+                    let (name, icon) = names(s.kind, d.mode);
+                    let (key, layer, rect, m) = (s.key, s.layer, s.rect, s.m);
+                    let (base, pixels, selection) =
+                        (s.base.clone(), s.pixels.clone(), s.current_selection());
+                    let antialias = self.antialiased_selection();
+                    let work = move || {
+                        let mut doc = base;
+                        doc.modify_layer(layer, None, |l| {
+                            transform::draw_transformed(
+                                &mut l.surface,
+                                &pixels,
+                                rect,
+                                &m,
+                                resampling,
+                            )
+                        });
+                        // The moved outline's mask, here rather than on the UI thread later
+                        // (0.1–0.2 s for a Magic Wand selection).
+                        let (w, h) = (doc.width(), doc.height());
+                        let mask = (selection.feather().is_none() && !selection.is_empty())
+                            .then(|| Arc::new(selection.rasterize_hard(w, h, antialias)));
+                        doc.set_selection(selection);
+                        (doc, mask)
+                    };
+                    self.click_job = Some(crate::selection_tools::ClickJob::spawn(
+                        self.ctx.clone(),
+                        work,
+                        move |app, (doc, mask)| {
+                            if let Some(s) = app.move_session.as_mut().filter(|s| s.key == key) {
+                                s.gpu_drag = false;
+                            }
+                            if let Some(tab) = app.workspace.tab_mut(key) {
+                                tab.doc = doc;
+                                tab.commit(name, icon);
+                                if let Some(mask) = mask {
+                                    tab.prime_mask(antialias, mask);
+                                }
+                            }
+                        },
+                    ));
+                    return;
+                }
                 self.end_gpu_drag();
                 let Some(s) = self.move_session.as_mut() else {
                     return;
@@ -595,9 +678,9 @@ impl PaintNotNetApp {
         };
         let (handles, inside) = match session {
             Some(s) => {
-                let inside = match s.ants_shift() {
-                    Some((_, mask, [dx, dy])) => {
-                        let (x, y) = (pos[0] - dx, pos[1] - dy);
+                let inside = match s.ants_transform() {
+                    Some((_, mask, inv)) => {
+                        let [x, y] = transform::apply(&inv, pos);
                         x >= 0.0
                             && y >= 0.0
                             && x < w

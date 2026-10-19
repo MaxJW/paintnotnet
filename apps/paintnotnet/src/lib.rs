@@ -24,6 +24,7 @@ pub mod paint_tools;
 pub mod palette;
 pub mod panels;
 pub mod selection_tools;
+pub mod session_log;
 pub mod settings_ui;
 pub mod shell;
 pub mod single_instance;

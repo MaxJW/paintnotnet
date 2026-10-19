@@ -103,6 +103,10 @@ impl Audit {
     }
 
     fn command(&mut self, c: Command) {
+        // Commands wait while background work runs (they'd be refused).
+        self.settle(Duration::from_secs(20), |h| {
+            !h.state().click_job_running() && !h.state().doc_job_running()
+        });
         let ctx = self.h.ctx.clone();
         let t = Instant::now();
         self.h.state_mut().execute(&ctx, Triggered::once(c));
@@ -397,6 +401,16 @@ fn perf_audit() {
         a.command(Command::Finish);
     });
     a.undo_redo("MoveSelectedPixels");
+    a.action("MoveSelectedPixels rotate (complex)", |a| {
+        let (w, h) = a.size();
+        // From outside the selection's bounds: a rotation.
+        let pts: Vec<_> = (0..12)
+            .map(|i| (w * 0.02 + i as f64 * 4.0, h * 0.02 + i as f64 * 9.0))
+            .collect();
+        a.drag(PointerButton::Primary, Modifiers::NONE, &pts);
+        a.command(Command::Finish);
+    });
+    a.undo_redo("MoveSelectedPixels rotate");
     a.action("Invert Selection", |a| a.command(Command::InvertSelection));
     a.action("Erase Selection", |a| a.command(Command::EraseSelection));
     a.undo_redo("Erase Selection");

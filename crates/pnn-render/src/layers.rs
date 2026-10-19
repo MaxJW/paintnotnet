@@ -48,6 +48,18 @@ pub struct LayerFloating<'a> {
     pub pixels: &'a Surface,
     pub rect: pnn_core::Rect,
     pub offset: [i32; 2],
+    /// Rotated or scaled; `None`: moved by `offset`.
+    pub inverse: Option<FloatingTransform>,
+}
+
+/// A rotated or scaled float: the transform's inverse (as `pnn_core::transform::apply`),
+/// nearest-pixel sampling instead of bilinear, and the pixels it may cover
+/// (`pnn_core::transform::transformed_bounds`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FloatingTransform {
+    pub inverse: [f32; 6],
+    pub nearest: bool,
+    pub clip: [i32; 4],
 }
 
 /// `composite.wgsl`'s `Floating`.
@@ -58,6 +70,9 @@ struct FloatingUniform {
     size: [i32; 2],
     offset: [i32; 2],
     image: [i32; 2],
+    inv0: [f32; 4],
+    inv1: [f32; 4],
+    clip: [i32; 4],
 }
 
 /// The live gradient on a layer: what to draw and the selection clipping it.
@@ -264,6 +279,15 @@ impl GpuCompositor {
                     size: [f.rect.width as i32, f.rect.height as i32],
                     offset: f.offset,
                     image: [f.pixels.width() as i32, f.pixels.height() as i32],
+                    inv0: f.inverse.map_or([0.0; 4], |t| {
+                        let m = t.inverse;
+                        [m[0], m[1], m[2], m[3]]
+                    }),
+                    inv1: f.inverse.map_or([0.0; 4], |t| {
+                        let m = t.inverse;
+                        [m[4], m[5], if t.nearest { 2.0 } else { 1.0 }, 0.0]
+                    }),
+                    clip: f.inverse.map_or([0; 4], |t| t.clip),
                 }),
             )
         });
@@ -892,6 +916,7 @@ mod tests {
                 pixels: &pixels,
                 rect,
                 offset,
+                inverse: None,
             });
             let mut encoder = device.create_command_encoder(&Default::default());
             comp.composite(&device, &queue, &mut encoder, &mut store, &layers, &all);
@@ -929,6 +954,108 @@ mod tests {
                     "offset {offset:?}: tile {c:?}: {diff} pixels differ"
                 );
             }
+        }
+    }
+
+    /// Rotated and scaled floating pixels (the drag's preview, f32 bilinear) are within a
+    /// level or two of the CPU's `draw_transformed` (f64).
+    #[test]
+    fn gpu_rotated_floating_is_close_to_cpu() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let comp = GpuCompositor::new(&device);
+        let (w, h): (u32, u32) = (900, 700);
+        let all: Vec<TileCoord> = (0..h.div_ceil(TILE_SIZE))
+            .flat_map(|ty| (0..w.div_ceil(TILE_SIZE)).map(move |tx| TileCoord { tx, ty }))
+            .collect();
+        let rect = Rect {
+            x: 200,
+            y: 150,
+            width: 400,
+            height: 300,
+        };
+        let src = noise_layer(w, h, 31, false);
+        let mut pixels = Surface::new_transparent(w, h);
+        for y in rect.y..rect.y + rect.height {
+            for x in rect.x..rect.x + rect.width {
+                pixels.set(x, y, src.get(x, y));
+            }
+        }
+        use pnn_core::transform::{compose, invert, rotation_about, scale_about, translation};
+        for m in [
+            rotation_about(0.3, [400.0, 300.0]),
+            compose(
+                &translation(37.0, -12.0),
+                &scale_about(1.3, 1.3, [400.0, 300.0]),
+            ),
+        ] {
+            let doc = Document::from_layers(
+                w,
+                h,
+                vec![
+                    Layer::new("Background", noise_layer(w, h, 2, false)),
+                    Layer::new("Active", Surface::new_transparent(w, h)),
+                ],
+            );
+            let inv = invert(&m).unwrap().map(|v| v as f32);
+            let b = pnn_core::transform::transformed_bounds(rect, &m, w as i64, h as i64).unwrap();
+            let mut store = LayerStore::new(&device, w, h);
+            let mut layers = inputs(&doc, None);
+            layers[1].floating = Some(LayerFloating {
+                serial: 2,
+                pixels: &pixels,
+                rect,
+                offset: [0, 0],
+                inverse: Some(FloatingTransform {
+                    inverse: inv,
+                    nearest: false,
+                    clip: b.map(|v| v as i32),
+                }),
+            });
+            let mut encoder = device.create_command_encoder(&Default::default());
+            comp.composite(&device, &queue, &mut encoder, &mut store, &layers, &all);
+            queue.submit([encoder.finish()]);
+            let got = read_back(&device, &queue, &store);
+            let mut cpu = doc.clone();
+            cpu.modify_layer(1, None, |l| {
+                pnn_core::transform::draw_transformed(
+                    &mut l.surface,
+                    &pixels,
+                    rect,
+                    &m,
+                    pnn_core::transform::Sampling::Bilinear,
+                )
+            });
+            let want = pnn_core::compositor::flatten(&cpu);
+            let (mut worst, mut off) = (0i32, 0usize);
+            for &c in &all {
+                let Some(wt) = want.tile(c) else { continue };
+                for (a, b) in wt.pixels().iter().zip(&got[&(c.tx, c.ty)]) {
+                    // Transparent in both: only hidden colour (see `gpu_floating_matches_cpu`).
+                    if a.a == 0 && b.a == 0 {
+                        continue;
+                    }
+                    let d = [
+                        a.b as i32 - b.b as i32,
+                        a.g as i32 - b.g as i32,
+                        a.r as i32 - b.r as i32,
+                        a.a as i32 - b.a as i32,
+                    ]
+                    .iter()
+                    .map(|v| v.abs())
+                    .max()
+                    .unwrap();
+                    worst = worst.max(d);
+                    off += usize::from(d > 1);
+                }
+            }
+            assert!(worst <= 2, "worst {worst} levels");
+            assert!(
+                off < (w * h / 1000) as usize,
+                "{off} pixels off by more than 1"
+            );
         }
     }
 
