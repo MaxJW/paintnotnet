@@ -893,6 +893,14 @@ this just a great modern paint.net replacement for linux."
         effect and document dialogs' centred title bar); Help
 - [ ] **Packaged nicely:** build and install the PKGBUILD with makepkg (not yet tried), AppStream metainfo,
       desktop entry and MIME checked, About with version and licences; README for users
+  - [x] `makepkg` builds the package (2026-10-19; 12.9 MB, into scratch dirs); its binary runs the smoke test and
+        links only libc/libm/libgcc; `desktop-file-validate` and `xmllint` pass; the licence list was paint.net's
+        icons (no longer embedded on main): MIT, ISC (Lucide), OFL-1.1 (Geist) now
+  - [x] AppStream metainfo (`packaging/paintnotnet.metainfo.xml`, installed to /usr/share/metainfo); README for users
+  - [ ] **Needs your decision:** an app ID and homepage. `appstreamcli validate` warns that the ID `paintnotnet`
+        isn't reverse-DNS (e.g. `io.github.<user>.paintnotnet`, which would also rename the .desktop file and the
+        Wayland app id) and that there's no homepage URL. Installing the package (`makepkg -si`, needs sudo) is
+        left to you. `assets/icons/pdn336` (paint.net's icons, unused on main) could go in the clean-up
 - [ ] **Cleaned up:** dead code and leftovers from the recreation, docs, and the 16 GB `target/` once development is
       done (user, 2026-10-15)
 
