@@ -162,14 +162,6 @@ impl ToolKind {
     pub fn tooltip(self) -> String {
         format!("{} ({})", self.name(), self.shortcut())
     }
-
-    /// Whether the tool's toolbar shows the selection mode controls.
-    pub fn is_selection_tool(self) -> bool {
-        matches!(
-            self,
-            Self::RectangleSelect | Self::LassoSelect | Self::EllipseSelect | Self::MagicWand
-        )
-    }
 }
 
 /// Tools sharing a shortcut letter, in tap order (`KeyboardMouseCommands.html`).

@@ -914,6 +914,10 @@ this just a great modern paint.net replacement for linux."
       exit (core dump no longer kept; only the stack in the session transcript)
 - [ ] **Cleaned up:** dead code and leftovers from the recreation, docs, and the 16 GB `target/` once development is
       done (user, 2026-10-15)
+  - [x] paint.net 3.36's icons (`assets/icons/pdn336`, 185 files, unused on main; still on `recreation`), the
+        unused Lucide printer/camera icons, two never-called functions (`Surface::tiles_mut_in`,
+        `ToolKind::is_selection_tool`) and `xtask install-desktop`. A scan for pub items referenced nowhere finds
+        nothing else
 
 ---
 
