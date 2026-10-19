@@ -147,12 +147,7 @@ impl Modal {
                 spread: 0,
                 color: palette.shadow.gamma_multiply(1.4),
             })
-            .inner_margin(egui::Margin {
-                left: 22,
-                right: 22,
-                top: 20,
-                bottom: 18,
-            });
+            .inner_margin(DIALOG_MARGIN);
         let backdrop = if palette.dark {
             egui::Color32::from_black_alpha(115)
         } else {
@@ -429,14 +424,28 @@ fn header(
     description: Option<&str>,
     palette: &theme::Palette,
 ) {
-    ui.horizontal(|ui| {
+    ui.horizontal(|ui| heading_row(ui, icon.and_then(|i| icons.art(i)), title, palette));
+    if let Some(d) = description {
+        ui.label(egui::RichText::new(d).color(palette.weak_text));
+    }
+    ui.add_space(4.0);
+}
+
+/// A dialog's heading: its icon in an accent tile (when it has artwork) and its title.
+fn heading_row(
+    ui: &mut egui::Ui,
+    icon: Option<egui::TextureId>,
+    title: &str,
+    palette: &theme::Palette,
+) {
+    {
         ui.spacing_mut().item_spacing.x = 10.0;
         if let Some(icon) = icon {
             let (r, _) = ui.allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::hover());
             ui.painter()
                 .rect_filled(r, theme::radius::CONTROL, palette.accent_alpha(0.16));
             ui.painter().image(
-                icons.texture(icon).id(),
+                icon,
                 egui::Rect::from_center_size(r.center(), egui::vec2(18.0, 18.0)),
                 egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                 palette.accent,
@@ -447,11 +456,51 @@ fn header(
                 .font(egui::FontId::new(17.0, theme::semibold()))
                 .color(palette.text),
         );
-    });
-    if let Some(d) = description {
-        ui.label(egui::RichText::new(d).color(palette.weak_text));
     }
-    ui.add_space(4.0);
+}
+
+/// Inside a dialog's frame (message boxes and movable dialogs alike).
+pub const DIALOG_MARGIN: egui::Margin = egui::Margin {
+    left: 22,
+    right: 22,
+    top: 20,
+    bottom: 18,
+};
+
+/// A movable dialog (effects, document dialogs, Settings, Select Subject) in the message
+/// boxes' style: no title bar (it's dragged by its background, so a preview behind it can
+/// still be watched), their margins and heading (`icon`: from `Icons::art`). `close`: a close
+/// button in the heading (its icon) that clears the bool.
+pub fn movable_dialog<R>(
+    ctx: &egui::Context,
+    window: egui::Window<'_>,
+    icon: Option<egui::TextureId>,
+    title: &str,
+    close: Option<(egui::Image<'static>, &mut bool)>,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> Option<egui::InnerResponse<Option<R>>> {
+    let palette = theme::palette(ctx);
+    crate::glass::window_with_margin(ctx, window.title_bar(false), Some(DIALOG_MARGIN), |ui| {
+        ui.horizontal(|ui| {
+            heading_row(ui, icon, title, &palette);
+            if let Some((image, open)) = close {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let button = ui
+                        .add(egui::Button::image(image).frame_when_inactive(false))
+                        .on_hover_text("Close");
+                    // As egui's own title bar button.
+                    button.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Close window")
+                    });
+                    if button.clicked() {
+                        *open = false;
+                    }
+                });
+            }
+        });
+        ui.add_space(4.0);
+        add_contents(ui)
+    })
 }
 
 /// "WebP (.webp)": a file type in the save options' dropdown.

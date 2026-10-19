@@ -624,8 +624,8 @@ impl PaintNotNetApp {
                 .job
                 .as_ref()
                 .map_or((0, 1), |j| (j.received, j.total.max(1)));
-            let name = s.def.name;
-            crate::glass::window(
+            let (name, icon) = (s.def.name, s.target.icon());
+            crate::dialogs::movable_dialog(
                 ctx,
                 egui::Window::new(name)
                     .id(egui::Id::new(("effect_dialog", name)))
@@ -633,6 +633,9 @@ impl PaintNotNetApp {
                     .resizable(false)
                     .pivot(egui::Align2::CENTER_CENTER)
                     .default_pos(ctx.content_rect().center()),
+                self.icons.art(icon),
+                name,
+                None,
                 |ui| {
                     ui.set_min_width(260.0);
                     ui.label(format!("Applying {name}…"));
@@ -655,7 +658,7 @@ impl PaintNotNetApp {
         let (before, bounds, env) = (&s.before, s.env.bounds, &s.env);
         // Movable, so the live preview behind it can be watched; opens centred, then stays
         // where it was dragged (egui remembers the position per effect).
-        crate::glass::window(
+        crate::dialogs::movable_dialog(
             ctx,
             egui::Window::new(def.name)
                 .id(egui::Id::new(("effect_dialog", def.name)))
@@ -663,6 +666,9 @@ impl PaintNotNetApp {
                 .resizable(false)
                 .pivot(egui::Align2::CENTER_CENTER)
                 .default_pos(ctx.content_rect().center()),
+            self.icons.art(s.target.icon()),
+            def.name,
+            None,
             |ui| {
                 ui.set_min_width(300.0);
                 match custom {

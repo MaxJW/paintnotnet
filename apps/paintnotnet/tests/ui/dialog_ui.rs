@@ -32,14 +32,26 @@ fn screen_drag(h: &mut H<'_>, from: Pos2, to: Pos2) {
     h.step();
 }
 
+/// Where to grab a dialog to move it: the empty heading space right of its title (dialogs
+/// have no title bar; the title is the smaller of the two nodes so labelled).
+fn heading_grab(
+    h: &egui_kittest::Harness<'_, paintnotnet::app::PaintNotNetApp>,
+    title: &str,
+) -> Pos2 {
+    let r = h
+        .query_all_by_label(title)
+        .map(|n| n.rect())
+        .min_by(|a, b| a.area().total_cmp(&b.area()))
+        .expect("the dialog's heading");
+    Pos2::new(r.right() + 40.0, r.center().y)
+}
+
 #[test]
 fn effect_dialog_can_be_dragged_aside() {
     let mut h = harness();
     press(&mut h, ctrl() | Modifiers::SHIFT, Key::P);
-    let title = h.get_by_label("Posterize").rect();
     let ok = h.get_by_label("OK").rect();
-    // The window's node spans the whole window; grab its title bar.
-    let grab = Pos2::new(title.center().x, title.top() + 10.0);
+    let grab = heading_grab(&h, "Posterize");
     screen_drag(&mut h, grab, grab + vec2(-300.0, 200.0));
     let moved = h.get_by_label("OK").rect();
     assert!(
@@ -76,8 +88,7 @@ fn feather_object_previews_live_and_cancel_reverts() {
     h.step();
     h.step();
     // Move the dialog away, then nudge a setting through the dialog's UI.
-    let title = h.get_by_label("Feather Object").rect();
-    let grab = Pos2::new(title.center().x, title.top() + 10.0);
+    let grab = heading_grab(&h, "Feather Object");
     screen_drag(&mut h, grab, grab + vec2(350.0, 250.0));
     // The default feather previews as soon as the dialog opens: the rim is already soft.
     let rim = doc(&h).layer(0).surface.get(20, 40).a;

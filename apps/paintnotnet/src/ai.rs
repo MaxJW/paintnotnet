@@ -570,7 +570,7 @@ impl crate::app::PaintNotNetApp {
         let mut download = false;
         let mut quality = s.job.quality;
         let dir = self.ai.models_dir().to_owned();
-        crate::glass::window(
+        crate::dialogs::movable_dialog(
             ctx,
             egui::Window::new("Select Subject")
                 .id(egui::Id::new("select_subject"))
@@ -578,6 +578,9 @@ impl crate::app::PaintNotNetApp {
                 .resizable(false)
                 .pivot(egui::Align2::CENTER_CENTER)
                 .default_pos(ctx.content_rect().center()),
+            self.icons.art(crate::icons::Icon::SelectSubject),
+            "Select Subject",
+            None,
             |ui| {
                 ui.set_max_width(360.0);
                 if matches!(s.job.stage, Stage::Consent(_)) {

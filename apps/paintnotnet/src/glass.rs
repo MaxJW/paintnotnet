@@ -123,10 +123,23 @@ pub fn window<R>(
     window: egui::Window<'_>,
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> Option<InnerResponse<Option<R>>> {
+    window_with_margin(ctx, window, None, add_contents)
+}
+
+/// `window`, with `margin` inside its frame instead of egui's.
+pub fn window_with_margin<R>(
+    ctx: &egui::Context,
+    window: egui::Window<'_>,
+    margin: Option<egui::Margin>,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> Option<InnerResponse<Option<R>>> {
+    let mut frame = Frame::window(&ctx.global_style());
+    if let Some(m) = margin {
+        frame = frame.inner_margin(m);
+    }
     let Some(area) = backdrop(ctx) else {
-        return window.show(ctx, add_contents);
+        return window.frame(frame).show(ctx, add_contents);
     };
-    let frame = Frame::window(&ctx.global_style());
     let (stroke, radius, shadow) = (frame.stroke, frame.corner_radius, frame.shadow);
     let response = window
         .frame(frame.fill(Color32::TRANSPARENT).stroke(Stroke::NONE))

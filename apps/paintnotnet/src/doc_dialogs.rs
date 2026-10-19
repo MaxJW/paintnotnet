@@ -347,14 +347,15 @@ impl DocDialog {
         matches!(self.kind, Kind::FeatherSelection(_))
     }
 
-    pub fn show(&mut self, ctx: &egui::Context) -> Outcome {
+    pub fn show(&mut self, ctx: &egui::Context, icons: &crate::icons::Icons) -> Outcome {
         let mut changed = false;
         let mut outcome = None;
         let dpi = self.original.dpi;
         let title = self.title();
         // A movable window rather than a modal so the live canvas preview can be watched
         // behind or beside it; opens centred, then stays where it was dragged.
-        crate::glass::window(
+        let icon = self.icon();
+        crate::dialogs::movable_dialog(
             ctx,
             egui::Window::new(title)
                 .id(egui::Id::new(("doc_dialog", title)))
@@ -363,6 +364,9 @@ impl DocDialog {
                 .auto_sized()
                 .pivot(egui::Align2::CENTER_CENTER)
                 .default_pos(ctx.content_rect().center()),
+            icons.art(icon),
+            title,
+            None,
             |ui| {
                 ui.set_min_width(300.0);
                 ui.set_max_width(420.0);
@@ -639,7 +643,21 @@ impl DocDialog {
         doc
     }
 
-    /// History step name and icon for OK.
+    /// The dialog's icon (its heading and its history step).
+    pub fn icon(&self) -> crate::icons::Icon {
+        use crate::icons::Icon;
+        match self.kind {
+            Kind::LayerProperties(_) => Icon::LayerProperties,
+            Kind::Resize(_) => Icon::Resize,
+            Kind::CanvasSize(_) => Icon::CanvasSize,
+            Kind::RotateZoom(_) => Icon::RotateZoom,
+            Kind::FeatherSelection(_) | Kind::FeatherObject(_) | Kind::BlurSelectionEdge(_) => {
+                Icon::Selection
+            }
+        }
+    }
+
+    /// History step name for OK.
     pub fn history_name(&self) -> &'static str {
         match self.kind {
             Kind::LayerProperties(_) => "Layer Properties",

@@ -11,7 +11,7 @@ use pnn_tools::ToolBlend;
 use crate::app::PaintNotNetApp;
 use crate::canvas::{ToolButton, ToolEvent};
 use crate::commands::Command;
-use crate::doc_dialogs::{self, DocDialog, Outcome, map_layers};
+use crate::doc_dialogs::{DocDialog, Outcome, map_layers};
 use crate::icons::Icon;
 use crate::workspace::DocumentTab;
 
@@ -355,8 +355,8 @@ impl PaintNotNetApp {
             ok: Some(dialog), ..
         }) = &self.doc_job
         {
-            let name = dialog.history_name();
-            crate::glass::window(
+            let (name, icon) = (dialog.history_name(), dialog.icon());
+            crate::dialogs::movable_dialog(
                 ctx,
                 egui::Window::new(name)
                     .id(egui::Id::new("doc_dialog_applying"))
@@ -364,6 +364,9 @@ impl PaintNotNetApp {
                     .resizable(false)
                     .pivot(egui::Align2::CENTER_CENTER)
                     .default_pos(ctx.content_rect().center()),
+                self.icons.art(icon),
+                name,
+                None,
                 |ui| {
                     ui.horizontal(|ui| {
                         ui.spinner();
@@ -376,7 +379,7 @@ impl PaintNotNetApp {
         let Some(dialog) = self.doc_dialog.as_mut() else {
             return;
         };
-        let outcome = dialog.show(ctx);
+        let outcome = dialog.show(ctx, &self.icons);
         let key = dialog.key;
         let background = dialog.heavy()
             && dialog.original.width() as u64 * dialog.original.height() as u64
@@ -444,16 +447,7 @@ impl PaintNotNetApp {
                 && result.selection_revision() == dialog.original.selection_revision();
             tab.doc = result;
             if !unchanged {
-                let icon = match dialog.kind {
-                    doc_dialogs::Kind::LayerProperties(_) => Icon::LayerProperties,
-                    doc_dialogs::Kind::Resize(_) => Icon::Resize,
-                    doc_dialogs::Kind::CanvasSize(_) => Icon::CanvasSize,
-                    doc_dialogs::Kind::RotateZoom(_) => Icon::RotateZoom,
-                    doc_dialogs::Kind::FeatherSelection(_)
-                    | doc_dialogs::Kind::FeatherObject(_)
-                    | doc_dialogs::Kind::BlurSelectionEdge(_) => Icon::Selection,
-                };
-                tab.commit(dialog.history_name(), icon);
+                tab.commit(dialog.history_name(), dialog.icon());
             }
         }
     }

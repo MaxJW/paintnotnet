@@ -126,16 +126,18 @@ impl PaintNotNetApp {
         let mut open = true;
         let mut changed = false;
         let path = self.config_path.clone();
-        crate::glass::window(
+        crate::dialogs::movable_dialog(
             ctx,
             egui::Window::new("Settings")
                 .id(egui::Id::new("settings_dialog"))
-                .open(&mut open)
                 .collapsible(false)
                 .resizable(true)
                 .default_size(egui::vec2(560.0, 460.0))
                 .pivot(egui::Align2::CENTER_CENTER)
                 .default_pos(ctx.content_rect().center()),
+            self.icons.art(crate::icons::Icon::Settings),
+            "Settings",
+            Some((self.icons.image(crate::icons::Icon::Close), &mut open)),
             |ui| {
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut st.tab, Tab::General, "General");

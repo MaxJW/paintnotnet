@@ -256,6 +256,11 @@ icons! {
 }
 
 impl Icon {
+    /// Whether the icon has artwork (some effects and adjustments have none).
+    pub fn has_art(self) -> bool {
+        self.svg().is_some()
+    }
+
     pub fn for_tool(tool: ToolKind) -> Icon {
         match tool {
             ToolKind::RectangleSelect => Icon::RectangleSelect,
@@ -406,6 +411,11 @@ impl Icons {
     /// The icon's texture (a white mask: draw it tinted), or a transparent one.
     pub fn texture(&self, icon: Icon) -> &TextureHandle {
         self.textures.get(&icon).unwrap_or(&self.blank)
+    }
+
+    /// The icon's texture when it has artwork (a dialog heading's tile).
+    pub fn art(&self, icon: Icon) -> Option<egui::TextureId> {
+        icon.has_art().then(|| self.texture(icon).id())
     }
 
     /// The icon at 16×16 points in the theme's icon colour.
