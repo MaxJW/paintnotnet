@@ -897,7 +897,11 @@ this just a great modern paint.net replacement for linux."
         links only libc/libm/libgcc; `desktop-file-validate` and `xmllint` pass; the licence list was paint.net's
         icons (no longer embedded on main): MIT, ISC (Lucide), OFL-1.1 (Geist) now
   - [x] AppStream metainfo (`packaging/paintnotnet.metainfo.xml`, installed to /usr/share/metainfo); README for users
-  - [ ] **Needs your decision:** an app ID and homepage. `appstreamcli validate` warns that the ID `paintnotnet`
+  - [x] **App ID `uk.co.maxwilson.paintnotnet`** (user, 2026-10-19: domain maxwilson.co.uk): Wayland app id,
+        `.desktop`, icon, MIME and metainfo file names, the single-instance D-Bus name (was `org.paintnotnet.*`).
+        `xtask install-desktop` dropped (the package names checkout builds too); `uninstall-desktop` clears its
+        old per-user files. Still no homepage URL (no public repository yet)
+  - [ ] ~~Needs your decision:~~ an app ID and homepage. `appstreamcli validate` warns that the ID `paintnotnet`
         isn't reverse-DNS (e.g. `io.github.<user>.paintnotnet`, which would also rename the .desktop file and the
         Wayland app id) and that there's no homepage URL. Installing the package (`makepkg -si`, needs sudo) is
         left to you. `assets/icons/pdn336` (paint.net's icons, unused on main) could go in the clean-up

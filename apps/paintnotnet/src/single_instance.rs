@@ -16,9 +16,9 @@ use std::sync::{Arc, OnceLock};
 
 use eframe::egui;
 
-pub const NAME: &str = "org.paintnotnet.PaintNotNet";
-const PATH: &str = "/org/paintnotnet/PaintNotNet";
-const INTERFACE: &str = "org.paintnotnet.PaintNotNet1";
+pub const NAME: &str = crate::APP_ID;
+const PATH: &str = "/uk/co/maxwilson/paintnotnet";
+const INTERFACE: &str = "uk.co.maxwilson.paintnotnet.Instance1";
 
 /// Files handed over by another launch.
 #[derive(Debug, PartialEq)]
@@ -33,7 +33,7 @@ struct Service {
     ctx: Arc<OnceLock<egui::Context>>,
 }
 
-#[zbus::interface(name = "org.paintnotnet.PaintNotNet1")]
+#[zbus::interface(name = "uk.co.maxwilson.paintnotnet.Instance1")]
 impl Service {
     fn open(&self, paths: Vec<String>, activation_token: String) {
         let handoff = Handoff {
@@ -154,7 +154,7 @@ mod tests {
     /// made absolute, and its token to the first and exits. Skips without a session bus.
     #[test]
     fn second_launch_hands_files_to_the_first() {
-        let name = format!("org.paintnotnet.Test{}", std::process::id());
+        let name = format!("uk.co.maxwilson.paintnotnet.Test{}", std::process::id());
         let first = match start_as(&name, &[], None) {
             Start::First(i) => i,
             Start::Alone => {

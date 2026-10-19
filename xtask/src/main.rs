@@ -1,10 +1,10 @@
 //! Project tasks: `cargo xtask <task>`.
 //!
 //! - `ci`: fmt check, clippy (warnings are errors), tests. Run before calling a phase done.
-//! - `install-desktop [--force]`: install the `.desktop` file and icon for this user
-//!   (`~/.local/share`), so the desktop shows paintnotnet's icon and name for a build run
-//!   from this checkout (the package installs them system-wide). `uninstall-desktop` removes
-//!   them again.
+//! - `uninstall-desktop`: remove the per-user `.desktop` file, icon and MIME type that the
+//!   former `install-desktop` put in `~/.local/share` (named `paintnotnet.*`, before the app ID).
+//!   The package installs them system-wide under the app ID, which also names builds run from
+//!   this checkout.
 //!
 //! CI runs at low CPU and I/O priority with a few cores left free, so the desktop stays
 //! responsive while it builds. `PNN_CI_JOBS` overrides the job count.
@@ -27,10 +27,9 @@ const CI_STEPS: &[&[&str]] = &[
 fn main() -> ExitCode {
     match std::env::args().nth(1).as_deref() {
         Some("ci") => ci(),
-        Some("install-desktop") => install_desktop(std::env::args().any(|a| a == "--force")),
         Some("uninstall-desktop") => uninstall_desktop(),
         _ => {
-            eprintln!("usage: cargo xtask ci | install-desktop [--force] | uninstall-desktop");
+            eprintln!("usage: cargo xtask ci | uninstall-desktop");
             ExitCode::from(2)
         }
     }
@@ -88,7 +87,7 @@ fn low_priority(cargo: &str) -> Command {
     cmd
 }
 
-/// Where `install-desktop` puts things: (desktop file, icon, MIME type for .pdn).
+/// Where the former `install-desktop` put things: (desktop file, icon, MIME type for .pdn).
 fn desktop_targets() -> Option<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf)> {
     let data = std::env::var_os("XDG_DATA_HOME")
         .filter(|d| !d.is_empty())
@@ -101,72 +100,6 @@ fn desktop_targets() -> Option<(std::path::PathBuf, std::path::PathBuf, std::pat
         data.join("icons/hicolor/scalable/apps/paintnotnet.svg"),
         data.join("mime/packages/paintnotnet.xml"),
     ))
-}
-
-fn install_desktop(force: bool) -> ExitCode {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-    let Some((desktop, icon, mime)) = desktop_targets() else {
-        eprintln!("no HOME or XDG_DATA_HOME");
-        return ExitCode::FAILURE;
-    };
-    // Run the checkout's release build if there is one, else the debug build.
-    let binary = ["release", "debug"]
-        .iter()
-        .map(|p| root.join("target").join(p).join("paintnotnet"))
-        .find(|b| b.exists())
-        .unwrap_or_else(|| root.join("target/release/paintnotnet"));
-    let binary = binary.canonicalize().unwrap_or(binary);
-    let entry = match std::fs::read_to_string(root.join("packaging/paintnotnet.desktop")) {
-        Ok(text) => text.replace(
-            "Exec=paintnotnet %F",
-            &format!("Exec=\"{}\" %F", binary.display()),
-        ),
-        Err(e) => {
-            eprintln!("packaging/paintnotnet.desktop: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let svg = match std::fs::read(root.join("packaging/paintnotnet.svg")) {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("packaging/paintnotnet.svg: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let mime_xml = match std::fs::read(root.join("packaging/paintnotnet-mime.xml")) {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("packaging/paintnotnet-mime.xml: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    for (path, contents) in [
-        (&desktop, entry.into_bytes()),
-        (&icon, svg),
-        (&mime, mime_xml),
-    ] {
-        if path.exists() && std::fs::read(path).ok().as_deref() != Some(&contents[..]) && !force {
-            eprintln!(
-                "{} exists and differs; not overwriting (use --force)",
-                path.display()
-            );
-            return ExitCode::FAILURE;
-        }
-        if let Some(dir) = path.parent()
-            && let Err(e) = std::fs::create_dir_all(dir)
-        {
-            eprintln!("{}: {e}", dir.display());
-            return ExitCode::FAILURE;
-        }
-        if let Err(e) = std::fs::write(path, &contents) {
-            eprintln!("{}: {e}", path.display());
-            return ExitCode::FAILURE;
-        }
-        eprintln!("installed {}", path.display());
-    }
-    refresh_desktop_caches(&desktop, &mime);
-    eprintln!("Exec points at {}", binary.display());
-    ExitCode::SUCCESS
 }
 
 fn uninstall_desktop() -> ExitCode {

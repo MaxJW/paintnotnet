@@ -58,7 +58,7 @@ fn main() -> ExitCode {
             // paintnotnet's own window buttons sit in its title bar (unless set otherwise).
             .with_decorations(system_title_bar)
             // Wayland app_id: lets KDE match the .desktop file and window rules.
-            .with_app_id("paintnotnet")
+            .with_app_id(paintnotnet::APP_ID)
             .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([640.0, 480.0])
             // X11 window icon; on Wayland the desktop shows the .desktop file's icon.

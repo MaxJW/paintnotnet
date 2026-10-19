@@ -59,16 +59,17 @@ build() {
 
 package() {
   cd "$_pkgname"
+  local id=uk.co.maxwilson.paintnotnet
   install -Dm755 target/release/paintnotnet "$pkgdir/usr/bin/paintnotnet"
-  install -Dm644 packaging/paintnotnet.desktop -t "$pkgdir/usr/share/applications/"
-  install -Dm644 packaging/paintnotnet-mime.xml "$pkgdir/usr/share/mime/packages/paintnotnet.xml"
-  install -Dm644 packaging/paintnotnet.metainfo.xml -t "$pkgdir/usr/share/metainfo/"
-  install -Dm644 packaging/paintnotnet.svg -t "$pkgdir/usr/share/icons/hicolor/scalable/apps/"
+  install -Dm644 "packaging/$id.desktop" -t "$pkgdir/usr/share/applications/"
+  install -Dm644 packaging/paintnotnet-mime.xml "$pkgdir/usr/share/mime/packages/$id.xml"
+  install -Dm644 "packaging/$id.metainfo.xml" -t "$pkgdir/usr/share/metainfo/"
+  install -Dm644 packaging/paintnotnet.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/$id.svg"
   local size
   for size in 16 22 24 32 48 64 128 256 512; do
     install -dm755 "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps"
     rsvg-convert -w "$size" -h "$size" packaging/paintnotnet.svg \
-      -o "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/paintnotnet.png"
+      -o "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/$id.png"
   done
   install -Dm644 LICENSE NOTICE -t "$pkgdir/usr/share/licenses/$pkgname/"
   install -Dm644 assets/icons/lucide/LICENSE \

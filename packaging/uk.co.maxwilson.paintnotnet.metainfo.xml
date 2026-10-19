@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- AppStream metadata: what software centres (Discover, GNOME Software) show. -->
 <component type="desktop-application">
-  <id>paintnotnet</id>
+  <id>uk.co.maxwilson.paintnotnet</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
   <name>paintnotnet</name>
   <summary>Image and photo editor modelled on paint.net</summary>
-  <developer>
+  <developer id="uk.co.maxwilson">
     <name>Max Wilson</name>
   </developer>
   <description>
@@ -21,7 +21,7 @@
       <li>Drawn on the GPU, with large photos staying responsive</li>
     </ul>
   </description>
-  <launchable type="desktop-id">paintnotnet.desktop</launchable>
+  <launchable type="desktop-id">uk.co.maxwilson.paintnotnet.desktop</launchable>
   <provides>
     <binary>paintnotnet</binary>
   </provides>

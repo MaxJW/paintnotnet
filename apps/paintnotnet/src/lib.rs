@@ -1,5 +1,9 @@
 //! The egui shell. Split from `main.rs` so UI tests can drive the app headlessly.
 
+/// The app's ID (reverse DNS of the author's domain, maxwilson.co.uk): the Wayland app id, the
+/// .desktop file, icon and AppStream names, and the single-instance D-Bus name.
+pub const APP_ID: &str = "uk.co.maxwilson.paintnotnet";
+
 pub mod actions;
 pub mod ai;
 pub mod app;
