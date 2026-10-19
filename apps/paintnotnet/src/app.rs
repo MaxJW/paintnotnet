@@ -423,6 +423,7 @@ impl PaintNotNetApp {
             rulers: self.rulers,
             units: self.units,
             panels: Panel::ALL.map(|p| self.panels.visible(p)),
+            tool: self.tool,
         }
     }
 
@@ -556,6 +557,12 @@ impl PaintNotNetApp {
             }
             Command::OpenToolDropdown => self.row2.open_tool_dropdown = true,
             Command::BrushWidth(d) => self.settings.nudge_brush_width(d as f32),
+            // Only with their tool, as 5.x's shortcut table lists them.
+            Command::LineStartCap
+            | Command::LineEndCap
+            | Command::LineStyle
+            | Command::CycleShape { .. }
+                if !self.command_state().enabled(t.command) => {}
             Command::LineStartCap => {
                 self.settings.start_cap = next(&LineCap::ALL, self.settings.start_cap)
             }
@@ -1675,6 +1682,8 @@ pub struct CommandState {
     pub rulers: bool,
     pub units: Units,
     pub panels: [bool; 4],
+    /// The active tool (its own keys: caps, line style, shape cycling).
+    pub tool: ToolKind,
 }
 
 /// Commands whose availability depends on the document (see `actions.rs`).
@@ -1732,6 +1741,10 @@ impl CommandState {
             Command::SaveAll => self.any_dirty,
             Command::SelectAll | Command::InvertSelection | Command::SelectSubject => self.has_doc,
             Command::RepeatEffect => self.repeat_effect,
+            // The Line/Curve and Shapes tools' own keys (5.x shortcut table).
+            Command::LineStartCap | Command::LineEndCap => self.tool == ToolKind::LineCurve,
+            Command::LineStyle => matches!(self.tool, ToolKind::LineCurve | ToolKind::Shapes),
+            Command::CycleShape { .. } => self.tool == ToolKind::Shapes,
             Command::Adjustment(_) => self.has_doc,
             Command::Deselect
             | Command::EraseSelection

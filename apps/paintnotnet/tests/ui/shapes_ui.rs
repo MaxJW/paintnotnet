@@ -196,3 +196,73 @@ fn pressing_far_away_commits_and_starts_another() {
     assert_eq!(history_names(&h).len(), n + 1);
     assert!(black(&h, 20, 20) && black(&h, 75, 60));
 }
+
+/// The Line/Curve and Shapes tools' keys (5.x: A / Shift+A cycle shapes; , . / the caps and
+/// line style) act only with their tool, and show as available only then.
+#[test]
+fn tool_keys_act_only_with_their_tool() {
+    let mut h = harness();
+    h.state_mut().set_tool(ToolKind::Paintbrush);
+    h.step();
+    let (shape, dash, cap) = {
+        let s = h.state_mut().settings_mut();
+        (s.shape, s.dash, s.end_cap)
+    };
+    press(&mut h, Modifiers::NONE, Key::A);
+    press(&mut h, Modifiers::NONE, Key::Period);
+    press(&mut h, Modifiers::NONE, Key::Slash);
+    {
+        let s = h.state_mut().settings_mut();
+        assert_eq!(
+            (s.shape, s.dash, s.end_cap),
+            (shape, dash, cap),
+            "Paintbrush: no change"
+        );
+    }
+    assert!(
+        !h.state()
+            .availability(Command::CycleShape { forward: true })
+    );
+
+    h.state_mut().set_tool(ToolKind::Shapes);
+    h.step();
+    assert!(
+        h.state()
+            .availability(Command::CycleShape { forward: true })
+    );
+    press(&mut h, Modifiers::NONE, Key::A);
+    assert_eq!(h.state_mut().settings_mut().shape, shape.cycle(true));
+    press(&mut h, Modifiers::SHIFT, Key::A);
+    assert_eq!(h.state_mut().settings_mut().shape, shape);
+    press(&mut h, Modifiers::NONE, Key::Period);
+    assert_ne!(
+        h.state_mut().settings_mut().dash,
+        dash,
+        "Shapes have a line style"
+    );
+    press(&mut h, Modifiers::NONE, Key::Slash);
+    assert_eq!(h.state_mut().settings_mut().end_cap, cap, "but no caps");
+
+    h.state_mut().set_tool(ToolKind::LineCurve);
+    h.step();
+    press(&mut h, Modifiers::NONE, Key::Slash);
+    assert_ne!(h.state_mut().settings_mut().end_cap, cap);
+}
+
+/// Effects > Repeat is available once an effect has been applied.
+#[test]
+fn repeat_effect_is_available_after_an_effect() {
+    let mut h = harness();
+    assert!(!h.state().availability(Command::RepeatEffect));
+    press(
+        &mut h,
+        Modifiers {
+            ctrl: true,
+            shift: true,
+            ..Modifiers::NONE
+        },
+        Key::I,
+    );
+    assert_eq!(history_names(&h).last().unwrap(), "Invert Colors");
+    assert!(h.state().availability(Command::RepeatEffect));
+}

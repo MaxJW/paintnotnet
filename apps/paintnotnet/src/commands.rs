@@ -222,6 +222,11 @@ impl Command {
         matches!(
             self,
             C::FeatherSelection
+                | C::RepeatEffect
+                | C::LineStartCap
+                | C::LineStyle
+                | C::LineEndCap
+                | C::CycleShape { .. }
                 | C::Settings
                 | C::CommandPalette
                 | C::NewImage
