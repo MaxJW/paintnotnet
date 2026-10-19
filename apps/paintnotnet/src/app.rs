@@ -83,6 +83,8 @@ pub struct PaintNotNetApp {
     pub(crate) ctx: Option<egui::Context>,
     /// Draw moved pixels on the CPU even with a GPU (tests compare the two paths).
     pub(crate) cpu_floating: bool,
+    /// Alt+−: open this image's tab menu on the next frame.
+    pub(crate) tab_menu: Option<u64>,
     /// The selection's bounds for the move tools' frame, by (tab, selection revision).
     pub(crate) selection_bounds: Option<crate::move_tools::BoundsCache>,
     /// Notes slow and stuck frames in the session log (set by `main`).
@@ -208,6 +210,7 @@ impl PaintNotNetApp {
             watchdog: None,
             cpu_floating: false,
             selection_bounds: None,
+            tab_menu: None,
             stroke: None,
             brush: None,
             gradient: None,
@@ -536,6 +539,7 @@ impl PaintNotNetApp {
                 }
             }
             Command::ClearRecentFiles => self.modal = Some(Modal::ClearRecent),
+            Command::ImageContextMenu => self.tab_menu = self.workspace.active().map(|t| t.key),
             Command::Close => {
                 if let Some(key) = self.workspace.active().map(|t| t.key) {
                     self.close_tab(key);
@@ -1486,7 +1490,15 @@ impl PaintNotNetApp {
                         egui::UiBuilder::new()
                             .max_rect(middle)
                             .layout(egui::Layout::left_to_right(egui::Align::Center)),
-                        |ui| list_actions = shell::image_list(ui, &self.workspace, &palette),
+                        |ui| {
+                            list_actions = shell::image_list(
+                                ui,
+                                &self.workspace,
+                                &palette,
+                                &self.icons,
+                                &mut self.tab_menu,
+                            )
+                        },
                     );
                 }
                 if let Some(bar) = drag_area {
@@ -1501,6 +1513,13 @@ impl PaintNotNetApp {
                 ImageListAction::Activate(i) => self.workspace.activate(i),
                 ImageListAction::Close(key) => self.close_tab(key),
                 ImageListAction::Move { from, to } => self.workspace.move_tab(from, to),
+                ImageListAction::Command { key, command } => {
+                    // On that image: it becomes the active one first.
+                    if let Some(i) = self.workspace.tabs().iter().position(|t| t.key == key) {
+                        self.workspace.activate(i);
+                    }
+                    self.execute(ctx, Triggered::once(command));
+                }
             }
         }
         self.menu = menu.into_inner();
@@ -1809,6 +1828,7 @@ impl CommandState {
             Command::SelectAll | Command::InvertSelection | Command::SelectSubject => self.has_doc,
             Command::RepeatEffect => self.repeat_effect,
             Command::ClearRecentFiles => self.has_recent,
+            Command::ImageContextMenu => self.has_doc,
             Command::OpenRecent(i) => (i as usize) < self.recent_count,
             // The Line/Curve and Shapes tools' own keys (5.x shortcut table).
             Command::LineStartCap | Command::LineEndCap => self.tool == ToolKind::LineCurve,

@@ -21,7 +21,15 @@ const CLOSE: f32 = 20.0;
 pub enum ImageListAction {
     Activate(usize),
     Close(u64),
-    Move { from: usize, to: usize },
+    /// Picked from an image's menu: run `command` on that image.
+    Command {
+        key: u64,
+        command: crate::commands::Command,
+    },
+    Move {
+        from: usize,
+        to: usize,
+    },
 }
 
 fn name_galley(
@@ -43,8 +51,15 @@ fn name_galley(
     ui.painter().layout_job(job)
 }
 
-/// The tabs, centred in the space `ui` has left (scrolling when they don't fit).
-pub fn image_list(ui: &mut egui::Ui, ws: &Workspace, palette: &Palette) -> Vec<ImageListAction> {
+/// The tabs, centred in the space `ui` has left (scrolling when they don't fit). Right-click
+/// opens an image's menu below its tab; `open_menu` (Alt+−) opens the one for that image.
+pub fn image_list(
+    ui: &mut egui::Ui,
+    ws: &Workspace,
+    palette: &Palette,
+    icons: &crate::icons::Icons,
+    open_menu: &mut Option<u64>,
+) -> Vec<ImageListAction> {
     let mut actions = Vec::new();
     let gap = 6.0;
     // Names shorten (with "…") to share the room before the tabs scroll: one tab in a narrow
@@ -94,6 +109,23 @@ pub fn image_list(ui: &mut egui::Ui, ws: &Workspace, palette: &Palette) -> Vec<I
                             &title,
                         )
                     });
+                    let from_keyboard = *open_menu == Some(tab.key);
+                    if from_keyboard {
+                        *open_menu = None;
+                    }
+                    let popup = egui::Popup::menu(&item).open_memory(
+                        (item.secondary_clicked() || from_keyboard)
+                            .then_some(egui::SetOpenCommand::Bool(true)),
+                    );
+                    if let Some(r) =
+                        popup.show(|ui| crate::menus::image_menu_ui(ui, icons, from_keyboard))
+                        && let Some(command) = r.inner
+                    {
+                        actions.push(ImageListAction::Command {
+                            key: tab.key,
+                            command,
+                        });
+                    }
                     let item = item.on_hover_text(tab.title());
                     if close {
                         actions.push(ImageListAction::Close(tab.key));

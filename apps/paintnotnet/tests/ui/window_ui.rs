@@ -455,3 +455,54 @@ fn large_layer_commands_land_from_the_background() {
     assert_eq!(d.layer(0).surface.get(250, 120).a, 0, "outside untouched");
     assert_eq!(history_names(&h).last().unwrap(), "Fill Selection");
 }
+
+/// An image tab's menu: right-click a tab for Save, Save As and Close on that image (it
+/// becomes the active one); Alt+− opens it for the active image.
+#[test]
+fn image_tab_menu_from_right_click_and_alt_minus() {
+    use eframe::egui::{Key, Modifiers};
+    let mut h = harness();
+    h.state_mut().workspace_mut().add(
+        pnn_core::Document::new_blank(10, 10),
+        Some(std::path::PathBuf::from("a.png")),
+        None,
+    );
+    h.step();
+    h.step();
+    let titles = |h: &egui_kittest::Harness<'_, paintnotnet::app::PaintNotNetApp>| {
+        h.state()
+            .workspace()
+            .tabs()
+            .iter()
+            .map(|t| t.title())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(titles(&h), ["Untitled", "a.png"]);
+    let tab = h.get_by_label("Untitled").rect();
+    h.get_by_label("Untitled").click_secondary();
+    for _ in 0..3 {
+        h.step();
+    }
+    // A menu item's accessible label carries its shortcut.
+    h.get_by_label("Save As... Ctrl+Shift+S");
+    // The menu's Close (below the tab), not a tab's close button.
+    let close = h
+        .query_all_by_label("Close Ctrl+W")
+        .find(|n| n.rect().min.y > tab.max.y)
+        .expect("the menu's Close");
+    close.click();
+    for _ in 0..3 {
+        h.step();
+    }
+    assert_eq!(titles(&h), ["a.png"], "closed the right-clicked image");
+
+    press(&mut h, Modifiers::ALT, Key::Minus);
+    for _ in 0..3 {
+        h.step();
+    }
+    let below = h.get_by_label("a.png").rect().max.y;
+    assert!(
+        h.get_by_label("Save As... Ctrl+Shift+S").rect().min.y > below,
+        "Alt+− opens the active image's menu below its tab"
+    );
+}

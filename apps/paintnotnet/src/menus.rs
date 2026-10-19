@@ -637,6 +637,28 @@ fn entries_ui(
     picked
 }
 
+/// An image tab's menu (right-click, or Alt+− for the active image): Save, Save As and Close
+/// for that image, drawn as the menu bar's items. `keyboard`: opened from the keyboard, so
+/// the first item takes focus and mnemonics are underlined.
+pub fn image_menu_ui(ui: &mut egui::Ui, icons: &Icons, keyboard: bool) -> Option<Command> {
+    let entries = [
+        item("&Save", Command::Save, Icon::Save),
+        item("Save &As...", Command::SaveAs, Icon::SaveAs),
+        SEP,
+        item("&Close", Command::Close, Icon::Close),
+    ];
+    let (enabled, checked) = (|_: Command| true, |_: Command| false);
+    let cx = MenuContext {
+        enabled: &enabled,
+        checked: &checked,
+        last_effect: None,
+        recent: &[],
+    };
+    ui.set_min_width(200.0);
+    let mut focus_first = keyboard;
+    entries_ui(ui, &entries, &cx, icons, keyboard, &mut focus_first)
+}
+
 /// The Help menu, behind paint.net 5's "?" icon.
 pub fn help_button(
     ui: &mut egui::Ui,

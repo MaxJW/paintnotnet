@@ -234,6 +234,7 @@ impl Command {
                 | C::Open
                 | C::OpenRecent(_)
                 | C::ClearRecentFiles
+                | C::ImageContextMenu
                 | C::Close
                 | C::Save
                 | C::SaveAs
