@@ -213,3 +213,37 @@ fn blur_selection_edge_fades_alpha_inside_only() {
     );
     assert_eq!(history_names(&h).last().unwrap(), "Blur Selection Edge");
 }
+
+/// On a large image the canvas doesn't wait for a feathered outline's distance field: the
+/// outline's unfeathered mask stands in (under an id of its own) until the field, built on
+/// the effect threads, gives the exact feathered mask.
+#[test]
+fn large_feathered_preview_builds_its_field_in_the_background() {
+    let mut h = harness_with(Document::new_blank(1500, 1000));
+    let ctx = h.ctx.clone();
+    let tab = h.state_mut().workspace_mut().active_mut().unwrap();
+    let outline = pnn_core::Selection::ellipse(100.0, 100.0, 1400.0, 900.0);
+    tab.doc.set_selection(outline.clone());
+    let (_, hard) = tab.display_mask(true, &ctx).expect("unfeathered, at once");
+    let feathered = outline.with_feather(linear(20.0));
+    tab.doc.set_selection(feathered.clone());
+    let rev = tab.doc.selection_revision() * 2 + 1;
+    let (id, first) = tab.display_mask(true, &ctx).expect("a stand-in");
+    assert_ne!(id, rev, "the stand-in has its own id");
+    assert!(std::sync::Arc::ptr_eq(&first, &hard));
+    assert!(tab.field_job.is_some(), "building in the background");
+    let start = std::time::Instant::now();
+    let exact = loop {
+        if let Some((id, m)) = tab.display_mask(true, &ctx)
+            && id == rev
+        {
+            break m;
+        }
+        assert!(start.elapsed().as_secs() < 10, "the field never arrived");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    assert_eq!(
+        exact.to_pixels(),
+        feathered.rasterize(1500, 1000, true).to_pixels()
+    );
+}

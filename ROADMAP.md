@@ -817,8 +817,15 @@ this just a great modern paint.net replacement for linux."
   - [x] **Session log** (user asked for logs of their own use): `~/.local/state/paintnotnet/paintnotnet.log` (the
         previous one kept as `.log.1`) has commands, tool presses, slow frames (≥ 50 ms) with what was going on,
         background jobs, memory every 10 s, and a watchdog line for every second the UI thread is stuck in a frame
-  - [ ] Left:
-        the feather field in the background; Resize's OK frame (50 ms), Gradient finish (37 ms bake), Fill Selection
+  - [x] **Feathering in the background:** the canvas (overlay, GPU ants) no longer waits for a feathered outline's
+        distance field on large images: it's built on the effect threads while the outline's last mask stands in,
+        and exact users (fill, effects, lifting) wait for that job instead of building it twice. Also a bug: a
+        cached field never served a selection touching the image's right or bottom edge (the field's region stops
+        there), so every radius change of the live slider rebuilt it (142 ms each on the wand selection). Feather
+        Selection on the photo: worst frame 155 → 25 ms (the dialog opening); undo/redo 10 ms. Tests: field reuse at
+        the edges (core); stand-in then exact mask on a 1.5 MP image (UI). The audit now waits for the preview
+        before OK, as a person would
+  - [ ] Left: Resize's OK frame (50 ms), Gradient finish (37 ms bake), Fill Selection
         (30 ms), Flip/Rotate Layer (26–29 ms) on the UI thread; WebP saving takes 17 s in the background at default
         effort
 - [ ] **Everything functional:** the disabled commands (Print, Acquire, Color Profile, the image's right-click menu,

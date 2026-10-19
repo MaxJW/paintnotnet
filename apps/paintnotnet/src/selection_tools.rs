@@ -84,6 +84,14 @@ pub struct MaskKey {
 /// Masks kept per image (each one byte per pixel).
 const MASKS_KEPT: usize = 4;
 
+/// A selection's distance field being built on the effect threads.
+pub struct FieldJob {
+    geometry: u64,
+    antialias: bool,
+    size: (u32, u32),
+    rx: std::sync::mpsc::Receiver<Option<Arc<pnn_core::selection::FeatherField>>>,
+}
+
 impl DocumentTab {
     fn mask_key(&self, antialias: bool) -> MaskKey {
         let sel = self.doc.selection();
@@ -119,6 +127,9 @@ impl DocumentTab {
             return Some(m);
         }
         let (w, h) = (self.doc.width(), self.doc.height());
+        if !self.doc.selection().feather().is_none() {
+            self.poll_field_job(antialias, true);
+        }
         let sel = self.doc.selection();
         let m = if sel.feather().is_none() {
             sel.rasterize_hard(w, h, antialias)
@@ -128,16 +139,7 @@ impl DocumentTab {
             let field = match &self.feather_field {
                 Some(f) if sel.field_matches(f, antialias) => f.clone(),
                 _ => {
-                    // The unfeathered mask, if kept, saves rasterising the outline again.
-                    let hard_key = MaskKey {
-                        feather: pnn_core::selection::Feather::NONE,
-                        ..self.mask_key(antialias)
-                    };
-                    let hard = self
-                        .mask_cache
-                        .iter()
-                        .find(|(k, _)| *k == hard_key)
-                        .map(|(_, m)| m.clone());
+                    let hard = self.hard_mask(antialias);
                     let sel = self.doc.selection();
                     let f = Arc::new(sel.distance_field_from(w, h, antialias, hard.as_deref())?);
                     self.feather_field = Some(f.clone());
@@ -149,6 +151,101 @@ impl DocumentTab {
         let m = Arc::new(m);
         self.prime_mask(antialias, m.clone());
         Some(m)
+    }
+
+    /// The selection's unfeathered mask, if kept (saves rasterising the outline again).
+    fn hard_mask(&self, antialias: bool) -> Option<Arc<Mask>> {
+        let hard_key = MaskKey {
+            feather: pnn_core::selection::Feather::NONE,
+            ..self.mask_key(antialias)
+        };
+        self.mask_cache
+            .iter()
+            .find(|(k, _)| *k == hard_key)
+            .map(|(_, m)| m.clone())
+    }
+
+    /// Take a finished field job's result. `wait`: block for one building this selection's
+    /// field rather than build it a second time.
+    fn poll_field_job(&mut self, antialias: bool, wait: bool) {
+        use std::sync::mpsc::TryRecvError;
+        let key = self.mask_key(antialias);
+        let Some(job) = &self.field_job else { return };
+        let ours =
+            job.geometry == key.geometry && job.antialias == antialias && job.size == key.size;
+        let result = if wait && ours {
+            job.rx.recv().map_err(|_| TryRecvError::Disconnected)
+        } else {
+            job.rx.try_recv()
+        };
+        match result {
+            Ok(field) => {
+                if let Some(f) = field {
+                    self.feather_field = Some(f);
+                }
+                self.field_job = None;
+            }
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => self.field_job = None,
+        }
+    }
+
+    /// The selection mask for the canvas (overlay, GPU ants) with its upload id. On a large
+    /// image a feathered outline's distance field (0.14 s for a Magic Wand selection of a
+    /// photo) is built on the effect threads; meanwhile the outline's last mask (with another
+    /// feather, under an id of its own) stands in, or nothing.
+    pub fn display_mask(
+        &mut self,
+        antialias: bool,
+        ctx: &eframe::egui::Context,
+    ) -> Option<(u64, Arc<Mask>)> {
+        let sel = self.doc.selection();
+        if sel.is_empty() {
+            return None;
+        }
+        let rev = self.doc.selection_revision() * 2 + u64::from(antialias);
+        let key = self.mask_key(antialias);
+        let (w, h) = key.size;
+        let cached = self.mask_cache.iter().any(|(k, _)| *k == key);
+        if cached || sel.feather().is_none() || w as u64 * h as u64 <= CLICK_AT_ONCE {
+            return self.selection_mask(antialias).map(|m| (rev, m));
+        }
+        self.poll_field_job(antialias, false);
+        let sel = self.doc.selection();
+        if self
+            .feather_field
+            .as_ref()
+            .is_some_and(|f| sel.field_matches(f, antialias))
+        {
+            // Only the shaping is left (~10 ms).
+            return self.selection_mask(antialias).map(|m| (rev, m));
+        }
+        let building = self.field_job.as_ref().is_some_and(|j| {
+            j.geometry == key.geometry && j.antialias == antialias && j.size == key.size
+        });
+        if !building {
+            let (sel, hard) = (sel.clone(), self.hard_mask(antialias));
+            let (tx, rx) = std::sync::mpsc::channel();
+            let ctx = ctx.clone();
+            crate::effect_runner::effect_pool().spawn(move || {
+                let field = sel.distance_field_from(w, h, antialias, hard.as_deref());
+                let _ = tx.send(field.map(Arc::new));
+                ctx.request_repaint();
+            });
+            self.field_job = Some(FieldJob {
+                geometry: key.geometry,
+                antialias,
+                size: key.size,
+                rx,
+            });
+        }
+        self.mask_cache
+            .iter()
+            .rev()
+            .find(|(k, _)| {
+                k.geometry == key.geometry && k.antialias == antialias && k.size == key.size
+            })
+            .map(|(_, m)| (Arc::as_ptr(m) as u64 | 1 << 63, m.clone()))
     }
 }
 

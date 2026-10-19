@@ -378,6 +378,13 @@ fn perf_audit() {
         {
             f.radius = 10.0;
         }
+        // The preview's distance field is built in the background; OK once it shows.
+        a.settle(Duration::from_secs(5), |h| {
+            h.state()
+                .workspace()
+                .active()
+                .is_none_or(|t| t.field_job.is_none())
+        });
         a.frames(5);
         a.ok();
         a.frames(5);

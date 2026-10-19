@@ -39,6 +39,8 @@ pub struct DocumentTab {
     )>,
     /// Selection distance field (survives feather radius changes).
     pub feather_field: Option<std::sync::Arc<pnn_core::selection::FeatherField>>,
+    /// That field being built on the effect threads (large images).
+    pub field_job: Option<crate::selection_tools::FieldJob>,
     /// Marching-ant outlines: (selection revision, contours).
     pub ants_cache: Option<crate::selection_tools::AntsCache>,
     /// Undo history; the History window lists its steps.
@@ -166,6 +168,7 @@ impl Workspace {
             layer_thumbs: LayerThumbs::default(),
             mask_cache: Vec::new(),
             feather_field: None,
+            field_job: None,
             ants_cache: None,
             thumbnail: None,
             thumbnail_revision: 0,

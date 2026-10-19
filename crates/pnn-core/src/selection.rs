@@ -54,6 +54,8 @@ pub struct FeatherField {
     pub field: SignedField,
     pub geometry_id: u64,
     pub antialias: bool,
+    /// The image size it was made for (the region stops at the image's edges).
+    pub size: (u32, u32),
     /// Per canvas tile overlapping the region: (min, max) signed distance, so reshaping can
     /// settle tiles that are wholly inside or outside the soft band without visiting pixels.
     tile_ranges: Vec<(TileCoord, f32, f32, bool)>,
@@ -365,6 +367,7 @@ impl Selection {
             field,
             geometry_id: self.geometry_id,
             antialias,
+            size: (width, height),
             tile_ranges,
         })
     }
@@ -379,10 +382,12 @@ impl Selection {
         };
         let reach = self.feather.outward_extent() as f64 + 1.0;
         let r = f.region;
+        // A region cut off at the image's edge covers all there is on that side.
+        let (w, h) = f.size;
         let left = x0 - reach >= r.x as f64 || r.x == 0;
         let top = y0 - reach >= r.y as f64 || r.y == 0;
-        let right = x1 + reach <= (r.x + r.width) as f64;
-        let bottom = y1 + reach <= (r.y + r.height) as f64;
+        let right = x1 + reach <= (r.x + r.width) as f64 || r.x + r.width == w;
+        let bottom = y1 + reach <= (r.y + r.height) as f64 || r.y + r.height == h;
         left && top && right && bottom
     }
 
@@ -1086,6 +1091,19 @@ mod tests {
         // A feather change keeps the geometry, so a cached field stays valid.
         let f = s.distance_field(70, 70, true).unwrap();
         let wider = s.clone().with_feather(Feather {
+            radius: 16.0,
+            ..feather
+        });
+        assert!(wider.field_matches(&f, true));
+        assert_eq!(
+            wider.shape_field(&f, 70, 70).to_pixels(),
+            wider.rasterize(70, 70, true).to_pixels()
+        );
+        // Also when the selection runs off the image's right and bottom edges (a Magic Wand
+        // selection on a photo often does): the field was rebuilt on every radius change.
+        let edge = Selection::rect(30.0, 30.0, 90.0, 90.0).with_feather(feather);
+        let f = edge.distance_field(70, 70, true).unwrap();
+        let wider = edge.clone().with_feather(Feather {
             radius: 16.0,
             ..feather
         });

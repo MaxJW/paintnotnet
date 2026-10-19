@@ -2092,9 +2092,7 @@ impl PaintNotNetApp {
             .filter(|s| Some(s.key) == active)
             .and_then(|s| s.ants_transform());
         self.canvas.overlay = match self.workspace.active_mut() {
-            Some(tab) if preview => tab
-                .selection_mask(antialias)
-                .map(|m| (tab.doc.selection_revision() * 2 + u64::from(antialias), m)),
+            Some(tab) if preview => tab.display_mask(antialias, &ctx),
             _ => None,
         };
         let gpu = frame.wgpu_render_state();

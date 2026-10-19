@@ -445,12 +445,7 @@ pub fn show(
                 ants_inv = inv.map(|v| v as f32);
                 Some((*id, mask.clone()))
             }
-            _ => tab.selection_mask(state.antialias).map(|m| {
-                (
-                    tab.doc.selection_revision() * 2 + u64::from(state.antialias),
-                    m,
-                )
-            }),
+            _ => tab.display_mask(state.antialias, ui.ctx()),
         };
         if let Some((rev, mask)) = source {
             if full {
