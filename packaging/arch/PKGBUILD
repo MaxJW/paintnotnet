@@ -9,8 +9,8 @@ pkgver=0.1.0.r27.gab731eb
 pkgrel=1
 pkgdesc='Image and photo editor for Linux modelled on paint.net'
 arch=('x86_64' 'aarch64')
-# Code: MIT. Embedded paint.net 3.36 menu/tool icons: CC BY-NC-ND 2.5 (unmodified).
-license=('MIT' 'CC-BY-NC-ND-2.5')
+# Code: MIT. Embedded Lucide icons: ISC. Embedded Geist typeface: OFL-1.1.
+license=('MIT' 'ISC' 'OFL-1.1')
 depends=(
   'gcc-libs'
   'glibc'
