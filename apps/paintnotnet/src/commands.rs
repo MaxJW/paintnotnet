@@ -69,6 +69,10 @@ pub enum Command {
     // File
     NewImage,
     Open,
+    /// File > Open Recent: the nth most recent file (0 = newest).
+    OpenRecent(u8),
+    /// File > Open Recent > Clear this list.
+    ClearRecentFiles,
     Acquire,
     Close,
     Save,
@@ -231,6 +235,8 @@ impl Command {
                 | C::CommandPalette
                 | C::NewImage
                 | C::Open
+                | C::OpenRecent(_)
+                | C::ClearRecentFiles
                 | C::Close
                 | C::Save
                 | C::SaveAs

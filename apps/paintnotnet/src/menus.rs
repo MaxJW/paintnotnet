@@ -4,6 +4,8 @@
 //! Labels and mnemonics follow paint.net 3.36 `Strings.resx`, extended with the 5.x items
 //! from the 5.x docs.
 
+use std::borrow::Cow;
+
 use eframe::egui::{self, Color32, FontId, Key, Popup, text::LayoutJob};
 use pnn_effects::{Adjustment, Category, effects_in};
 
@@ -12,7 +14,7 @@ use crate::icons::{Icon, Icons};
 
 pub enum Entry {
     Item {
-        label: &'static str,
+        label: Cow<'static, str>,
         command: Command,
         icon: Option<Icon>,
     },
@@ -26,11 +28,13 @@ pub enum Entry {
         label: String,
         entries: Vec<Entry>,
     },
+    /// File > Open Recent, filled from `MenuContext::recent` when shown.
+    Recent,
 }
 
 fn item(label: &'static str, command: Command, icon: Icon) -> Entry {
     Entry::Item {
-        label,
+        label: Cow::Borrowed(label),
         command,
         icon: Some(icon),
     }
@@ -38,7 +42,7 @@ fn item(label: &'static str, command: Command, icon: Icon) -> Entry {
 
 fn plain(label: &'static str, command: Command) -> Entry {
     Entry::Item {
-        label,
+        label: Cow::Borrowed(label),
         command,
         icon: None,
     }
@@ -62,6 +66,7 @@ pub fn menus() -> Vec<Menu> {
             entries: vec![
                 item("&New...", C::NewImage, Icon::New),
                 item("&Open...", C::Open, Icon::Open),
+                Entry::Recent,
                 Entry::Sub {
                     label: "Ac&quire".into(),
                     entries: vec![item(
@@ -308,7 +313,7 @@ fn adjustment_entries() -> Vec<Entry> {
             (
                 a.name(),
                 Entry::Item {
-                    label: label(a.name(), Some(m), a.has_dialog()),
+                    label: Cow::Borrowed(label(a.name(), Some(m), a.has_dialog())),
                     command: Command::Adjustment(a),
                     icon: adjustment_icon(a),
                 },
@@ -325,7 +330,7 @@ fn adjustment_entries() -> Vec<Entry> {
         items.push((
             e.name,
             Entry::Item {
-                label: label(e.name, m, true),
+                label: Cow::Borrowed(label(e.name, m, true)),
                 command: Command::Effect(id),
                 icon: None,
             },
@@ -340,7 +345,7 @@ fn effect_entries() -> Vec<Entry> {
     for category in Category::ALL {
         let items = effects_in(category)
             .map(|(id, e)| Entry::Item {
-                label: Box::leak(format!("{}...", e.name).into_boxed_str()),
+                label: Cow::Owned(format!("{}...", e.name)),
                 command: Command::Effect(id),
                 icon: None,
             })
@@ -405,6 +410,44 @@ pub struct MenuContext<'a> {
     pub checked: &'a dyn Fn(Command) -> bool,
     /// Shown as "Repeat <name>" in the Effects menu.
     pub last_effect: Option<&'a str>,
+    /// File > Open Recent, newest first.
+    pub recent: &'a [std::path::PathBuf],
+}
+
+/// File > Open Recent as paint.net 3.36 fills it (`FileMenu.cs`): "&1 name" … newest first,
+/// then "&Clear this list"; "(none)" (disabled) when empty. Labels from its `Strings.resx`.
+pub fn recent_menu(recent: &[std::path::PathBuf]) -> Entry {
+    let mut entries: Vec<Entry> = recent
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let name = p
+                .file_name()
+                .map(|n| n.to_string_lossy().replace('&', "&&"))
+                .unwrap_or_default();
+            let mnemonic = if i < 9 { "&" } else { "" };
+            Entry::Item {
+                label: Cow::Owned(format!("{mnemonic}{} {name}", i + 1)),
+                command: Command::OpenRecent(i as u8),
+                icon: None,
+            }
+        })
+        .collect();
+    if entries.is_empty() {
+        // Disabled: Clear is only available with something to clear.
+        entries.push(plain("(none)", Command::ClearRecentFiles));
+    } else {
+        entries.push(SEP);
+        entries.push(item(
+            "&Clear this list",
+            Command::ClearRecentFiles,
+            Icon::EraseSelection,
+        ));
+    }
+    Entry::Sub {
+        label: "Open &Recent".into(),
+        entries,
+    }
 }
 
 #[derive(Default)]
@@ -544,7 +587,7 @@ fn entries_ui(
                         None => "&Repeat".to_owned(),
                     }
                 } else {
-                    (*label).to_owned()
+                    label.to_string()
                 };
                 let job = label_job(&shown, underline, text_color);
                 let mut button = match icon {
@@ -582,6 +625,12 @@ fn entries_ui(
                 let mnemonic = mnemonic_char(label);
                 if response.clicked() || (enabled && mnemonic.is_some_and(|m| typed.contains(&m))) {
                     picked = Some(*command);
+                }
+            }
+            Entry::Recent => {
+                let recent = [recent_menu(cx.recent)];
+                if let Some(c) = entries_ui(ui, &recent, cx, icons, underline, focus_first) {
+                    picked = Some(c);
                 }
             }
             Entry::Sub { label, entries } => {
@@ -720,9 +769,15 @@ pub fn command_label(c: Command) -> String {
     fn find(entries: &[Entry], c: Command, path: &str) -> Option<String> {
         for e in entries {
             match e {
-                Entry::Item { label, command, .. } | Entry::Check { label, command, .. }
-                    if *command == c =>
-                {
+                Entry::Item { label, command, .. } if *command == c => {
+                    let l = parse_mnemonic(label).0.trim_end_matches("...").to_owned();
+                    return Some(if path.is_empty() {
+                        l
+                    } else {
+                        format!("{path} › {l}")
+                    });
+                }
+                Entry::Check { label, command, .. } if *command == c => {
                     let l = parse_mnemonic(label).0.trim_end_matches("...").to_owned();
                     return Some(if path.is_empty() {
                         l
@@ -778,10 +833,20 @@ mod tests {
             let mut seen = std::collections::HashMap::new();
             for e in entries {
                 let label = match e {
-                    Entry::Item { label, .. } | Entry::Check { label, .. } => label.to_string(),
+                    Entry::Item { label, .. } => label.to_string(),
+                    Entry::Check { label, .. } => label.to_string(),
                     Entry::Sub { label, entries } => {
                         check(label, entries);
                         label.clone()
+                    }
+                    Entry::Recent => {
+                        let recent: Vec<std::path::PathBuf> =
+                            (0..8).map(|i| format!("/tmp/{i}.png").into()).collect();
+                        let Entry::Sub { label, entries } = recent_menu(&recent) else {
+                            unreachable!()
+                        };
+                        check(&label, &entries);
+                        label
                     }
                     Entry::Separator => continue,
                 };

@@ -303,6 +303,18 @@ impl PaintNotNetApp {
         self.click_job.is_some()
     }
 
+    /// Put `path` at the top of File > Open Recent and keep it in the settings file.
+    pub fn note_recent(&mut self, path: &std::path::Path) {
+        let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+        self.config.note_recent(&path);
+        self.save_config();
+    }
+
+    /// The files in File > Open Recent, newest first.
+    pub fn recent_files(&self) -> &[std::path::PathBuf] {
+        &self.config.recent_files
+    }
+
     /// Draw moved pixels on the CPU even with a GPU (tests).
     pub fn set_cpu_floating(&mut self, on: bool) {
         self.cpu_floating = on;
@@ -424,6 +436,8 @@ impl PaintNotNetApp {
             units: self.units,
             panels: Panel::ALL.map(|p| self.panels.visible(p)),
             tool: self.tool,
+            recent_count: self.config.recent_files.len(),
+            has_recent: !self.config.recent_files.is_empty(),
         }
     }
 
@@ -516,6 +530,12 @@ impl PaintNotNetApp {
                 )))
             }
             Command::Open => self.files.pick_open(self.last_dir.clone()),
+            Command::OpenRecent(i) => {
+                if let Some(path) = self.config.recent_files.get(i as usize).cloned() {
+                    self.files.open_paths(vec![path]);
+                }
+            }
+            Command::ClearRecentFiles => self.modal = Some(Modal::ClearRecent),
             Command::Close => {
                 if let Some(key) = self.workspace.active().map(|t| t.key) {
                     self.close_tab(key);
@@ -694,6 +714,7 @@ impl PaintNotNetApp {
             enabled: &enabled,
             checked: &checked,
             last_effect: self.last_effect_name(),
+            recent: &self.config.recent_files,
         };
         let Some(link) = self.window_link.as_deref_mut() else {
             self.global_menu = Some(global);
@@ -906,6 +927,7 @@ impl PaintNotNetApp {
                     Ok(doc) => {
                         let format = pnn_io::FileFormat::from_path(&path);
                         self.last_dir = path.parent().map(|p| p.to_owned());
+                        self.note_recent(&path);
                         self.workspace.add(doc, Some(path), format);
                     }
                     Err(e) => self.errors.push(("Error Opening File".into(), e)),
@@ -955,6 +977,7 @@ impl PaintNotNetApp {
                             a.forget(key);
                         }
                         self.last_dir = path.parent().map(|p| p.to_owned());
+                        self.note_recent(&path);
                         if self.close_after_save.remove(&key) {
                             self.discard_tab(key);
                         }
@@ -988,6 +1011,10 @@ impl PaintNotNetApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             ModalResult::Recover => self.recover(),
+            ModalResult::ClearRecent => {
+                self.config.recent_files.clear();
+                self.save_config();
+            }
             ModalResult::DiscardRecovered => {
                 if let Some(a) = self.autosave.as_ref() {
                     a.clear_recoverable();
@@ -1330,6 +1357,7 @@ impl PaintNotNetApp {
                     enabled: &availability,
                     checked: &checked,
                     last_effect: self.last_effect_name(),
+                    recent: &self.config.recent_files,
                 };
                 let full = ui.max_rect();
                 // Under everything else in the bar: its empty space moves the window.
@@ -1720,6 +1748,9 @@ pub struct CommandState {
     pub panels: [bool; 4],
     /// The active tool (its own keys: caps, line style, shape cycling).
     pub tool: ToolKind,
+    /// Files in File > Open Recent.
+    pub recent_count: usize,
+    pub has_recent: bool,
 }
 
 /// Commands whose availability depends on the document (see `actions.rs`).
@@ -1777,6 +1808,8 @@ impl CommandState {
             Command::SaveAll => self.any_dirty,
             Command::SelectAll | Command::InvertSelection | Command::SelectSubject => self.has_doc,
             Command::RepeatEffect => self.repeat_effect,
+            Command::ClearRecentFiles => self.has_recent,
+            Command::OpenRecent(i) => (i as usize) < self.recent_count,
             // The Line/Curve and Shapes tools' own keys (5.x shortcut table).
             Command::LineStartCap | Command::LineEndCap => self.tool == ToolKind::LineCurve,
             Command::LineStyle => matches!(self.tool, ToolKind::LineCurve | ToolKind::Shapes),

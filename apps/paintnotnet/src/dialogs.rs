@@ -11,6 +11,8 @@ pub const MAX_DIMENSION: u32 = 65535;
 pub enum Modal {
     NewImage(NewImage),
     About,
+    /// File > Open Recent > Clear this list: asks first, as paint.net 3.36.
+    ClearRecent,
     /// The pasted image is larger than the canvas (paint.net asks the same).
     PasteLarger {
         new_layer: bool,
@@ -77,6 +79,7 @@ pub enum ModalResult {
     ExitWithoutSaving,
     Recover,
     DiscardRecovered,
+    ClearRecent,
     SaveConfigured {
         key: u64,
         options: pnn_io::SaveOptions,
@@ -356,6 +359,24 @@ impl Modal {
                             &[
                                 ("Recover", ModalResult::Recover, Kind::Primary),
                                 ("Discard", ModalResult::DiscardRecovered, Kind::Normal),
+                            ],
+                            &palette,
+                        )
+                    }
+                    Modal::ClearRecent => {
+                        header(
+                            ui,
+                            icons,
+                            Some(Icon::Open),
+                            "Open Recent",
+                            Some("Are you sure you want to clear the Open Recent list?"),
+                            &palette,
+                        );
+                        footer(
+                            ui,
+                            &[
+                                ("Yes", ModalResult::ClearRecent, Kind::Primary),
+                                ("No", ModalResult::Cancelled, Kind::Normal),
                             ],
                             &palette,
                         )

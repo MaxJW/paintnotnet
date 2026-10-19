@@ -67,6 +67,21 @@ pub struct Config {
     /// Rebound shortcuts: command id → chords ("Ctrl+Shift+K"); empty = unbound.
     pub shortcuts: BTreeMap<String, Vec<String>>,
     pub dock: Dock,
+    /// File > Open Recent, newest first (at most `RECENT_MAX`).
+    pub recent_files: Vec<PathBuf>,
+}
+
+/// Files kept in File > Open Recent (paint.net 3.36 `AppWorkspace.defaultMostRecentFilesMax`).
+pub const RECENT_MAX: usize = 8;
+
+impl Config {
+    /// Put `path` at the top of the recent files (once), dropping the oldest past
+    /// `RECENT_MAX`.
+    pub fn note_recent(&mut self, path: &std::path::Path) {
+        self.recent_files.retain(|p| p != path);
+        self.recent_files.insert(0, path.to_owned());
+        self.recent_files.truncate(RECENT_MAX);
+    }
 }
 
 impl Default for Config {
@@ -79,6 +94,7 @@ impl Default for Config {
             autosave_minutes: 1,
             shortcuts: BTreeMap::new(),
             dock: Dock::default(),
+            recent_files: Vec::new(),
         }
     }
 }
@@ -136,6 +152,24 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recent_files_newest_first_once_at_most_eight() {
+        let mut c = Config::default();
+        for i in 0..10 {
+            c.note_recent(Path::new(&format!("/p/{i}.png")));
+        }
+        assert_eq!(c.recent_files.len(), RECENT_MAX);
+        assert_eq!(c.recent_files[0], PathBuf::from("/p/9.png"));
+        assert_eq!(c.recent_files[7], PathBuf::from("/p/2.png"));
+        c.note_recent(Path::new("/p/5.png"));
+        assert_eq!(
+            c.recent_files[0],
+            PathBuf::from("/p/5.png"),
+            "moved to the top"
+        );
+        assert_eq!(c.recent_files.len(), RECENT_MAX, "not twice");
+    }
     use eframe::egui::Key;
 
     #[test]

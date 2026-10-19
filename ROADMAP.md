@@ -878,6 +878,12 @@ this just a great modern paint.net replacement for linux."
         that replaces an existing file. Shown on every Save As, and on Save for JPEG and WebP as before; the flatten
         question now comes after it (it depends on the type). Test: JPEG → PNG on a two-layer image saves
         `picture.png` after the flatten question, and the tab follows the new file
+  - [x] **File > Open Recent** (user, 2026-10-19: "Can we also add a “recents” menu item to the file menu?"): as
+        paint.net 3.36 (`FileMenu.cs`, `AppWorkspace.cs`): the last 8 files opened or saved, newest first, "&1
+        name" …, "(none)" when empty, "Clear this list" asking "Are you sure you want to clear the Open Recent
+        list?"; kept in the settings file; in the KDE global menu too. Opening one already open opens another copy,
+        as 3.36. Not yet: 3.36's thumbnails beside the names. Tests: list rules (unit); open from the list, clear
+        after the question, a save goes to the top (UI)
   - [x] **Menu icons:** 17 items gained one (Save All, Exit, Copy Merged, Copy / Paste Selection, Feather Selection,
         Toggle Layer Visibility, Rotate 180° and the six Go to / Move Layer to items in Layers, Exposure, Highlights /
         Shadows, Temperature and Tint), from 14 more Lucide 1.48.0 SVGs taken unmodified from the repository's tag.

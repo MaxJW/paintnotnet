@@ -99,7 +99,7 @@ pub fn build(menus: &[Menu], cx: &MenuContext, bindings: &[Binding]) -> Vec<Item
                             None => "&Repeat".to_owned(),
                         }
                     } else {
-                        (*label).to_owned()
+                        label.to_string()
                     };
                     add(
                         items,
@@ -124,6 +124,11 @@ pub fn build(menus: &[Menu], cx: &MenuContext, bindings: &[Binding]) -> Vec<Item
                         ..Item::node(dbus_label(label))
                     },
                 ),
+                Entry::Recent => {
+                    let recent = [crate::menus::recent_menu(cx.recent)];
+                    entries(items, parent, &recent, cx, bindings);
+                    continue;
+                }
                 Entry::Sub {
                     label,
                     entries: sub,
@@ -537,6 +542,7 @@ mod tests {
             enabled: &enabled,
             checked: &checked,
             last_effect: Some("Gaussian Blur"),
+            recent: &[],
         };
         build(&menus(), &cx, &crate::commands::bindings())
     }
@@ -597,6 +603,7 @@ mod tests {
             enabled: &enabled,
             checked: &checked,
             last_effect: None,
+            recent: &[],
         };
         let items = build(&[], &cx, &crate::commands::bindings());
         assert_eq!(items.len(), 1, "just the root");
