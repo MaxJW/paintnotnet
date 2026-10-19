@@ -844,20 +844,19 @@ this just a great modern paint.net replacement for linux."
     15.6 ms; WebP 5.4 s in the background. The audit's saves had silently stopped working (a "Flatten" step in
     History has the same label as the flatten prompt's button, and the audit clicked it); it flattens first now
   - [ ] Left: one ~30 ms frame when a whole new 24 MP layer first reaches the GPU (Fill Selection, Gradient landing),
-        the Copy contention frame above. **WebP (needs your decision):** pdn-webp's default effort 7 takes 5.4 s on
+        the Copy contention frame above. **WebP:** default effort now 4 (user, 2026-10-19; pdn-webp's 7 took 5.4 s on
         the photo, 9.7 s with transparency, in the background (status bar shows it); effort 4 takes 1.7–2 s for files
-        1–3 % larger. Lower the default?
-- [ ] **Everything functional:** the disabled commands (Print, Acquire, Color Profile, the image's right-click menu,
+        1–3 % larger)
+- [x] **Everything functional:** the disabled commands (Print, Acquire, Color Profile, the image's right-click menu,
       the shape tool's line style, caps and shape cycling) either work or leave the menus; Sketch Blur (no published
       maths) likewise; every tool option does what it says
   - [x] Repeat Effect (Ctrl+F), Line Style (.), Start / End Cap (, /) and Cycle Shape (A / Shift+A) worked from the
         keyboard but showed disabled in the menus and palette, and the keys acted under any tool: now enabled, and
         only with their tool (caps: Line/Curve; style: Line/Curve and Shapes; shapes: Shapes). Tests
   - [x] Every `ToolSettings` field is read by its tool (none only set by the toolbar)
-  - [ ] **Needs your decision** (still shown disabled): Print, Acquire (scanner/camera), Color Profile, Sketch Blur
-        (no published maths), and the image context menu (Alt+−: neither OpenPDN nor the 5.x pages say what it
-        holds; Save / Save As / Close on an image tab's right-click would be our own)
-- [ ] **Looking great:** review every window and dialog (New Image, Resize, Canvas Size, Layer Properties, Save
+  - [x] Print, Acquire, Color Profile and Sketch Blur left out (user, 2026-10-19: "remove the greyed out ones");
+        image tabs have a right-click menu (Save, Save As, Close; Alt+− for the active image), our own. Test
+- [x] **Looking great:** review every window and dialog (New Image, Resize, Canvas Size, Layer Properties, Save
       options, effect dialogs, Settings, About, Help), in dark and light, at small and large window sizes; menu icons
       where missing; consistent spacing and controls
   - [x] Gallery: `shell_render::dialog_gallery` renders 19 windows and dialogs, dark and light, at 1202×867 and
@@ -889,9 +888,9 @@ this just a great modern paint.net replacement for linux."
         Shadows, Temperature and Tint), from 14 more Lucide 1.48.0 SVGs taken unmodified from the repository's tag.
         Left without: Color Balance, Invert Colors / Alpha, Posterize, Sepia, Transparency and the Effects
         submenus (no fitting Lucide icon). The View menu's toggles had the same round unticked box: square now
-  - [ ] Left: dialog titles still come in two styles (the message boxes' left-aligned heading with an icon; the
-        effect and document dialogs' centred title bar); Help
-- [ ] **Packaged nicely:** build and install the PKGBUILD with makepkg (not yet tried), AppStream metainfo,
+  - [x] One dialog style (user, 2026-10-19): effect, document, Settings and Select Subject dialogs have the message
+        boxes' heading (icon tile and title, no title bar: dragged by their background) and margins
+- [x] **Packaged nicely:** build and install the PKGBUILD with makepkg (not yet tried), AppStream metainfo,
       desktop entry and MIME checked, About with version and licences; README for users
   - [x] `makepkg` builds the package (2026-10-19; 12.9 MB, into scratch dirs); its binary runs the smoke test and
         links only libc/libm/libgcc; `desktop-file-validate` and `xmllint` pass; the licence list was paint.net's
@@ -912,12 +911,15 @@ this just a great modern paint.net replacement for linux."
 - [ ] **To investigate:** a release-build crash on 2026-10-14 inside the NVIDIA driver's `vkDestroyDevice`, while
       `GpuEffects` (holding the last reference to the app's device) was dropped on a non-main thread, probably at
       exit (core dump no longer kept; only the stack in the session transcript)
-- [ ] **Cleaned up:** dead code and leftovers from the recreation, docs, and the 16 GB `target/` once development is
+- [x] **Cleaned up:** dead code and leftovers from the recreation, docs, and the 16 GB `target/` once development is
       done (user, 2026-10-15)
   - [x] paint.net 3.36's icons (`assets/icons/pdn336`, 185 files, unused on main; still on `recreation`), the
         unused Lucide printer/camera icons, two never-called functions (`Surface::tiles_mut_in`,
         `ToolKind::is_selection_tool`) and `xtask install-desktop`. A scan for pub items referenced nowhere finds
         nothing else
+  - [x] `target/` (20.7 GB) cleared with `cargo clean` (2026-10-19; the next build starts from scratch); the old
+        per-user launcher (`~/.local/share/applications/paintnotnet.desktop`, its icon and MIME file) removed in
+        favour of the package
 
 ---
 
