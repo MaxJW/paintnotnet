@@ -850,6 +850,13 @@ this just a great modern paint.net replacement for linux."
 - [ ] **Everything functional:** the disabled commands (Print, Acquire, Color Profile, the image's right-click menu,
       the shape tool's line style, caps and shape cycling) either work or leave the menus; Sketch Blur (no published
       maths) likewise; every tool option does what it says
+  - [x] Repeat Effect (Ctrl+F), Line Style (.), Start / End Cap (, /) and Cycle Shape (A / Shift+A) worked from the
+        keyboard but showed disabled in the menus and palette, and the keys acted under any tool: now enabled, and
+        only with their tool (caps: Line/Curve; style: Line/Curve and Shapes; shapes: Shapes). Tests
+  - [x] Every `ToolSettings` field is read by its tool (none only set by the toolbar)
+  - [ ] **Needs your decision** (still shown disabled): Print, Acquire (scanner/camera), Color Profile, Sketch Blur
+        (no published maths), and the image context menu (Alt+−: neither OpenPDN nor the 5.x pages say what it
+        holds; Save / Save As / Close on an image tab's right-click would be our own)
 - [ ] **Looking great:** review every window and dialog (New Image, Resize, Canvas Size, Layer Properties, Save
       options, effect dialogs, Settings, About, Help), in dark and light, at small and large window sizes; menu icons
       where missing; consistent spacing and controls
