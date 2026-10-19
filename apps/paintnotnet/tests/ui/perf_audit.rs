@@ -546,7 +546,9 @@ fn perf_audit() {
         a.action(&format!("{name}: undo"), |a| a.key(ctrl(), Key::Z));
     }
 
-    // Saving (in the background) in each format.
+    // Saving (in the background) in each format. Flattened first: a "Flatten" step in History
+    // has the same label as the flatten prompt's button, and clicking it went back in history.
+    a.action("Flatten before saving", |a| a.command(Command::Flatten));
     let dir = tempfile::tempdir().unwrap();
     for ext in ["png", "jpg", "webp", "ora", "pdn", "tiff"] {
         let path = dir.path().join(format!("audit.{ext}"));
@@ -556,7 +558,7 @@ fn perf_audit() {
             tab.format = pnn_io::FileFormat::from_path(&path);
             a.key(ctrl(), Key::S);
             a.frames(3);
-            for label in ["Flatten", "OK", "Save"] {
+            for label in ["OK", "Save"] {
                 if let Some(b) = a.h.query_by_label(label) {
                     b.click();
                     a.frames(3);

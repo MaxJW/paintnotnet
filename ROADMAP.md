@@ -839,6 +839,10 @@ this just a great modern paint.net replacement for linux."
   - [x] **Copy / Cut / Copy Merged** build the copy (and Cut's cleared layer) on the effect threads on large images;
         clipboard, layer and the "Cut" step land together (test on a 1.5 MP image). The UI thread's part is now
         < 1 ms, but one frame still renders in ~30 ms while the 96 MB copy runs (memory contention)
+  - **Audit 2026-10-19:** no action has a frame over 100 ms (were 2; 40 on 2026-10-15); the slowest frames are 20–39 ms
+    (Paste into new layer, Resize OK, Gradient finish, effect previews, Canvas Size undo/redo). Saves: worst frame
+    15.6 ms; WebP 5.4 s in the background. The audit's saves had silently stopped working (a "Flatten" step in
+    History has the same label as the flatten prompt's button, and the audit clicked it); it flattens first now
   - [ ] Left: one ~30 ms frame when a whole new 24 MP layer first reaches the GPU (Fill Selection, Gradient landing),
         the Copy contention frame above. **WebP (needs your decision):** pdn-webp's default effort 7 takes 5.4 s on
         the photo, 9.7 s with transparency, in the background (status bar shows it); effort 4 takes 1.7–2 s for files
