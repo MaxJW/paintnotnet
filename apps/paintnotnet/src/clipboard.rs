@@ -253,40 +253,48 @@ impl PaintNotNetApp {
                 let Some(tab) = self.workspace.active_mut() else {
                     return true;
                 };
+                let (w, h) = (tab.doc.width(), tab.doc.height());
                 let selection = tab.doc.selection().clone();
+                let bounds = selection.pixel_bounds(w, h);
                 let mask = tab.selection_mask(antialias);
-                let image = if command == Command::CopyMerged {
-                    copy_region(&flatten(&tab.doc), &selection, mask.as_deref())
-                } else {
-                    copy_region(
-                        &tab.doc.layer(tab.doc.active_index()).surface,
-                        &selection,
-                        mask.as_deref(),
-                    )
-                };
-                let Some(image) = image else { return true };
-                if let Err(e) = self.clipboard.set_image(image) {
-                    self.errors.push(("Clipboard".into(), e));
-                    return true;
-                }
-                if command == Command::Cut {
-                    let Some(tab) = self.workspace.active_mut() else {
-                        return true;
-                    };
-                    let (w, h) = (tab.doc.width(), tab.doc.height());
-                    let mask = match tab.selection_mask(antialias) {
-                        Some(m) => m,
-                        None => {
-                            std::sync::Arc::new(Selection::all(w, h).rasterize(w, h, antialias))
+                let (doc, key, a) = (tab.doc.clone(), tab.key, tab.doc.active_index());
+                let layer = doc.layer(a).id();
+                let (cut, merged) = (command == Command::Cut, command == Command::CopyMerged);
+                // Building the copy, and clearing what a Cut takes, cost ~40 ms each on a
+                // 24 MP photo: on the effect threads for a large image.
+                self.run_click_job(
+                    w as u64 * h as u64,
+                    move || {
+                        let image = if merged {
+                            copy_region(&flatten(&doc), &selection, mask.as_deref())
+                        } else {
+                            copy_region(&doc.layer(a).surface, &selection, mask.as_deref())
+                        };
+                        let cleared = (cut && image.is_some()).then(|| {
+                            let mask = mask.unwrap_or_else(|| {
+                                std::sync::Arc::new(Selection::all(w, h).rasterize(w, h, antialias))
+                            });
+                            let mut s = doc.layer(a).surface.clone();
+                            fill_masked(&mut s, &mask, ColorBgra::TRANSPARENT);
+                            s
+                        });
+                        (image, cleared)
+                    },
+                    move |app, (image, cleared)| {
+                        let Some(image) = image else { return };
+                        if let Err(e) = app.clipboard.set_image(image) {
+                            app.errors.push(("Clipboard".into(), e));
+                            return;
                         }
-                    };
-                    let a = tab.doc.active_index();
-                    let bounds = selection.pixel_bounds(w, h);
-                    tab.doc.modify_layer(a, bounds, |l| {
-                        fill_masked(&mut l.surface, &mask, ColorBgra::TRANSPARENT)
-                    });
-                    tab.commit("Cut", Icon::Cut);
-                }
+                        if let Some(surface) = cleared
+                            && let Some(tab) = app.workspace.tab_mut(key)
+                            && let Some(i) = tab.doc.layers().iter().position(|l| l.id() == layer)
+                        {
+                            tab.doc.modify_layer(i, bounds, |l| l.surface = surface);
+                            tab.commit("Cut", Icon::Cut);
+                        }
+                    },
+                );
             }
             Command::Paste | Command::PasteIntoNewLayer => {
                 let Some(image) = self.clipboard.get_image() else {

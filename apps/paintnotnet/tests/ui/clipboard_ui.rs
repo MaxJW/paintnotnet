@@ -146,3 +146,43 @@ fn copy_and_paste_selection_as_json() {
     let b = doc(&h).selection().pixel_bounds(100, 80).unwrap();
     assert_eq!((b.x, b.y, b.width, b.height), (3, 4, 6, 15));
 }
+
+/// On a large image Cut builds the copy and clears the layer on the effect threads; the
+/// clipboard, the layer and one "Cut" step land together.
+#[test]
+fn large_cut_lands_from_the_background() {
+    use paintnotnet::commands::{Command, Triggered};
+    let (w, hh) = (1500u32, 1000u32);
+    let mut s = Surface::new_transparent(w, hh);
+    s.fill(ColorBgra::WHITE);
+    for y in 10..20 {
+        for x in 10..20 {
+            s.set(x, y, RED);
+        }
+    }
+    let mut h = harness_with(Document::from_layers(
+        w,
+        hh,
+        vec![Layer::new("Background", s)],
+    ));
+    let clip = Rc::new(RefCell::new(MemoryClipboard::default()));
+    h.state_mut().set_clipboard(Box::new(clip.clone()));
+    let tab = h.state_mut().workspace_mut().active_mut().unwrap();
+    tab.doc
+        .set_selection(pnn_core::Selection::rect(10.0, 10.0, 20.0, 20.0));
+    let ctx = h.ctx.clone();
+    h.state_mut().execute(&ctx, Triggered::once(Command::Cut));
+    assert!(h.state().click_job_running(), "in the background");
+    let start = std::time::Instant::now();
+    while h.state().click_job_running() {
+        assert!(start.elapsed().as_secs() < 10, "the cut never landed");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        h.step();
+    }
+    let img = clip.borrow().image.clone().expect("copied");
+    assert_eq!((img.width, img.height), (10, 10));
+    assert_eq!(&img.rgba[0..4], &[255, 0, 0, 255]);
+    assert_eq!(doc(&h).layer(0).surface.get(15, 15).a, 0, "cut out");
+    assert_eq!(doc(&h).layer(0).surface.get(25, 15), ColorBgra::WHITE);
+    assert_eq!(history_names(&h).last().unwrap(), "Cut");
+}

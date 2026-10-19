@@ -836,9 +836,13 @@ this just a great modern paint.net replacement for linux."
         frame before); it lands only if the gradient is still the same; Enter / Finish / a new gradient wait for it
         rather than render twice. Release frames < 1 ms (were 39 ms). Test: the background render on a 1.5 MP image
         equals rendering it at once, pixel for pixel
-  - [ ] Left: Resize's OK frame (50 ms), Gradient finish (37 ms bake), Fill Selection
-        (30 ms), Flip/Rotate Layer (26–29 ms) on the UI thread; WebP saving takes 17 s in the background at default
-        effort
+  - [x] **Copy / Cut / Copy Merged** build the copy (and Cut's cleared layer) on the effect threads on large images;
+        clipboard, layer and the "Cut" step land together (test on a 1.5 MP image). The UI thread's part is now
+        < 1 ms, but one frame still renders in ~30 ms while the 96 MB copy runs (memory contention)
+  - [ ] Left: one ~30 ms frame when a whole new 24 MP layer first reaches the GPU (Fill Selection, Gradient landing),
+        the Copy contention frame above. **WebP (needs your decision):** pdn-webp's default effort 7 takes 5.4 s on
+        the photo, 9.7 s with transparency, in the background (status bar shows it); effort 4 takes 1.7–2 s for files
+        1–3 % larger. Lower the default?
 - [ ] **Everything functional:** the disabled commands (Print, Acquire, Color Profile, the image's right-click menu,
       the shape tool's line style, caps and shape cycling) either work or leave the menus; Sketch Blur (no published
       maths) likewise; every tool option does what it says
