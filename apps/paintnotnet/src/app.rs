@@ -293,6 +293,11 @@ impl PaintNotNetApp {
         self.doc_job.is_some()
     }
 
+    /// The live (still editable) gradient's start and end, in image coordinates.
+    pub fn live_gradient(&self) -> Option<([f32; 2], [f32; 2])> {
+        self.gradient.as_ref().map(|g| (g.start, g.end))
+    }
+
     /// A tool click's work (Magic Wand, Paint Bucket) is running in the background.
     pub fn click_job_running(&self) -> bool {
         self.click_job.is_some()

@@ -831,6 +831,11 @@ this just a great modern paint.net replacement for linux."
         still takes ~29 ms on the photo outside the app's own code (uploading ~370 new tiles; undo, whose tiles the GPU
         saw before, takes 10 ms). Test: both on a 1.5 MP image land as one step with the right pixels.
         Resize's OK frame is now 12.6 ms (was 50)
+  - [x] **Gradient render in the background:** on a large image the gradient is rendered into the layer on the effect
+        threads (the GPU keeps drawing it) when the drag ends or the pointer pauses mid-drag (each pause cost a ~40 ms
+        frame before); it lands only if the gradient is still the same; Enter / Finish / a new gradient wait for it
+        rather than render twice. Release frames < 1 ms (were 39 ms). Test: the background render on a 1.5 MP image
+        equals rendering it at once, pixel for pixel
   - [ ] Left: Resize's OK frame (50 ms), Gradient finish (37 ms bake), Fill Selection
         (30 ms), Flip/Rotate Layer (26–29 ms) on the UI thread; WebP saving takes 17 s in the background at default
         effort

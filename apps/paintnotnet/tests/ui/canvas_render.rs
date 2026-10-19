@@ -274,3 +274,92 @@ fn live_gradient_draws_on_the_gpu_then_lands_in_the_layer() {
         );
     }
 }
+
+/// On a large image the gradient is rendered into the layer on the effect threads after the
+/// drag (the GPU shows it meanwhile), with exactly the pixels of rendering it at once.
+#[test]
+fn large_gradient_lands_from_the_background() {
+    use eframe::egui::{Event, Modifiers, PointerButton, Pos2};
+    let (w, hh) = (1500u32, 1000u32);
+    let mut s = Surface::new_transparent(w, hh);
+    s.fill(ColorBgra::from_rgba(220, 40, 40, 255));
+    let mut h = Harness::builder()
+        .with_size(vec2(960.0, 640.0))
+        .wgpu()
+        .build_eframe(|cc| PaintNotNetApp::new(cc, None, Vec::new()));
+    h.state_mut().workspace_mut().add(
+        Document::from_layers(w, hh, vec![Layer::new("Background", s.clone())]),
+        None,
+        None,
+    );
+    h.step();
+    h.state_mut().set_tool(pnn_tools::ToolKind::Gradient);
+    h.step();
+    let to_screen = |h: &Harness<'_, PaintNotNetApp>, x: f64, y: f64| {
+        let rect = h.state().canvas().rect.unwrap();
+        let view = h.state().workspace().active().unwrap().view.unwrap();
+        let s = view.image_to_screen([x, y], [rect.width() as f64, rect.height() as f64]);
+        Pos2::new(rect.min.x + s[0] as f32, rect.min.y + s[1] as f32)
+    };
+    let press = |pressed, pos| Event::PointerButton {
+        pos,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    let start = to_screen(&h, 200.0, 500.0);
+    h.event(Event::PointerMoved(start));
+    h.step();
+    h.event(press(true, start));
+    h.step();
+    for x in [600.0, 1000.0, 1300.0] {
+        h.event(Event::PointerMoved(to_screen(&h, x, 500.0)));
+        h.step();
+    }
+    h.event(press(false, to_screen(&h, 1300.0, 500.0)));
+    h.step();
+    let layer = |h: &Harness<'_, PaintNotNetApp>| {
+        h.state()
+            .workspace()
+            .active()
+            .unwrap()
+            .doc
+            .layer(0)
+            .surface
+            .to_pixels()
+    };
+    let before = s.to_pixels();
+    let t = std::time::Instant::now();
+    while layer(&h) == before {
+        assert!(t.elapsed().as_secs() < 10, "the render never landed");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        h.step();
+    }
+    let (a, b) = h.state().live_gradient().expect("still editable");
+    let st = h.state().settings();
+    let g = pnn_tools::gradient::Gradient {
+        kind: st.gradient_type,
+        repeat: st.gradient_repeat,
+        start: a,
+        end: b,
+        start_color: st.primary,
+        end_color: st.secondary,
+        alpha_only: false,
+    };
+    let op = match st.blend {
+        pnn_tools::ToolBlend::Overwrite => pnn_tools::gradient::GradientOp::Overwrite,
+        pnn_tools::ToolBlend::Blend(m) => pnn_tools::gradient::GradientOp::Blend(m),
+    };
+    let mut want = s.clone();
+    let all = pnn_core::Rect {
+        x: 0,
+        y: 0,
+        width: w,
+        height: hh,
+    };
+    g.render(&mut want, &s, None, all, op);
+    assert!(
+        layer(&h) == want.to_pixels(),
+        "the background render matches"
+    );
+}

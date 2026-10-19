@@ -51,6 +51,14 @@ pub struct GradientSession {
     rendered: Option<(Gradient, GradientOp)>,
     /// What is on screen: `rendered`, or what the GPU draws while the nubs move.
     shown: Option<(Gradient, GradientOp)>,
+    /// A large image's render on the effect threads (the GPU keeps drawing it meanwhile).
+    baking: Option<Bake>,
+}
+
+/// A gradient being rendered into the layer in the background.
+struct Bake {
+    spec: (Gradient, GradientOp),
+    rx: std::sync::mpsc::Receiver<Surface>,
 }
 
 impl PaintNotNetApp {
@@ -215,13 +223,15 @@ impl PaintNotNetApp {
 
     /// While the gradient keeps changing (a nub or a colour being dragged) the GPU draws it
     /// over the layer's pre-gradient pixels and the layer is left alone; once it holds still
-    /// for a frame, or with `bake`, it is rendered into the layer.
+    /// for a frame, or with `bake`, it is rendered into the layer. On a large image that
+    /// render (~40 ms for a 24 MP photo) runs on the effect threads while the GPU keeps
+    /// drawing; it lands if the gradient is still the same. `bake` waits for it.
     fn refresh_gradient_now(&mut self, bake: bool) {
         let Some(session) = self.gradient.as_ref() else {
             return;
         };
         let spec = self.gradient_spec(session);
-        let gpu = self.gpu_preview;
+        let (gpu, ctx) = (self.gpu_preview, self.ctx.clone());
         let Some(session) = self.gradient.as_mut() else {
             return;
         };
@@ -229,6 +239,26 @@ impl PaintNotNetApp {
             self.gradient = None;
             return;
         };
+        if let Some(job) = &session.baking {
+            use std::sync::mpsc::TryRecvError;
+            let result = if bake && job.spec == spec {
+                job.rx.recv().map_err(|_| TryRecvError::Disconnected)
+            } else {
+                job.rx.try_recv()
+            };
+            match result {
+                Ok(surface) => {
+                    if job.spec == spec {
+                        tab.doc
+                            .modify_layer(session.layer, None, |l| l.surface = surface);
+                        session.rendered = Some(spec);
+                    }
+                    session.baking = None;
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => session.baking = None,
+            }
+        }
         if session.rendered == Some(spec) {
             session.shown = Some(spec);
             tab.gpu.preview = None;
@@ -256,6 +286,23 @@ impl PaintNotNetApp {
             width: w,
             height: h,
         };
+        if gpu && !bake && w as u64 * h as u64 > crate::selection_tools::CLICK_AT_ONCE {
+            if session.baking.as_ref().is_none_or(|b| b.spec != spec) {
+                let (before, selection) = (session.before.clone(), session.selection.clone());
+                let (tx, rx) = std::sync::mpsc::channel();
+                crate::effect_runner::effect_pool().spawn(move || {
+                    let mut layer = before.clone();
+                    spec.0
+                        .render(&mut layer, &before, selection.as_deref(), r, spec.1);
+                    let _ = tx.send(layer);
+                    if let Some(ctx) = ctx {
+                        ctx.request_repaint();
+                    }
+                });
+                session.baking = Some(Bake { spec, rx });
+            }
+            return;
+        }
         let (before, selection) = (&session.before, session.selection.as_deref());
         tab.doc.modify_layer(session.layer, None, |l| {
             spec.0.render(&mut l.surface, before, selection, r, spec.1)
@@ -321,6 +368,7 @@ impl PaintNotNetApp {
                     grip: Some(Grip::New),
                     rendered: None,
                     shown: None,
+                    baking: None,
                 });
                 self.refresh_gradient();
             }
@@ -345,8 +393,9 @@ impl PaintNotNetApp {
                         Some(Grip::Start) => s.start = p,
                         _ => s.end = p,
                     }
-                    // The drag ended: into the layer; keep the constrained points.
-                    self.refresh_gradient_now(true);
+                    // The drag ended: into the layer (in the background on a large image, while
+                    // the GPU shows it); keep the constrained points.
+                    self.refresh_gradient_now(false);
                     if let Some(s) = self.gradient.as_mut()
                         && let Some((g, _)) = s.shown
                     {
