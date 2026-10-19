@@ -725,14 +725,9 @@ impl PaintNotNetApp {
                     }
                 }
                 ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    if ui.add_enabled(ready, egui::Button::new("OK")).clicked() {
-                        outcome = Some(true);
-                    }
-                    if ui.button("Cancel").clicked() {
-                        outcome = Some(false);
-                    }
-                });
+                if let Some(ok) = crate::dialogs::ok_cancel(ui, ready) {
+                    outcome = Some(ok);
+                }
             },
         );
         let (enter, esc) = ctx.input(|i| {
@@ -851,12 +846,11 @@ fn remove_background_ui(
             &[],
         );
         rb.softness = soft.float();
-        ui.checkbox(&mut rb.invert, "Keep the background instead");
-        ui.checkbox(&mut rb.clean_edges, "Clean up edge colours")
-            .on_hover_text(
-                "Where the edge is soft (hair, fur), use the colours of what is kept, without a \
+        crate::controls::checkbox(ui, &mut rb.invert, "Keep the background instead");
+        crate::controls::checkbox(ui, &mut rb.clean_edges, "Clean up edge colours").on_hover_text(
+            "Where the edge is soft (hair, fur), use the colours of what is kept, without a \
              fringe of what was removed",
-            );
+        );
     });
     download
 }
@@ -896,7 +890,7 @@ fn property_ui(ui: &mut egui::Ui, p: &PropDef, v: &mut Value, layers: &[&str]) {
         }
         PropKind::Bool => {
             let mut b = v.bool();
-            ui.checkbox(&mut b, name);
+            crate::controls::checkbox(ui, &mut b, name);
             *v = Value::Bool(b);
         }
         PropKind::Choice(options) => {
@@ -1126,7 +1120,7 @@ fn curves_ui(ui: &mut egui::Ui, c: &mut Curves, grab: &mut Vec<Option<u8>>) -> b
     if !c.luminosity {
         ui.horizontal(|ui| {
             for (i, name) in ["Red", "Green", "Blue"].iter().enumerate() {
-                ui.checkbox(&mut c.mask[i], *name);
+                crate::controls::checkbox(ui, &mut c.mask[i], *name);
             }
         });
     }
@@ -1266,7 +1260,7 @@ fn levels_ui(
     });
     ui.horizontal(|ui| {
         for (c, name) in order {
-            ui.checkbox(&mut l.mask[c], name);
+            crate::controls::checkbox(ui, &mut l.mask[c], name);
         }
         ui.separator();
         if ui.button("Auto").clicked() {

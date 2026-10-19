@@ -24,7 +24,12 @@ pub enum ImageListAction {
     Move { from: usize, to: usize },
 }
 
-fn name_galley(ui: &egui::Ui, tab: &DocumentTab, color: Color32) -> std::sync::Arc<egui::Galley> {
+fn name_galley(
+    ui: &egui::Ui,
+    tab: &DocumentTab,
+    color: Color32,
+    max: f32,
+) -> std::sync::Arc<egui::Galley> {
     let title = if tab.is_dirty() {
         format!("{} •", tab.title())
     } else {
@@ -34,21 +39,24 @@ fn name_galley(ui: &egui::Ui, tab: &DocumentTab, color: Color32) -> std::sync::A
         title,
         egui::TextFormat::simple(egui::FontId::proportional(theme::text::BODY), color),
     );
-    job.wrap = egui::text::TextWrapping::truncate_at_width(NAME_MAX);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(max);
     ui.painter().layout_job(job)
 }
 
 /// The tabs, centred in the space `ui` has left (scrolling when they don't fit).
 pub fn image_list(ui: &mut egui::Ui, ws: &Workspace, palette: &Palette) -> Vec<ImageListAction> {
     let mut actions = Vec::new();
+    let gap = 6.0;
+    // Names shorten (with "…") to share the room before the tabs scroll: one tab in a narrow
+    // window was cut off mid-word.
+    let chrome = 4.0 + THUMB_BOX.x + 8.0 + 4.0 + CLOSE + 4.0;
+    let n = ws.tabs().len().max(1) as f32;
+    let name_max = ((ui.available_width() - gap * (n - 1.0)) / n - chrome).clamp(24.0, NAME_MAX);
     let widths: Vec<f32> = ws
         .tabs()
         .iter()
-        .map(|t| {
-            4.0 + THUMB_BOX.x + 8.0 + name_galley(ui, t, palette.text).size().x + 4.0 + CLOSE + 4.0
-        })
+        .map(|t| chrome + name_galley(ui, t, palette.text, name_max).size().x)
         .collect();
-    let gap = 6.0;
     let total = widths.iter().sum::<f32>() + gap * widths.len().saturating_sub(1) as f32;
     let room = ui.available_width();
     egui::ScrollArea::horizontal()
@@ -64,7 +72,7 @@ pub fn image_list(ui: &mut egui::Ui, ws: &Workspace, palette: &Palette) -> Vec<I
                 for (i, (tab, &w)) in ws.tabs().iter().zip(&widths).enumerate() {
                     let selected = ws.active_index() == Some(i);
                     let id = egui::Id::new(("image_list_item", tab.key));
-                    let (rect, close_rect) = tab_chip(ui, tab, selected, w, palette);
+                    let (rect, close_rect) = tab_chip(ui, tab, selected, w, name_max, palette);
                     // Clicks and drags both: a press only becomes a drag (reordering) once the
                     // pointer moves, so a plain click switches images. (egui's
                     // `dnd_drag_source` senses drags only, which turned every click into one.)
@@ -110,6 +118,7 @@ fn tab_chip(
     tab: &DocumentTab,
     selected: bool,
     width: f32,
+    name_max: f32,
     palette: &Palette,
 ) -> (Rect, Option<Rect>) {
     let (rect, _) = ui.allocate_exact_size(vec2(width, TAB_HEIGHT), Sense::hover());
@@ -141,7 +150,7 @@ fn tab_chip(
     } else {
         palette.weak_text
     };
-    let galley = name_galley(ui, tab, text_color);
+    let galley = name_galley(ui, tab, text_color, name_max);
     ui.painter().galley(
         pos2(
             thumb_box.max.x + 8.0,

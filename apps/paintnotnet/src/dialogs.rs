@@ -241,7 +241,7 @@ impl Modal {
                                         .on_hover_text("Higher is slower and smaller");
                                     ui.end_row();
                                     ui.label("");
-                                    ui.checkbox(&mut options.webp_lossless, "Lossless");
+                                    crate::controls::checkbox(ui, &mut options.webp_lossless, "Lossless");
                                     ui.end_row();
                                 }
                                 _ => {
@@ -434,6 +434,35 @@ fn field_label(ui: &mut egui::Ui, text: &str, palette: &theme::Palette) {
 }
 
 /// Buttons on the right, the first (primary) rightmost. Enter picks the primary one.
+/// The OK / Cancel row of the effect and document dialogs, styled as the message boxes'
+/// `footer`: right-aligned, Cancel then the accent OK. `Some(true)`: OK.
+pub fn ok_cancel(ui: &mut egui::Ui, ok_enabled: bool) -> Option<bool> {
+    let palette = theme::palette(ui.ctx());
+    let mut picked = None;
+    // A horizontal row keeps the right-aligned buttons from claiming the window's whole
+    // height (an auto-sized window would grow to fill the screen).
+    ui.horizontal(|ui| {
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            let size = egui::vec2(84.0, 32.0);
+            let ok = egui::Button::new(
+                egui::RichText::new("OK")
+                    .color(palette.on_accent)
+                    .font(egui::FontId::new(theme::text::BODY, theme::medium())),
+            )
+            .fill(palette.accent)
+            .min_size(size);
+            if ui.add_enabled(ok_enabled, ok).clicked() {
+                picked = Some(true);
+            }
+            if ui.add(egui::Button::new("Cancel").min_size(size)).clicked() {
+                picked = Some(false);
+            }
+        });
+    });
+    picked
+}
+
 fn footer(
     ui: &mut egui::Ui,
     choices: &[(&str, ModalResult, Kind)],

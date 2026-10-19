@@ -860,6 +860,19 @@ this just a great modern paint.net replacement for linux."
 - [ ] **Looking great:** review every window and dialog (New Image, Resize, Canvas Size, Layer Properties, Save
       options, effect dialogs, Settings, About, Help), in dark and light, at small and large window sizes; menu icons
       where missing; consistent spacing and controls
+  - [x] Gallery: `shell_render::dialog_gallery` renders 19 windows and dialogs, dark and light, at 1202×867 and
+        860×600 (`PNN_RENDER_DUMP=<dir>`). Fixed from it (2026-10-19):
+        - Resize tripped an egui assertion (`add_space` inside a grid; debug builds panicked, release mis-laid it)
+        - dark dialogs over a white image came out the colour of the controls: unchecked boxes, radio buttons and
+          slider rails vanished. Dialogs now have their own nearly opaque glass (`dialog_glass`), as dark as the
+          docked panels whatever the image
+        - unticked checkboxes were circles like radio buttons (the controls' 8 pt radius): 3 pt now
+        - effect and document dialogs share the message boxes' button row (right-aligned, Cancel, accent OK)
+        - narrow window: the title bar's right group ran over the menus (the search box becomes a magnifier when
+          tabs would have < 200 px), tab names shorten with "…" before scrolling, and the options bar's quick
+          buttons and brush-size presets wrap instead of running under the right dock
+  - [ ] Left: dialog titles still come in two styles (the message boxes' left-aligned heading with an icon; the
+        effect and document dialogs' centred title bar); Help; menu icons
 - [ ] **Packaged nicely:** build and install the PKGBUILD with makepkg (not yet tried), AppStream metainfo,
       desktop entry and MIME checked, About with version and licences; README for users
 - [ ] **Cleaned up:** dead code and leftovers from the recreation, docs, and the 16 GB `target/` once development is

@@ -4,7 +4,7 @@
 //!
 //! Wording follows paint.net 3.36 `Strings.resx` (CC BY-NC-ND, used unmodified).
 
-use eframe::egui::{self, Align, Layout, vec2};
+use eframe::egui::{self, vec2};
 use pnn_core::selection::{Feather, FeatherPosition, FeatherProfile};
 use pnn_core::transform::{Anchor, Resampling};
 use pnn_core::{BlendMode, ColorBgra, Document};
@@ -115,29 +115,31 @@ impl SizeFields {
         ui.add_enabled_ui(!self.by_percent, |ui| {
             ui.horizontal(|ui| {
                 ui.add_space(20.0);
-                changed |= ui
-                    .checkbox(&mut self.keep_aspect, "Maintain aspect ratio")
-                    .changed();
+                changed |=
+                    crate::controls::checkbox(ui, &mut self.keep_aspect, "Maintain aspect ratio")
+                        .changed();
             });
             let (ow, oh) = (self.width, self.height);
-            egui::Grid::new("size_fields")
-                .num_columns(4)
-                .show(ui, |ui| {
-                    ui.add_space(20.0);
-                    ui.label("Width:");
-                    changed |= ui
-                        .add(egui::DragValue::new(&mut self.width).range(1..=MAX_DIMENSION))
-                        .changed();
-                    ui.label(format!("pixels  ({:.2} in)", self.width as f64 / dpi));
-                    ui.end_row();
-                    ui.add_space(20.0);
-                    ui.label("Height:");
-                    changed |= ui
-                        .add(egui::DragValue::new(&mut self.height).range(1..=MAX_DIMENSION))
-                        .changed();
-                    ui.label(format!("pixels  ({:.2} in)", self.height as f64 / dpi));
-                    ui.end_row();
-                });
+            // Indented as a whole (`add_space` inside a grid isn't a cell: egui asserts).
+            ui.horizontal(|ui| {
+                ui.add_space(20.0);
+                egui::Grid::new("size_fields")
+                    .num_columns(3)
+                    .show(ui, |ui| {
+                        ui.label("Width:");
+                        changed |= ui
+                            .add(egui::DragValue::new(&mut self.width).range(1..=MAX_DIMENSION))
+                            .changed();
+                        ui.label(format!("pixels  ({:.2} in)", self.width as f64 / dpi));
+                        ui.end_row();
+                        ui.label("Height:");
+                        changed |= ui
+                            .add(egui::DragValue::new(&mut self.height).range(1..=MAX_DIMENSION))
+                            .changed();
+                        ui.label(format!("pixels  ({:.2} in)", self.height as f64 / dpi));
+                        ui.end_row();
+                    });
+            });
             if self.keep_aspect {
                 let (w0, h0) = (self.original.0 as f64, self.original.1 as f64);
                 if self.width != ow {
@@ -371,7 +373,8 @@ impl DocDialog {
                             ui.label("Name:");
                             changed |= ui.text_edit_singleline(&mut p.name).changed();
                         });
-                        changed |= ui.checkbox(&mut p.visible, "Visible").changed();
+                        changed |=
+                            crate::controls::checkbox(ui, &mut p.visible, "Visible").changed();
                         ui.add_space(6.0);
                         ui.label(egui::RichText::new("Blending").strong());
                         ui.horizontal(|ui| {
@@ -405,9 +408,9 @@ impl DocDialog {
                                 });
                         });
                         changed |= r.fields.ui(ui, dpi);
-                        changed |= ui
-                            .checkbox(&mut r.gamma_correct, "Gamma correction")
-                            .changed();
+                        changed |=
+                            crate::controls::checkbox(ui, &mut r.gamma_correct, "Gamma correction")
+                                .changed();
                     }
                     Kind::CanvasSize(c) => {
                         changed |= c.fields.ui(ui, dpi);
@@ -469,9 +472,12 @@ impl DocDialog {
                                 .on_hover_text("Alpha at or above this counts as the object")
                                 .changed();
                         });
-                        changed |= ui
-                            .checkbox(&mut fo.canvas_edge, "Feather along the canvas edge too")
-                            .changed();
+                        changed |= crate::controls::checkbox(
+                            ui,
+                            &mut fo.canvas_edge,
+                            "Feather along the canvas edge too",
+                        )
+                        .changed();
                     }
                     Kind::RotateZoom(rz) => {
                         ui.label(egui::RichText::new("Roll / Rotate").strong());
@@ -502,10 +508,14 @@ impl DocDialog {
                                     .suffix("x"),
                             )
                             .changed();
-                        changed |= ui.checkbox(&mut rz.tiling, "Tiling").changed();
-                        changed |= ui
-                            .checkbox(&mut rz.preserve_background, "Preserve background")
-                            .changed();
+                        changed |=
+                            crate::controls::checkbox(ui, &mut rz.tiling, "Tiling").changed();
+                        changed |= crate::controls::checkbox(
+                            ui,
+                            &mut rz.preserve_background,
+                            "Preserve background",
+                        )
+                        .changed();
                         if ui.button("Reset All").clicked() {
                             *rz = RotateZoom::default();
                             changed = true;
@@ -513,18 +523,11 @@ impl DocDialog {
                     }
                 }
                 ui.add_space(8.0);
-                // A horizontal row keeps the right-aligned buttons from claiming the window's
-                // whole height (an auto-sized window would grow to fill the screen).
-                ui.horizontal(|ui| {
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.button("Cancel").clicked() {
-                            outcome = Some(Outcome::Cancel);
-                        }
-                        if ui.button("OK").clicked() {
-                            outcome = Some(Outcome::Ok);
-                        }
-                    });
-                });
+                match crate::dialogs::ok_cancel(ui, true) {
+                    Some(true) => outcome = Some(Outcome::Ok),
+                    Some(false) => outcome = Some(Outcome::Cancel),
+                    None => {}
+                }
             },
         );
         let (enter, escape) = ctx.input(|i| {

@@ -68,8 +68,12 @@ pub struct Palette {
     pub band: Color32,
     /// Panel and dialog body where no glass is drawn (opaque).
     pub window: Color32,
-    /// Panel and dialog body over the blurred canvas (translucent).
+    /// Panel body over the blurred canvas (translucent).
     pub glass: Color32,
+    /// Dialog body over the blurred canvas: nearly opaque, as dialogs float over the image
+    /// (with `glass`, a dark dialog over a white image came out the colour of `control`, and
+    /// unchecked boxes, radio buttons and slider rails vanished).
+    pub dialog_glass: Color32,
     pub window_border: Color32,
     /// Sunken fields: text boxes, lists.
     pub list: Color32,
@@ -115,6 +119,7 @@ impl Palette {
             band: Color32::from_rgb(0x10, 0x11, 0x14),
             window: Color32::from_rgb(0x1e, 0x20, 0x26),
             glass: rgba(0x1e, 0x20, 0x26, 0.62),
+            dialog_glass: rgba(0x1e, 0x20, 0x26, 0.92),
             window_border: rgba(255, 255, 255, 0.08),
             list: Color32::from_rgb(0x17, 0x18, 0x1c),
             control: Color32::from_rgb(0x36, 0x38, 0x3f),
@@ -141,6 +146,7 @@ impl Palette {
             band: Color32::from_rgb(0xf3, 0xf4, 0xf6),
             window: Color32::from_rgb(0xfb, 0xfb, 0xfc),
             glass: rgba(0xff, 0xff, 0xff, 0.66),
+            dialog_glass: rgba(0xff, 0xff, 0xff, 0.9),
             window_border: rgba(0x14, 0x1e, 0x32, 0.10),
             list: Color32::from_rgb(0xec, 0xee, 0xf1),
             control: Color32::from_rgb(0xd3, 0xd7, 0xde),

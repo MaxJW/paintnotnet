@@ -1067,3 +1067,112 @@ fn move_pivot_render() {
         image.save(format!("{dir}/shell-move-rotated.png")).unwrap();
     }
 }
+
+/// Every window and dialog, dark and light, in a large and a small window, for review
+/// (`PNN_RENDER_DUMP=<dir>` writes `dlg-<name>-<size>-<theme>.png`; nothing without it).
+#[test]
+fn dialog_gallery() {
+    use eframe::egui::{Key, Modifiers, ThemePreference};
+    use pnn_effects::Adjustment;
+    let Ok(dir) = std::env::var("PNN_RENDER_DUMP") else {
+        return;
+    };
+    let effect = |name: &str| {
+        let i = pnn_effects::EFFECTS
+            .iter()
+            .position(|e| e.name == name)
+            .unwrap_or_else(|| panic!("no effect {name}"));
+        Command::Effect(pnn_effects::EffectId(i as u16))
+    };
+    let shots: Vec<(&str, Option<Command>)> = vec![
+        ("new-image", Some(Command::NewImage)),
+        ("resize", Some(Command::Resize)),
+        ("canvas-size", Some(Command::CanvasSize)),
+        ("rotate-zoom", Some(Command::RotateZoom)),
+        ("layer-properties", Some(Command::LayerProperties)),
+        ("feather-selection", Some(Command::FeatherSelection)),
+        ("feather-object", Some(effect("Feather Object"))),
+        ("gaussian-blur", Some(effect("Gaussian Blur"))),
+        ("drop-shadow", Some(effect("Drop Shadow"))),
+        ("levels", Some(Command::Adjustment(Adjustment::Levels))),
+        ("curves", Some(Command::Adjustment(Adjustment::Curves))),
+        (
+            "hue-saturation",
+            Some(Command::Adjustment(Adjustment::HueSaturation)),
+        ),
+        ("remove-background", Some(effect("Remove Background"))),
+        ("settings", Some(Command::Settings)),
+        ("about", Some(Command::About)),
+        ("save-jpeg", None),
+        ("save-webp", None),
+        ("flatten-prompt", None),
+        ("unsaved-close", None),
+    ];
+    let tmp = tempfile::tempdir().unwrap();
+    for (size, w, hh) in [("large", 1202.0, 867.0), ("small", 860.0, 600.0)] {
+        for (theme, pref) in [
+            ("dark", ThemePreference::Dark),
+            ("light", ThemePreference::Light),
+        ] {
+            for (name, command) in &shots {
+                let mut h = Harness::builder()
+                    .with_size(vec2(w, hh))
+                    .wgpu()
+                    .build_eframe(|cc| PaintNotNetApp::new(cc, None, Vec::new()));
+                h.ctx.set_theme(pref);
+                h.state_mut()
+                    .workspace_mut()
+                    .add(Document::new_blank(800, 600), None, None);
+                let tab = h.state_mut().workspace_mut().active_mut().unwrap();
+                tab.doc
+                    .set_selection(pnn_core::Selection::ellipse(200.0, 150.0, 600.0, 450.0));
+                h.step();
+                h.step();
+                let ctx = h.ctx.clone();
+                if h.state().diagnostics().visible() {
+                    h.state_mut()
+                        .execute(&ctx, Triggered::once(Command::ToggleDiagnostics));
+                }
+                let ctrl = Modifiers {
+                    ctrl: true,
+                    command: true,
+                    ..Modifiers::NONE
+                };
+                match (command, *name) {
+                    (Some(c), _) => h.state_mut().execute(&ctx, Triggered::once(*c)),
+                    (None, "save-jpeg" | "save-webp" | "flatten-prompt") => {
+                        let ext = if *name == "save-webp" { "webp" } else { "jpg" };
+                        if *name == "flatten-prompt" {
+                            h.state_mut()
+                                .execute(&ctx, Triggered::once(Command::AddNewLayer));
+                        }
+                        let path = tmp.path().join(format!("gallery.{ext}"));
+                        let tab = h.state_mut().workspace_mut().active_mut().unwrap();
+                        tab.format = pnn_io::FileFormat::from_path(&path);
+                        tab.path = Some(path);
+                        h.state_mut()
+                            .execute(&ctx, Triggered::once(Command::AddNewLayer));
+                        if *name != "flatten-prompt" {
+                            h.state_mut()
+                                .execute(&ctx, Triggered::once(Command::Flatten));
+                        }
+                        press(&mut h, ctrl, Key::S);
+                    }
+                    _ => {
+                        h.state_mut()
+                            .execute(&ctx, Triggered::once(Command::AddNewLayer));
+                        h.state_mut().execute(&ctx, Triggered::once(Command::Close));
+                    }
+                }
+                for _ in 0..6 {
+                    h.step();
+                }
+                if let Ok(image) = h.render() {
+                    image
+                        .save(format!("{dir}/dlg-{name}-{size}-{theme}.png"))
+                        .unwrap();
+                }
+            }
+        }
+    }
+}

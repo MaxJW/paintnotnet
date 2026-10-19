@@ -1356,9 +1356,14 @@ impl PaintNotNetApp {
                     )
                     .response
                     .rect;
+                // Only right of the menus: in a narrow window it ran over them.
+                let right_space =
+                    egui::Rect::from_min_max(egui::pos2(left.max.x + 8.0, full.min.y), full.max);
                 let right = ui
                     .scope_builder(
-                        row(egui::Layout::right_to_left(egui::Align::Center)),
+                        egui::UiBuilder::new()
+                            .max_rect(right_space)
+                            .layout(egui::Layout::right_to_left(egui::Align::Center)),
                         |ui| {
                             ui.spacing_mut().item_spacing.x = 2.0;
                             ui.spacing_mut().button_padding = egui::vec2(6.0, 6.0);
@@ -1413,8 +1418,14 @@ impl PaintNotNetApp {
                                 }
                             }
                             ui.separator();
-                            if search_field(ui, &palette).clicked() {
-                                picked.set(Some(Command::CommandPalette));
+                            // The full box while it leaves room for the image tabs; else
+                            // just the magnifier.
+                            let room = ui.available_width();
+                            if room >= 32.0 {
+                                let compact = room < SEARCH_WIDTH + MIN_TABS_WIDTH;
+                                if search_field(ui, &palette, compact).clicked() {
+                                    picked.set(Some(Command::CommandPalette));
+                                }
                             }
                         },
                     )
@@ -1468,9 +1479,7 @@ impl PaintNotNetApp {
         let mut action = None;
         panels.show_options(ctx, &palette, |ui| {
             ui.horizontal_wrapped(|ui| {
-                quick = crate::controls::group(ui, "quick buttons", |ui| {
-                    toolbar::row1(ui, &self.icons, &availability, &checked)
-                });
+                quick = toolbar::row1(ui, &self.icons, &availability, &checked);
                 ui.separator();
                 action = toolbar::row2(
                     ui,
@@ -1614,9 +1623,16 @@ fn logo(ui: &mut egui::Ui, palette: &theme::Palette) {
     ui.add_space(6.0);
 }
 
-/// The title bar's "Search commands" box; clicking it opens the command palette.
-fn search_field(ui: &mut egui::Ui, palette: &theme::Palette) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(220.0, 28.0), egui::Sense::click());
+/// Width of the title bar's search box.
+const SEARCH_WIDTH: f32 = 220.0;
+/// Space kept for the image tabs before the search box shrinks to its magnifier.
+const MIN_TABS_WIDTH: f32 = 200.0;
+
+/// The title bar's "Search commands" box; clicking it opens the command palette. `compact`:
+/// only the magnifier (narrow windows).
+fn search_field(ui: &mut egui::Ui, palette: &theme::Palette, compact: bool) -> egui::Response {
+    let width = if compact { 32.0 } else { SEARCH_WIDTH };
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::click());
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Search commands")
     });
@@ -1638,6 +1654,10 @@ fn search_field(ui: &mut egui::Ui, palette: &theme::Palette) -> egui::Response {
     ui.painter().circle_stroke(c, 4.5, stroke);
     ui.painter()
         .line_segment([c + egui::vec2(3.3, 3.3), c + egui::vec2(6.5, 6.5)], stroke);
+    let keys = Command::CommandPalette.shortcut_text().unwrap_or_default();
+    if compact {
+        return response.on_hover_text(format!("Search commands ({keys})"));
+    }
     ui.painter().text(
         egui::pos2(rect.min.x + 28.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
@@ -1645,7 +1665,6 @@ fn search_field(ui: &mut egui::Ui, palette: &theme::Palette) -> egui::Response {
         egui::FontId::proportional(theme::text::BODY),
         palette.faint_text,
     );
-    let keys = Command::CommandPalette.shortcut_text().unwrap_or_default();
     let galley = ui.painter().layout_no_wrap(
         keys,
         egui::FontId::monospace(theme::text::SMALL),

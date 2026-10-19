@@ -180,20 +180,20 @@ impl PaintNotNetApp {
                     });
                     ui.add_space(8.0);
                     ui.label(egui::RichText::new("Menus").strong());
-                    changed |= ui
-                        .checkbox(
-                            &mut self.config.global_menu,
-                            "Show the menus in the desktop's global menu (KDE Plasma)",
-                        )
-                        .changed();
+                    changed |= crate::controls::checkbox(
+                        ui,
+                        &mut self.config.global_menu,
+                        "Show the menus in the desktop's global menu (KDE Plasma)",
+                    )
+                    .changed();
                     ui.add_space(8.0);
                     ui.label(egui::RichText::new("Window").strong());
-                    changed |= ui
-                        .checkbox(
-                            &mut self.config.system_title_bar,
-                            "Use the desktop's title bar (instead of paintnotnet's window buttons)",
-                        )
-                        .changed();
+                    changed |= crate::controls::checkbox(
+                        ui,
+                        &mut self.config.system_title_bar,
+                        "Use the desktop's title bar (instead of paintnotnet's window buttons)",
+                    )
+                    .changed();
                     ui.add_space(8.0);
                     ui.label(egui::RichText::new("Crash recovery").strong());
                     ui.horizontal(|ui| {

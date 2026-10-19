@@ -46,8 +46,7 @@ pub fn row1(
     checked: &dyn Fn(Command) -> bool,
 ) -> Option<Command> {
     let mut picked = None;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 3.0;
+    {
         let groups: &[&[(Icon, Command, &str)]] = &[
             &[
                 (Icon::New, Command::NewImage, "New"),
@@ -71,29 +70,32 @@ pub fn row1(
                 (Icon::Rulers, Command::ToggleRulers, "Rulers"),
             ],
         ];
+        // Each cluster wraps as a unit (one strip ran under the right dock in a narrow
+        // window).
         for (gi, group) in groups.iter().enumerate() {
             if gi > 0 {
-                ui.add_space(3.0);
                 ui.separator();
-                ui.add_space(3.0);
             }
-            for &(icon, command, name) in group.iter() {
-                let selected = checked(command);
-                if icon_button(
-                    ui,
-                    icons,
-                    icon,
-                    &tip(name, command),
-                    enabled(command),
-                    selected,
-                )
-                .clicked()
-                {
-                    picked = Some(command);
+            crate::controls::group(ui, &format!("quick buttons {gi}"), |ui| {
+                ui.spacing_mut().item_spacing.x = 3.0;
+                for &(icon, command, name) in group.iter() {
+                    let selected = checked(command);
+                    if icon_button(
+                        ui,
+                        icons,
+                        icon,
+                        &tip(name, command),
+                        enabled(command),
+                        selected,
+                    )
+                    .clicked()
+                    {
+                        picked = Some(command);
+                    }
                 }
-            }
+            });
         }
-    });
+    }
     picked
 }
 
@@ -363,7 +365,7 @@ fn options(
                 opacity(ui, s, palette);
             }
             g(ui, "smoothing", |ui| {
-                ui.checkbox(&mut s.smoothing, "Smoothing")
+                crate::controls::checkbox(ui, &mut s.smoothing, "Smoothing")
                     .on_hover_text("Smooth the stroke as you paint");
             });
             g(ui, "rendering", |ui| {

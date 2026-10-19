@@ -75,6 +75,30 @@ pub fn group<R>(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui) -> 
     response.inner
 }
 
+/// A checkbox with nearly square corners: with the controls' 8 pt radius an unticked box was a
+/// circle, like a radio button.
+pub fn checkbox(
+    ui: &mut egui::Ui,
+    checked: &mut bool,
+    text: impl Into<egui::WidgetText>,
+) -> egui::Response {
+    ui.scope(|ui| {
+        let r = egui::CornerRadius::same(3);
+        let w = &mut ui.visuals_mut().widgets;
+        for v in [
+            &mut w.noninteractive,
+            &mut w.inactive,
+            &mut w.hovered,
+            &mut w.active,
+            &mut w.open,
+        ] {
+            v.corner_radius = r;
+        }
+        ui.checkbox(checked, text)
+    })
+    .inner
+}
+
 /// A rail slider over 0–1 (`t`), `width` points wide. Returns the response; `t` is updated
 /// while it's dragged or clicked.
 pub fn slider(
@@ -207,6 +231,10 @@ pub fn brush_size(ui: &mut egui::Ui, settings: &mut ToolSettings, palette: &Pale
                 .suffix(" px"),
         )
         .on_hover_text("Brush size ([ and ] step it; Alt + right-drag on the canvas)");
+    });
+    // The presets wrap on their own: with the slider they were wider than a narrow window's
+    // options bar.
+    group(ui, "brush size presets", |ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         ui.spacing_mut().button_padding = vec2(6.0, 2.0);
         for w in SIZE_PRESETS {
