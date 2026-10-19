@@ -575,10 +575,18 @@ impl PaintNotNetApp {
                     _ => (secondary, "Fill Selection", Icon::FillSelection),
                 };
                 let bounds = tab.doc.selection().pixel_bounds(w, h);
-                let a = tab.doc.active_index();
-                tab.doc
-                    .modify_layer(a, bounds, |l| fill_masked(&mut l.surface, &mask, fill));
-                tab.commit(name, icon);
+                crate::actions::change_active_layer(
+                    tab,
+                    move |s| {
+                        let mut s = s.clone();
+                        fill_masked(&mut s, &mask, fill);
+                        s
+                    },
+                    bounds,
+                    (name, icon),
+                    &mut self.click_job,
+                    self.ctx.clone(),
+                );
             }
             Command::CropToSelection => {
                 let Some(r) = tab.doc.selection().pixel_bounds(w, h) else {

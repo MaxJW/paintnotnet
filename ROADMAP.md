@@ -825,6 +825,12 @@ this just a great modern paint.net replacement for linux."
         Selection on the photo: worst frame 155 → 25 ms (the dialog opening); undo/redo 10 ms. Tests: field reuse at
         the edges (core); stand-in then exact mask on a 1.5 MP image (UI). The audit now waits for the preview
         before OK, as a person would
+  - [x] **Flip / Rotate Layer, Fill / Erase Selection** change the active layer on the effect threads on large images
+        (`change_active_layer`, the result lands on the same layer wherever it has moved): Flip Layer 29 → 3 ms,
+        Rotate Layer 180 34 → 4 ms. Fill Selection's command frame is 0.4 ms, but the frame that shows a whole new layer
+        still takes ~29 ms on the photo outside the app's own code (uploading ~370 new tiles; undo, whose tiles the GPU
+        saw before, takes 10 ms). Test: both on a 1.5 MP image land as one step with the right pixels.
+        Resize's OK frame is now 12.6 ms (was 50)
   - [ ] Left: Resize's OK frame (50 ms), Gradient finish (37 ms bake), Fill Selection
         (30 ms), Flip/Rotate Layer (26–29 ms) on the UI thread; WebP saving takes 17 s in the background at default
         effort

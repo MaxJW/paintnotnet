@@ -406,3 +406,51 @@ fn move_tool_cursor_shows_move_resize_and_rotate() {
         assert_eq!(h.output().platform_output.cursor_icon, want, "at {p:?}");
     }
 }
+
+/// On a large image, Flip Layer and Fill Selection work on the effect threads and land as
+/// one history step each, with the same pixels as on a small image.
+#[test]
+fn large_layer_commands_land_from_the_background() {
+    use paintnotnet::commands::{Command, Triggered};
+    use pnn_core::{ColorBgra, Document, Layer, Selection, Surface};
+    let (w, hh) = (1500u32, 1000u32);
+    let mut s = Surface::new_transparent(w, hh);
+    s.set(3, 5, ColorBgra::from_rgba(10, 20, 30, 255));
+    let mut h = harness_with(Document::from_layers(
+        w,
+        hh,
+        vec![Layer::new("Background", s)],
+    ));
+    let ctx = h.ctx.clone();
+    let wait = |h: &mut egui_kittest::Harness<'_, paintnotnet::app::PaintNotNetApp>| {
+        let start = std::time::Instant::now();
+        while h.state().click_job_running() {
+            assert!(start.elapsed().as_secs() < 10, "the job never landed");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            h.step();
+        }
+    };
+    h.state_mut()
+        .execute(&ctx, Triggered::once(Command::FlipLayerHorizontal));
+    assert!(h.state().click_job_running(), "in the background");
+    wait(&mut h);
+    let d = &h.state().workspace().active().unwrap().doc;
+    assert_eq!(
+        d.layer(0).surface.get(w - 4, 5),
+        ColorBgra::from_rgba(10, 20, 30, 255)
+    );
+    assert_eq!(d.layer(0).surface.get(3, 5).a, 0);
+    assert_eq!(history_names(&h).last().unwrap(), "Flip Horizontal");
+
+    let tab = h.state_mut().workspace_mut().active_mut().unwrap();
+    tab.doc
+        .set_selection(Selection::rect(100.0, 100.0, 200.0, 150.0));
+    h.state_mut()
+        .execute(&ctx, Triggered::once(Command::FillSelection));
+    wait(&mut h);
+    let primary = h.state().settings().primary;
+    let d = &h.state().workspace().active().unwrap().doc;
+    assert_eq!(d.layer(0).surface.get(150, 120), primary);
+    assert_eq!(d.layer(0).surface.get(250, 120).a, 0, "outside untouched");
+    assert_eq!(history_names(&h).last().unwrap(), "Fill Selection");
+}

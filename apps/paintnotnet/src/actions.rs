@@ -35,15 +35,40 @@ fn duplicate(layer: &Layer) -> Layer {
     l
 }
 
-fn transform_active(
+/// Replace the active layer's pixels with `f` of them (`dirty`: where they may change) and
+/// record a step. On a large image `f` runs on the effect threads and the result lands when
+/// done, on the same layer wherever it has moved (`job` holds it meanwhile; a flip or a fill
+/// of a 24 MP photo took 30–40 ms in the frame).
+pub(crate) fn change_active_layer(
     tab: &mut DocumentTab,
-    f: impl Fn(&Surface) -> Surface,
-    name: &str,
-    icon: Icon,
+    f: impl FnOnce(&Surface) -> Surface + Send + 'static,
+    dirty: Option<Rect>,
+    (name, icon): (&'static str, Icon),
+    job: &mut Option<crate::selection_tools::ClickJob>,
+    ctx: Option<egui::Context>,
 ) {
     let i = tab.doc.active_index();
-    tab.doc.modify_layer(i, None, |l| l.surface = f(&l.surface));
-    tab.commit(name, icon);
+    let size = tab.doc.width() as u64 * tab.doc.height() as u64;
+    if size <= crate::selection_tools::CLICK_AT_ONCE {
+        tab.doc
+            .modify_layer(i, dirty, |l| l.surface = f(&l.surface));
+        tab.commit(name, icon);
+        return;
+    }
+    let layer = tab.doc.layer(i);
+    let (surface, id, key) = (layer.surface.clone(), layer.id(), tab.key);
+    *job = Some(crate::selection_tools::ClickJob::spawn(
+        ctx,
+        move || f(&surface),
+        move |app, surface| {
+            if let Some(tab) = app.workspace.tab_mut(key)
+                && let Some(i) = tab.doc.layers().iter().position(|l| l.id() == id)
+            {
+                tab.doc.modify_layer(i, dirty, |l| l.surface = surface);
+                tab.commit(name, icon);
+            }
+        },
+    ));
 }
 
 /// Flip or rotate every layer. On a large image the work runs on the effect threads and the
@@ -180,23 +205,29 @@ impl PaintNotNetApp {
                 tab.doc.modify_layer(a, None, |l| l.visible = !l.visible);
                 tab.commit("Layer Visibility", Icon::LayerProperties);
             }
-            Command::FlipLayerHorizontal => transform_active(
+            Command::FlipLayerHorizontal => change_active_layer(
                 tab,
                 transform::flip_horizontal,
-                "Flip Horizontal",
-                Icon::FlipLayerHorizontal,
+                None,
+                ("Flip Horizontal", Icon::FlipLayerHorizontal),
+                &mut self.click_job,
+                self.ctx.clone(),
             ),
-            Command::FlipLayerVertical => transform_active(
+            Command::FlipLayerVertical => change_active_layer(
                 tab,
                 transform::flip_vertical,
-                "Flip Vertical",
-                Icon::FlipLayerVertical,
+                None,
+                ("Flip Vertical", Icon::FlipLayerVertical),
+                &mut self.click_job,
+                self.ctx.clone(),
             ),
-            Command::RotateLayer180 => transform_active(
+            Command::RotateLayer180 => change_active_layer(
                 tab,
                 |s| transform::rotate_quarter(s, 2),
-                "Rotate 180°",
-                Icon::Rotate180,
+                None,
+                ("Rotate 180°", Icon::Rotate180),
+                &mut self.click_job,
+                self.ctx.clone(),
             ),
             Command::GoToTopLayer => tab.doc.set_active_index(n - 1),
             Command::GoToLayerAbove => tab.doc.set_active_index(a + 1),
