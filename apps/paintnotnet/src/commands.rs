@@ -73,12 +73,10 @@ pub enum Command {
     OpenRecent(u8),
     /// File > Open Recent > Clear this list.
     ClearRecentFiles,
-    Acquire,
     Close,
     Save,
     SaveAs,
     SaveAll,
-    Print,
     Exit,
     // Edit
     Undo,
@@ -119,7 +117,6 @@ pub enum Command {
     RotateImage90Clockwise,
     RotateImage90CounterClockwise,
     RotateImage180,
-    ColorProfile,
     Flatten,
     // Layers
     AddNewLayer,
@@ -527,7 +524,6 @@ pub static BINDINGS: &[Binding] = &[
     b(Y, N, N, Key::S, C::Save),
     b(Y, N, Y, Key::S, C::SaveAs),
     b(Y, Y, N, Key::S, C::SaveAll),
-    b(Y, N, N, Key::P, C::Print),
     // Edit
     b(Y, N, N, Key::Z, C::Undo),
     b(Y, N, N, Key::Y, C::Redo),

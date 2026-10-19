@@ -86,13 +86,16 @@ fn expected() -> Vec<(&'static str, Expect)> {
         ("Ctrl+N", Is(C::NewImage)),
         ("Ctrl+O", Is(C::Open)),
         ("R", Is(C::ToolShortcut('R'))),
-        ("Q", Skip("Alt+F, Q: menu item mnemonic (Acquire)")),
+        (
+            "Q",
+            Skip("Alt+F, Q: Acquire, left out (no scanning; user, 2026-10-19)"),
+        ),
         ("Ctrl+W", Is(C::Close)),
         ("Ctrl+F4", Is(C::Close)),
         ("Ctrl+S", Is(C::Save)),
         ("Ctrl+Shift+S", Is(C::SaveAs)),
         ("Ctrl+Alt+S", Is(C::SaveAll)),
-        ("Ctrl+P", Is(C::Print)),
+        ("Ctrl+P", Skip("Print, left out (user, 2026-10-19)")),
         (
             "Alt+F4",
             Skip("window manager close; reaches the app as a close request"),

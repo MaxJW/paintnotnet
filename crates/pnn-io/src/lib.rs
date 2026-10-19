@@ -171,7 +171,8 @@ impl WebPPreset {
 pub struct SaveOptions {
     /// JPEG quality, 0..=100.
     pub jpeg_quality: u8,
-    /// WebP save settings: pdn-webp's (bundled with paint.net 5) names and defaults.
+    /// WebP save settings: pdn-webp's (bundled with paint.net 5) names and defaults, except a
+    /// faster default effort.
     pub webp_preset: WebPPreset,
     /// 0..=100; ignored when lossless.
     pub webp_quality: u8,
@@ -186,7 +187,9 @@ impl Default for SaveOptions {
             jpeg_quality: 95,
             webp_preset: WebPPreset::Photo,
             webp_quality: 95,
-            webp_effort: 7,
+            // pdn-webp's default is 7 (method 6 + sharp YUV): 5–10 s for a 24 MP photo. 4 takes
+            // ~2 s for files 1–3 % larger (user, 2026-10-19).
+            webp_effort: 4,
             webp_lossless: false,
         }
     }

@@ -38,7 +38,7 @@ fn tip(name: &str, command: Command) -> String {
     }
 }
 
-/// Row 1: New, Open, Save | Print | Cut, Copy, Paste, Crop, Deselect | Undo, Redo | Grid, Rulers.
+/// Row 1: New, Open, Save | Cut, Copy, Paste, Crop, Deselect | Undo, Redo | Grid, Rulers.
 pub fn row1(
     ui: &mut egui::Ui,
     icons: &Icons,
@@ -53,7 +53,6 @@ pub fn row1(
                 (Icon::Open, Command::Open, "Open"),
                 (Icon::Save, Command::Save, "Save"),
             ],
-            &[(Icon::Print, Command::Print, "Print")],
             &[
                 (Icon::Cut, Command::Cut, "Cut"),
                 (Icon::Copy, Command::Copy, "Copy"),

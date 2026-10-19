@@ -169,7 +169,6 @@ pub static EFFECTS: &[EffectInfo] = &[
     stock("Median Blur", Blurs),
     stock("Motion Blur", Blurs),
     stock("Radial Blur", Blurs),
-    stock("Sketch Blur", Blurs),
     stock("Square Blur", Blurs),
     stock("Surface Blur", Blurs),
     stock("Zoom Blur", Blurs),
@@ -262,8 +261,9 @@ mod tests {
 
     #[test]
     fn documented_counts() {
-        // Blurs: 10 effects (EffectsBlursMenu.html); Distort: 9.
-        assert_eq!(effects_in(Blurs).filter(|(_, e)| e.stock).count(), 10);
+        // Blurs: 10 effects (EffectsBlursMenu.html), less Sketch Blur (left out: no published
+        // maths); Distort: 9.
+        assert_eq!(effects_in(Blurs).filter(|(_, e)| e.stock).count(), 9);
         assert_eq!(effects_in(Distort).count(), 9);
         assert_eq!(Adjustment::ALL.len(), 13);
     }

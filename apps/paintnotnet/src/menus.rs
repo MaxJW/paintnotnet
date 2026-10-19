@@ -67,22 +67,12 @@ pub fn menus() -> Vec<Menu> {
                 item("&New...", C::NewImage, Icon::New),
                 item("&Open...", C::Open, Icon::Open),
                 Entry::Recent,
-                Entry::Sub {
-                    label: "Ac&quire".into(),
-                    entries: vec![item(
-                        "From &Scanner or Camera...",
-                        C::Acquire,
-                        Icon::Acquire,
-                    )],
-                },
                 SEP,
                 item("&Close", C::Close, Icon::Close),
                 SEP,
                 item("&Save", C::Save, Icon::Save),
                 item("Save &As...", C::SaveAs, Icon::SaveAs),
                 item("Save A&ll", C::SaveAll, Icon::SaveAll),
-                SEP,
-                item("&Print...", C::Print, Icon::Print),
                 SEP,
                 item("E&xit", C::Exit, Icon::Exit),
             ],
@@ -206,8 +196,6 @@ pub fn menus() -> Vec<Menu> {
                     Icon::Rotate90Ccw,
                 ),
                 item("Rotate &180°", C::RotateImage180, Icon::Rotate180),
-                SEP,
-                plain("C&olor Profile...", C::ColorProfile),
                 SEP,
                 item("&Flatten", C::Flatten, Icon::Flatten),
             ],
@@ -882,7 +870,8 @@ mod tests {
 
     #[test]
     fn file_menu_documented_sequences() {
-        // "Alt+F, R" Open Recent and "Alt+F, Q" Acquire (KeyboardMouseCommands.html).
+        // "Alt+F, R" Open Recent (KeyboardMouseCommands.html; its "Alt+F, Q" Acquire was left
+        // out, as were Print and Color Profile: user, 2026-10-19).
         let file = menus().into_iter().find(|m| m.id == MenuId::File).unwrap();
         let labels: Vec<String> = file
             .entries
@@ -890,13 +879,17 @@ mod tests {
             .filter_map(|e| match e {
                 Entry::Item { label, .. } => Some(label.to_string()),
                 Entry::Sub { label, .. } => Some(label.clone()),
+                Entry::Recent => match recent_menu(&[]) {
+                    Entry::Sub { label, .. } => Some(label),
+                    _ => None,
+                },
                 _ => None,
             })
             .collect();
         assert!(
             labels
                 .iter()
-                .any(|l| mnemonic_char(l) == Some('q') && parse_mnemonic(l).0.contains("Acquire"))
+                .any(|l| mnemonic_char(l) == Some('r') && parse_mnemonic(l).0 == "Open Recent")
         );
     }
 }

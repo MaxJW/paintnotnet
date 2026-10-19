@@ -12,7 +12,7 @@
 //!   (within ±1).
 //! - Radial and Zoom take their centre as two "Offset" numbers (3.36 used a pan control).
 //! - From paint.net 5's docs only, maths guessed: Square Blur (alpha-weighted box) and Bokeh
-//!   Blur (disc average). Sketch Blur is not implemented (no description of its maths).
+//!   Blur (disc average). Sketch Blur is left out (no description of its maths).
 
 use pnn_core::{BlendMode, ColorBgra, Rect, Surface};
 
