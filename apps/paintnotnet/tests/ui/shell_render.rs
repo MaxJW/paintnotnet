@@ -33,6 +33,7 @@ fn harness() -> Harness<'static, PaintNotNetApp> {
 
 #[test]
 fn docked_shell_matches_design_a() {
+    let _gpu = crate::common::gpu_lock();
     let mut h = harness();
     if let Ok(dir) = std::env::var("PNN_RENDER_DUMP")
         && let Ok(image) = h.render()
@@ -125,6 +126,7 @@ fn contrast(a: [u8; 3], b: [u8; 3]) -> f64 {
 
 #[test]
 fn dock_resizes_collapses_and_remembers() {
+    let _gpu = crate::common::gpu_lock();
     use eframe::egui::{Event, Modifiers, PointerButton};
     let mut h = harness();
     let layers = h.state().panels().rect(Panel::Layers);
@@ -178,6 +180,7 @@ fn dock_resizes_collapses_and_remembers() {
 
 #[test]
 fn f5_to_f8_toggle_windows_and_reset_restores() {
+    let _gpu = crate::common::gpu_lock();
     let mut h = harness();
     let ctx = h.ctx.clone();
     h.state_mut()
@@ -220,6 +223,7 @@ fn press(
 
 #[test]
 fn alt_f_then_n_opens_new_image_dialog() {
+    let _gpu = crate::common::gpu_lock();
     use eframe::egui::{Key, Modifiers};
     let mut h = harness();
     press(&mut h, Modifiers::ALT, Key::F);
@@ -250,6 +254,7 @@ fn alt_f_then_n_opens_new_image_dialog() {
 
 #[test]
 fn tool_letters_cycle_like_paint_net() {
+    let _gpu = crate::common::gpu_lock();
     use eframe::egui::{Key, Modifiers};
     use pnn_tools::ToolKind;
     let mut h = harness();
@@ -282,6 +287,7 @@ fn tool_letters_cycle_like_paint_net() {
 
 #[test]
 fn layers_history_and_layer_properties_render() {
+    let _gpu = crate::common::gpu_lock();
     let mut h = harness();
     let ctx = h.ctx.clone();
     for c in [
@@ -306,6 +312,7 @@ fn layers_history_and_layer_properties_render() {
 
 #[test]
 fn marching_ants_render() {
+    let _gpu = crate::common::gpu_lock();
     let mut h = harness();
     {
         let tab = h.state_mut().workspace_mut().active_mut().unwrap();
@@ -327,6 +334,7 @@ fn marching_ants_render() {
 
 #[test]
 fn feather_preview_render() {
+    let _gpu = crate::common::gpu_lock();
     let mut h = harness();
     {
         let tab = h.state_mut().workspace_mut().active_mut().unwrap();
@@ -354,6 +362,7 @@ fn feather_preview_render() {
 /// crosses itself (no build-up), a hatched stroke, and the brush outline at the pointer.
 #[test]
 fn paintbrush_render() {
+    let _gpu = crate::common::gpu_lock();
     use eframe::egui::{Event, Modifiers, PointerButton, Pos2};
     let mut h = harness();
     h.state_mut().set_tool(pnn_tools::ToolKind::Paintbrush);
@@ -441,6 +450,7 @@ fn paintbrush_render() {
 /// A live radial gradient with its two nubs, and a Paint Bucket fill (hatched) under it.
 #[test]
 fn gradient_render() {
+    let _gpu = crate::common::gpu_lock();
     use eframe::egui::{Event, Modifiers, PointerButton, Pos2};
     let mut h = harness();
     let to_screen = |h: &Harness<'_, PaintNotNetApp>, x: f64, y: f64| {
@@ -490,6 +500,7 @@ fn gradient_render() {
 /// A live spline with an arrow end cap, a round start cap and dashes, nubs and move icon.
 #[test]
 fn line_curve_render() {
+    let _gpu = crate::common::gpu_lock();
     use eframe::egui::{Event, Modifiers, PointerButton, Pos2};
     let mut h = harness();
     let to_screen = |h: &Harness<'_, PaintNotNetApp>, x: f64, y: f64| {
@@ -543,6 +554,7 @@ fn line_curve_render() {
 /// All 29 shapes, filled with outline, in a grid; the last one still live with its handles.
 #[test]
 fn shapes_render() {
+    let _gpu = crate::common::gpu_lock();
     use eframe::egui::{Event, Modifiers, PointerButton, Pos2};
     let mut h = harness();
     let to_screen = |h: &Harness<'_, PaintNotNetApp>, x: f64, y: f64| {
@@ -600,6 +612,7 @@ fn shapes_render() {
 /// Live text: two lines, bold italic underlined, centred, with the caret and move nub.
 #[test]
 fn text_render() {
+    let _gpu = crate::common::gpu_lock();
     use eframe::egui::{Event, Modifiers, PointerButton, Pos2};
     let mut h = harness();
     let to_screen = |h: &Harness<'_, PaintNotNetApp>, x: f64, y: f64| {
@@ -656,6 +669,7 @@ fn text_render() {
 /// An adjustment dialog (Hue / Saturation) over a live preview.
 #[test]
 fn adjustment_dialog_render() {
+    let _gpu = crate::common::gpu_lock();
     let mut h = harness();
     {
         let tab = h.state_mut().workspace_mut().active_mut().unwrap();
@@ -704,6 +718,7 @@ fn adjustment_dialog_render() {
 /// Curves (RGB, red lifted) and Levels dialogs over a live preview.
 #[test]
 fn curves_and_levels_render() {
+    let _gpu = crate::common::gpu_lock();
     use paintnotnet::effect_runner::Custom;
     use pnn_effects::Adjustment;
     use pnn_effects::curves::{Curves, Points};
@@ -755,6 +770,7 @@ fn curves_and_levels_render() {
 /// Settings › Keyboard and the command palette.
 #[test]
 fn settings_and_palette_render() {
+    let _gpu = crate::common::gpu_lock();
     use eframe::egui::{Event, Key, Modifiers};
     let mut h = harness();
     let ctx = h.ctx.clone();
@@ -813,6 +829,7 @@ fn effect_named(name: &str, category: pnn_effects::Category) -> Command {
 /// around an elliptical selection.
 #[test]
 fn object_and_selection_dialogs_render() {
+    let _gpu = crate::common::gpu_lock();
     let mut h = harness();
     {
         let tab = h.state_mut().workspace_mut().active_mut().unwrap();
@@ -899,6 +916,7 @@ fn object_and_selection_dialogs_render() {
 /// the system one; Pan keeps the system's grab hand.
 #[test]
 fn tools_draw_their_cursor_over_the_canvas() {
+    let _gpu = crate::common::gpu_lock();
     use eframe::egui::{CursorIcon, Event};
     let mut h = harness();
     let canvas = h.state().canvas().rect.unwrap();
@@ -954,6 +972,7 @@ fn tools_draw_their_cursor_over_the_canvas() {
 /// edge follows the pointer at once.
 #[test]
 fn collapsing_glides_but_dragging_does_not() {
+    let _gpu = crate::common::gpu_lock();
     use eframe::egui::{Event, Modifiers, PointerButton};
     use paintnotnet::panels::HEADER;
     let mut h = Harness::builder()
@@ -1015,6 +1034,7 @@ fn collapsing_glides_but_dragging_does_not() {
 /// top-left nub and the pixels turned from just outside the bottom-right corner.
 #[test]
 fn move_pivot_render() {
+    let _gpu = crate::common::gpu_lock();
     use crate::common::drag;
     use eframe::egui::{Modifiers, PointerButton};
     let mut h = harness();
@@ -1072,6 +1092,7 @@ fn move_pivot_render() {
 /// (`PNN_RENDER_DUMP=<dir>` writes `dlg-<name>-<size>-<theme>.png`; nothing without it).
 #[test]
 fn dialog_gallery() {
+    let _gpu = crate::common::gpu_lock();
     use eframe::egui::{Key, Modifiers, ThemePreference};
     use pnn_effects::Adjustment;
     let Ok(dir) = std::env::var("PNN_RENDER_DUMP") else {

@@ -132,3 +132,12 @@ pub fn drag(
 pub fn px(x: u32, y: u32) -> (f64, f64) {
     (x as f64 + 0.5, y as f64 + 0.5)
 }
+
+/// Tests that make a GPU harness hold this for their whole run (take it first, so it's
+/// released after the harness): creating one Vulkan instance while another test's was being
+/// destroyed crashed inside the Vulkan loader (a null function pointer reached from
+/// `vkEnumerateInstanceExtensionProperties`), killing the whole test binary.
+pub fn gpu_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}

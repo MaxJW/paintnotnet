@@ -249,6 +249,7 @@ fn gpu_drawn_pixel_move_matches_the_cpu() {
 }
 
 fn gpu_and_cpu_pixel_moves_agree(w: u32, height: u32, drag_button: eframe::egui::PointerButton) {
+    let _gpu = crate::common::gpu_lock();
     use eframe::egui::{Event, Key, Modifiers};
     use pnn_core::{ColorBgra, Document, Layer, Selection, Surface};
     let mut s = Surface::new_transparent(w, height);

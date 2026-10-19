@@ -124,6 +124,7 @@ fn checker(screen_rel_x: u32, screen_rel_y: u32) -> u8 {
 
 #[test]
 fn zoomed_in_pixels_and_checkerboard() {
+    let _gpu = crate::common::gpu_lock();
     let Some(r) = render(4.0, false) else { return };
     assert_eq!(
         r.image_px(10, 10),
@@ -161,6 +162,7 @@ fn zoomed_in_pixels_and_checkerboard() {
 
 #[test]
 fn pixel_grid_draws_black_dots_on_pixel_edges() {
+    let _gpu = crate::common::gpu_lock();
     let Some(r) = render(8.0, true) else { return };
     // Top edge of image pixel (10,10): screen row at its top, every other screen pixel black.
     let row = (r.origin[1] + 10.0 * r.zoom) as u32;
@@ -183,6 +185,7 @@ fn pixel_grid_draws_black_dots_on_pixel_edges() {
 
 #[test]
 fn no_grid_below_200_percent() {
+    let _gpu = crate::common::gpu_lock();
     let Some(r) = render(1.0, true) else { return };
     assert_eq!(r.image_px(10, 10), [220, 40, 40]);
     assert_eq!(r.image_px(11, 10), [220, 40, 40]);
@@ -192,6 +195,7 @@ fn no_grid_below_200_percent() {
 /// release it is rendered into the layer, and the screen still shows the same.
 #[test]
 fn live_gradient_draws_on_the_gpu_then_lands_in_the_layer() {
+    let _gpu = crate::common::gpu_lock();
     use eframe::egui::{Event, Modifiers, PointerButton, Pos2};
     let zoom = 4.0;
     let mut h = setup(zoom, false);
@@ -279,6 +283,7 @@ fn live_gradient_draws_on_the_gpu_then_lands_in_the_layer() {
 /// drag (the GPU shows it meanwhile), with exactly the pixels of rendering it at once.
 #[test]
 fn large_gradient_lands_from_the_background() {
+    let _gpu = crate::common::gpu_lock();
     use eframe::egui::{Event, Modifiers, PointerButton, Pos2};
     let (w, hh) = (1500u32, 1000u32);
     let mut s = Surface::new_transparent(w, hh);

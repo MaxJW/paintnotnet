@@ -217,6 +217,7 @@ impl Audit {
 #[test]
 #[ignore = "needs PNN_PERF_IMAGE and a release build"]
 fn perf_audit() {
+    let _gpu = crate::common::gpu_lock();
     let Some(path) = std::env::var_os("PNN_PERF_IMAGE") else {
         return;
     };

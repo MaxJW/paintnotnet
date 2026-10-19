@@ -901,6 +901,13 @@ this just a great modern paint.net replacement for linux."
         isn't reverse-DNS (e.g. `io.github.<user>.paintnotnet`, which would also rename the .desktop file and the
         Wayland app id) and that there's no homepage URL. Installing the package (`makepkg -si`, needs sudo) is
         left to you. `assets/icons/pdn336` (paint.net's icons, unused on main) could go in the clean-up
+- [x] **Test stability:** the UI test binary sometimes died with SIGSEGV: one test's GPU harness creating a Vulkan
+      instance while another's was being destroyed (a null pointer in the Vulkan loader, from
+      `vkEnumerateInstanceExtensionProperties`; core dump 2026-10-19). GPU tests now hold `common::gpu_lock()`
+      (UI tests 6 → 10.5 s). `pnn-render`'s own GPU tests make devices in parallel too (not seen failing)
+- [ ] **To investigate:** a release-build crash on 2026-10-14 inside the NVIDIA driver's `vkDestroyDevice`, while
+      `GpuEffects` (holding the last reference to the app's device) was dropped on a non-main thread, probably at
+      exit (core dump no longer kept; only the stack in the session transcript)
 - [ ] **Cleaned up:** dead code and leftovers from the recreation, docs, and the 16 GB `target/` once development is
       done (user, 2026-10-15)
 
