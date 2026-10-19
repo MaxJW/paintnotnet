@@ -75,11 +75,11 @@ pub fn menus() -> Vec<Menu> {
                 SEP,
                 item("&Save", C::Save, Icon::Save),
                 item("Save &As...", C::SaveAs, Icon::SaveAs),
-                plain("Save A&ll", C::SaveAll),
+                item("Save A&ll", C::SaveAll, Icon::SaveAll),
                 SEP,
                 item("&Print...", C::Print, Icon::Print),
                 SEP,
-                plain("E&xit", C::Exit),
+                item("E&xit", C::Exit, Icon::Exit),
             ],
         },
         Menu {
@@ -91,7 +91,7 @@ pub fn menus() -> Vec<Menu> {
                 SEP,
                 item("Cu&t", C::Cut, Icon::Cut),
                 item("&Copy", C::Copy, Icon::Copy),
-                plain("Copy Mer&ged", C::CopyMerged),
+                item("Copy Mer&ged", C::CopyMerged, Icon::CopyMerged),
                 item("&Paste", C::Paste, Icon::Paste),
                 item(
                     "Paste into New &Layer",
@@ -104,8 +104,12 @@ pub fn menus() -> Vec<Menu> {
                     Icon::PasteNewImage,
                 ),
                 SEP,
-                plain("Copy Selectio&n", C::CopySelection),
-                plain("Paste Selection (Replace)", C::PasteSelection),
+                item("Copy Selectio&n", C::CopySelection, Icon::CopySelection),
+                item(
+                    "Paste Selection (Replace)",
+                    C::PasteSelection,
+                    Icon::PasteSelection,
+                ),
                 SEP,
                 item("&Erase Selection", C::EraseSelection, Icon::EraseSelection),
                 item("&Fill Selection", C::FillSelection, Icon::FillSelection),
@@ -118,7 +122,11 @@ pub fn menus() -> Vec<Menu> {
                 item("Select Su&bject", C::SelectSubject, Icon::SelectSubject),
                 item("&Deselect", C::Deselect, Icon::Deselect),
                 SEP,
-                plain("Feat&her Selection...", C::FeatherSelection),
+                item(
+                    "Feat&her Selection...",
+                    C::FeatherSelection,
+                    Icon::FeatherSelection,
+                ),
             ],
         },
         Menu {
@@ -207,7 +215,11 @@ pub fn menus() -> Vec<Menu> {
                 item("De&lete Layer", C::DeleteLayer, Icon::DeleteLayer),
                 item("&Duplicate Layer", C::DuplicateLayer, Icon::DuplicateLayer),
                 item("&Merge Layer Down", C::MergeLayerDown, Icon::MergeLayerDown),
-                plain("&Toggle Layer Visibility", C::ToggleLayerVisibility),
+                item(
+                    "&Toggle Layer Visibility",
+                    C::ToggleLayerVisibility,
+                    Icon::ToggleLayerVisibility,
+                ),
                 SEP,
                 item(
                     "&Import From File...",
@@ -225,18 +237,26 @@ pub fn menus() -> Vec<Menu> {
                     C::FlipLayerVertical,
                     Icon::FlipLayerVertical,
                 ),
-                plain("Rotate 1&80°", C::RotateLayer180),
+                item("Rotate 1&80°", C::RotateLayer180, Icon::Rotate180),
                 item("&Rotate / Zoom...", C::RotateZoom, Icon::RotateZoom),
                 SEP,
-                plain("Go to Top Layer", C::GoToTopLayer),
-                plain("Go to Layer Above", C::GoToLayerAbove),
-                plain("Go to Layer Below", C::GoToLayerBelow),
-                plain("Go to Bottom Layer", C::GoToBottomLayer),
+                item("Go to Top Layer", C::GoToTopLayer, Icon::GoToTopLayer),
+                item("Go to Layer Above", C::GoToLayerAbove, Icon::GoToLayerAbove),
+                item("Go to Layer Below", C::GoToLayerBelow, Icon::GoToLayerBelow),
+                item(
+                    "Go to Bottom Layer",
+                    C::GoToBottomLayer,
+                    Icon::GoToBottomLayer,
+                ),
                 SEP,
-                plain("Move Layer to Top", C::MoveLayerToTop),
+                item("Move Layer to Top", C::MoveLayerToTop, Icon::MoveLayerToTop),
                 item("Move Layer &Up", C::MoveLayerUp, Icon::MoveLayerUp),
                 item("Move Layer Dow&n", C::MoveLayerDown, Icon::MoveLayerDown),
-                plain("Move Layer to Bottom", C::MoveLayerToBottom),
+                item(
+                    "Move Layer to Bottom",
+                    C::MoveLayerToBottom,
+                    Icon::MoveLayerToBottom,
+                ),
                 SEP,
                 item(
                     "Layer &Properties...",
@@ -549,7 +569,16 @@ fn entries_ui(
                 let enabled = (cx.enabled)(*command);
                 let mut on = (cx.checked)(*command);
                 let job = label_job(label, underline, text_color);
-                let response = ui.add_enabled(enabled, egui::Checkbox::new(&mut on, job));
+                // Nearly square, as `controls::checkbox` (the controls' radius drew a circle).
+                let response = ui
+                    .scope(|ui| {
+                        let w = &mut ui.visuals_mut().widgets;
+                        for v in [&mut w.inactive, &mut w.hovered, &mut w.active] {
+                            v.corner_radius = egui::CornerRadius::same(3);
+                        }
+                        ui.add_enabled(enabled, egui::Checkbox::new(&mut on, job))
+                    })
+                    .inner;
                 let mnemonic = mnemonic_char(label);
                 if response.clicked() || (enabled && mnemonic.is_some_and(|m| typed.contains(&m))) {
                     picked = Some(*command);
@@ -650,6 +679,9 @@ pub fn adjustment_icon(a: Adjustment) -> Option<Icon> {
         Adjustment::Levels => Some(Icon::Levels),
         Adjustment::Posterize => Some(Icon::Posterize),
         Adjustment::Sepia => Some(Icon::Sepia),
+        Adjustment::Exposure => Some(Icon::Exposure),
+        Adjustment::HighlightsShadows => Some(Icon::HighlightsShadows),
+        Adjustment::TemperatureTint => Some(Icon::TemperatureTint),
         _ => None,
     }
 }

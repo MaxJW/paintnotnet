@@ -878,8 +878,13 @@ this just a great modern paint.net replacement for linux."
         that replaces an existing file. Shown on every Save As, and on Save for JPEG and WebP as before; the flatten
         question now comes after it (it depends on the type). Test: JPEG → PNG on a two-layer image saves
         `picture.png` after the flatten question, and the tab follows the new file
+  - [x] **Menu icons:** 17 items gained one (Save All, Exit, Copy Merged, Copy / Paste Selection, Feather Selection,
+        Toggle Layer Visibility, Rotate 180° and the six Go to / Move Layer to items in Layers, Exposure, Highlights /
+        Shadows, Temperature and Tint), from 14 more Lucide 1.48.0 SVGs taken unmodified from the repository's tag.
+        Left without: Color Balance, Invert Colors / Alpha, Posterize, Sepia, Transparency and the Effects
+        submenus (no fitting Lucide icon). The View menu's toggles had the same round unticked box: square now
   - [ ] Left: dialog titles still come in two styles (the message boxes' left-aligned heading with an icon; the
-        effect and document dialogs' centred title bar); Help; menu icons
+        effect and document dialogs' centred title bar); Help
 - [ ] **Packaged nicely:** build and install the PKGBUILD with makepkg (not yet tried), AppStream metainfo,
       desktop entry and MIME checked, About with version and licences; README for users
 - [ ] **Cleaned up:** dead code and leftovers from the recreation, docs, and the 16 GB `target/` once development is
