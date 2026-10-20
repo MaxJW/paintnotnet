@@ -21,6 +21,9 @@
       <li>Drawn on the GPU, with large photos staying responsive</li>
     </ul>
   </description>
+  <url type="homepage">https://github.com/MaxJW/paintnotnet</url>
+  <url type="bugtracker">https://github.com/MaxJW/paintnotnet/issues</url>
+  <url type="vcs-browser">https://github.com/MaxJW/paintnotnet</url>
   <launchable type="desktop-id">uk.co.maxwilson.paintnotnet.desktop</launchable>
   <provides>
     <binary>paintnotnet</binary>

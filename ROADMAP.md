@@ -703,7 +703,7 @@ Agreed 2026-10-15 ("I like both your ideas"), done the same day:
 - Parked (user, 2026-10-15: "lets just stick with our roadmap for the time being"): adjustment layers /
   non-destructive effects, layer groups, content-aware fill, smarter magic wand, more export options
 
-## Phase 19: A great modern paint.net for Linux — requested 2026-10-15
+## Phase 19: A great modern paint.net for Linux — requested 2026-10-15 ✅
 The user's goal: "get this app cleaned up, optimised, fully working, everything functional and working great, the app
 looking great, packaged nicely, windows and dialogs all looking great, UI looking great, no lag from anything, and make
 this just a great modern paint.net replacement for linux."
@@ -735,8 +735,8 @@ this just a great modern paint.net replacement for linux."
   new edge spacing); tests listed. **Not checked live:** moving the window by its title bar then zooming (needs the
   real pointer; the user should try it)
 
-### 19b. Plan (proposed 2026-10-15, to work through in this order)
-- [ ] **No lag from anything:** measure every tool, selection tool, effect preview, dialog, layer operation, undo/redo,
+### 19b. Plan (proposed 2026-10-15, to work through in this order) ✅
+- [x] **No lag from anything:** measure every tool, selection tool, effect preview, dialog, layer operation, undo/redo,
       open and save on a 24 MP photo in the release build; budget: frames under 7 ms at 165 Hz, nothing on the UI
       thread over ~100 ms (longer work on a worker with progress, like effects)
   - [x] **The audit** (`tests/ui/perf_audit.rs`, opt-in: `PNN_PERF_IMAGE=<photo>`, release build; `PNN_PERF_ONLY=a,b`
@@ -843,10 +843,29 @@ this just a great modern paint.net replacement for linux."
     (Paste into new layer, Resize OK, Gradient finish, effect previews, Canvas Size undo/redo). Saves: worst frame
     15.6 ms; WebP 5.4 s in the background. The audit's saves had silently stopped working (a "Flatten" step in
     History has the same label as the flatten prompt's button, and the audit clicked it); it flattens first now
-  - [ ] Left: one ~30 ms frame when a whole new 24 MP layer first reaches the GPU (Fill Selection, Gradient landing),
-        the Copy contention frame above. **WebP:** default effort now 4 (user, 2026-10-19; pdn-webp's 7 took 5.4 s on
-        the photo, 9.7 s with transparency, in the background (status bar shows it); effort 4 takes 1.7–2 s for files
-        1–3 % larger)
+  - [x] **WebP:** default effort now 4 (user, 2026-10-19; pdn-webp's 7 took 5.4 s on the photo, 9.7 s with
+        transparency, in the background (status bar shows it); effort 4 takes 1.7–2 s for files 1–3 % larger)
+  - [x] **The last slow frames** (2026-10-20, measured with timings per frame and per command on a generated
+        5712 × 4284 image): the "~30 ms frame when a new layer reaches the GPU" was not the GPU (sync frames
+        3–13 ms, a new 64 MB layer buffer 3.6 ms) but the commands themselves on the UI thread:
+        - Copy: the Select All mask was rasterised pixel by pixel (28 ms). Rectangles on whole pixels now fill
+          tiles wholly inside with one shared full tile (`Selection::rasterize_hard`; test: identical to the path
+          filler for whole-image, off-image, tile-aligned and one-pixel rectangles, with and without
+          antialiasing). Copy 27 → 1.7 ms
+        - Paste / Paste into New Layer: the clipboard read (in the app, the desktop's PNG decoded on the clipboard
+          thread while the UI waited), building the pixels and drawing the float's first frame now run on the
+          effect threads on a large image (`Clipboard::request_image`, a click job); the float lands with its
+          history step. If the document changed meanwhile the first frame is drawn again. Paste into New Layer
+          38 → 9.7 ms. Test: a 1500 × 1000 paste and paste into new layer land from the background with the right
+          pixels and history. "Finish Pixels" of an earlier float is now recorded before the new layer is added
+        - Text: the first use scanned the system fonts on the UI thread (771 ms). `main` starts loading them in
+          the background (`preload_fonts`); the font list appears when ready. 771 → 15 ms
+        - Not changed: Finish (Enter) within ~40 ms of releasing a gradient waits for its background render
+          (31 ms in the audit, which presses it at once); deferring it would change every other path that commits
+          a gradient
+  - **Audit 2026-10-20:** nothing over 100 ms; worst frames 18–49 ms, all whole-image changes (Canvas Size undo
+    49 ms, Resize undo 27 ms, effects' OK/undo 18–30 ms, Gaussian Blur / Outline / Drop Shadow previews 19–24 ms).
+    The 7 ms frame target holds for painting, view changes and tools, not for whole-image changes
 - [x] **Everything functional:** the disabled commands (Print, Acquire, Color Profile, the image's right-click menu,
       the shape tool's line style, caps and shape cycling) either work or leave the menus; Sketch Blur (no published
       maths) likewise; every tool option does what it says
@@ -881,8 +900,13 @@ this just a great modern paint.net replacement for linux."
         paint.net 3.36 (`FileMenu.cs`, `AppWorkspace.cs`): the last 8 files opened or saved, newest first, "&1
         name" …, "(none)" when empty, "Clear this list" asking "Are you sure you want to clear the Open Recent
         list?"; kept in the settings file; in the KDE global menu too. Opening one already open opens another copy,
-        as 3.36. Not yet: 3.36's thumbnails beside the names. Tests: list rules (unit); open from the list, clear
-        after the question, a save goes to the top (UI)
+        as 3.36. Tests: list rules (unit); open from the list, clear after the question, a save goes to the top (UI)
+  - [x] **Open Recent thumbnails** (2026-10-20), as 3.36 (`DocumentWorkspace.AddToMruList`: made on every open
+        and save, the image centred in a square with a dark border): from the tab's compositor once it has caught
+        up, 96 px (48 pt in the menu), kept as PNGs in `~/.cache/paintnotnet/recent/` named by an FNV-1a hash
+        of the path; files leaving the list (or Clear this list) lose theirs. Also in the KDE global menu
+        (`icon-data`). Tests: names, framing, PNG round trip (unit); a file opened from the list gets one on disk
+        and in the menu, a new session finds it, clearing deletes it (UI); render `shell-open-recent.png`
   - [x] **Menu icons:** 17 items gained one (Save All, Exit, Copy Merged, Copy / Paste Selection, Feather Selection,
         Toggle Layer Visibility, Rotate 180° and the six Go to / Move Layer to items in Layers, Exposure, Highlights /
         Shadows, Temperature and Tint), from 14 more Lucide 1.48.0 SVGs taken unmodified from the repository's tag.
@@ -899,18 +923,20 @@ this just a great modern paint.net replacement for linux."
   - [x] **App ID `uk.co.maxwilson.paintnotnet`** (user, 2026-10-19: domain maxwilson.co.uk): Wayland app id,
         `.desktop`, icon, MIME and metainfo file names, the single-instance D-Bus name (was `org.paintnotnet.*`).
         `xtask install-desktop` dropped (the package names checkout builds too); `uninstall-desktop` clears its
-        old per-user files. Still no homepage URL (no public repository yet)
-  - [ ] ~~Needs your decision:~~ an app ID and homepage. `appstreamcli validate` warns that the ID `paintnotnet`
-        isn't reverse-DNS (e.g. `io.github.<user>.paintnotnet`, which would also rename the .desktop file and the
-        Wayland app id) and that there's no homepage URL. Installing the package (`makepkg -si`, needs sudo) is
-        left to you. `assets/icons/pdn336` (paint.net's icons, unused on main) could go in the clean-up
+        old per-user files
+  - [x] **Public repository** (user, 2026-10-20): <https://github.com/MaxJW/paintnotnet>; homepage, bug tracker
+        and source URLs in the AppStream file (`appstreamcli validate` passes), `url` in the PKGBUILD,
+        `repository` in Cargo.toml. The package (`paintnotnet-git`) is installed on the user's system
 - [x] **Test stability:** the UI test binary sometimes died with SIGSEGV: one test's GPU harness creating a Vulkan
       instance while another's was being destroyed (a null pointer in the Vulkan loader, from
       `vkEnumerateInstanceExtensionProperties`; core dump 2026-10-19). GPU tests now hold `common::gpu_lock()`
       (UI tests 6 → 10.5 s). `pnn-render`'s own GPU tests make devices in parallel too (not seen failing)
-- [ ] **To investigate:** a release-build crash on 2026-10-14 inside the NVIDIA driver's `vkDestroyDevice`, while
-      `GpuEffects` (holding the last reference to the app's device) was dropped on a non-main thread, probably at
-      exit (core dump no longer kept; only the stack in the session transcript)
+- [x] **Exit crash** (2026-10-14, in the NVIDIA driver's `vkDestroyDevice`): an effect preview still rendering
+      at exit held the last reference to the GPU device (`GpuEffects`), so a rayon worker destroyed the device
+      while the process was exiting. Fixed 3 minutes later in `1b49fd7` (`on_exit` drops the preview and waits up
+      to 2 s for workers to let go); since 2026-10-20 a worker still holding it after that leaves the device to
+      the OS instead of destroying it mid-exit. No core dumps since 2026-10-15; five smoke runs closing mid-preview
+      (Radial Blur on a 4K image) exit cleanly
 - [x] **Cleaned up:** dead code and leftovers from the recreation, docs, and the 16 GB `target/` once development is
       done (user, 2026-10-15)
   - [x] paint.net 3.36's icons (`assets/icons/pdn336`, 185 files, unused on main; still on `recreation`), the

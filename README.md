@@ -14,7 +14,8 @@ shortcuts, drawn on the GPU so large photos stay responsive.
 On Arch Linux and derivatives, build a package from this checkout's last commit:
 
 ```sh
-cd packaging/arch
+git clone https://github.com/MaxJW/paintnotnet.git
+cd paintnotnet/packaging/arch
 makepkg -si
 ```
 

@@ -8,6 +8,7 @@ _pkgname=paintnotnet
 pkgver=0.1.0.r27.gab731eb
 pkgrel=1
 pkgdesc='Image and photo editor for Linux modelled on paint.net'
+url='https://github.com/MaxJW/paintnotnet'
 arch=('x86_64' 'aarch64')
 # Code: MIT. Embedded Lucide icons: ISC. Embedded Geist typeface: OFL-1.1.
 license=('MIT' 'ISC' 'OFL-1.1')
