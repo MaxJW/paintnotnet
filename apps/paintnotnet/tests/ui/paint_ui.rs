@@ -170,3 +170,21 @@ fn alt_right_drag_resizes_the_brush_without_painting() {
     assert_eq!(s.hardness, hardness + 20);
     assert_eq!(history_names(&h), history, "nothing painted");
 }
+
+/// The Paintbrush's Fill is in the options row (it was behind "…", where opening the dropdown
+/// closed the menu around it): picking a pattern sticks.
+#[test]
+fn paintbrush_fill_picks_a_pattern() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness();
+    h.state_mut().set_tool(pnn_tools::ToolKind::Paintbrush);
+    h.step();
+    h.step();
+    h.get_by_value("Solid Color").click();
+    h.step();
+    h.step();
+    h.get_by_label("Forward Diagonal").click();
+    h.step();
+    h.step();
+    assert_eq!(h.state().settings().fill, pnn_tools::FillStyle::Hatch(2));
+}

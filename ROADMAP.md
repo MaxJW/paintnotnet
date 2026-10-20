@@ -1005,6 +1005,11 @@ this just a great modern paint.net replacement for linux."
       shade on the dark theme and a deeper one on the light; option toggles, window buttons and the like keep the
       theme's icon colour. Used by the command bar, tool rail, menus, Layers and History buttons, history entries
       and the KDE global menu's PNGs. Reviewed in both themes (README scenes, gallery menus)
+- [x] **No "…" menu** (user: "why are these in a sub menu? … clicking on solid colour just closes the existing
+      dropdown"): a dropdown inside the "…" menu closed the menu when opened. Its contents (Spacing and Fill for the
+      brushes, Fill for Shapes and Line / Curve, colour comparison and sampling for Magic Wand and Paint Bucket,
+      selection edges, text size units) are in the options row now. At 1440 pt the busiest tools take two lines,
+      at 1100 pt three. Test: the Paintbrush's Fill picks a pattern
 
 ---
 

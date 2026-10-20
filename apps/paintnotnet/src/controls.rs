@@ -469,17 +469,3 @@ pub fn cap_sample(painter: &egui::Painter, rect: Rect, cap: pnn_tools::LineCap, 
         }
     }
 }
-
-/// "⋯" opening a popover with the tool's less used options.
-pub fn more(ui: &mut egui::Ui, icons: &crate::icons::Icons, add: impl FnOnce(&mut egui::Ui)) {
-    egui::containers::menu::MenuButton::from_button(
-        egui::Button::image(icons.image(crate::icons::Icon::More)).frame_when_inactive(false),
-    )
-    .ui(ui, |ui| {
-        ui.set_min_width(220.0);
-        ui.spacing_mut().item_spacing.y = 8.0;
-        add(ui);
-    })
-    .0
-    .on_hover_text("More options");
-}

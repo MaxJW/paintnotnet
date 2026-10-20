@@ -210,7 +210,7 @@ fn options(
     icons: &Icons,
     palette: &Palette,
 ) {
-    use crate::controls::{brush_size, more, opacity, percent};
+    use crate::controls::{brush_size, opacity, percent};
     use ToolKind::*;
     match tool {
         RectangleSelect | LassoSelect | EllipseSelect => {
@@ -223,7 +223,9 @@ fn options(
                 });
             }
             g(ui, "feather", |ui| feather(ui, s, state, palette));
-            more(ui, icons, |ui| selection_quality(ui, s, icons, palette));
+            g(ui, "selection edges", |ui| {
+                selection_quality(ui, s, icons, palette)
+            });
         }
         MagicWand => {
             g(ui, "selection mode", |ui| {
@@ -232,10 +234,10 @@ fn options(
             g(ui, "flood mode", |ui| flood_mode(ui, s, icons, palette));
             percent(ui, "Tolerance", &mut s.tolerance, palette);
             g(ui, "feather", |ui| feather(ui, s, state, palette));
-            more(ui, icons, |ui| {
-                tolerance_space(ui, s, icons, palette);
-                sampling(ui, s, icons, palette);
-                selection_quality(ui, s, icons, palette);
+            g(ui, "compare", |ui| tolerance_space(ui, s, icons, palette));
+            g(ui, "sampling", |ui| sampling(ui, s, icons, palette));
+            g(ui, "selection edges", |ui| {
+                selection_quality(ui, s, icons, palette)
             });
         }
         MoveSelectedPixels => {
@@ -257,7 +259,9 @@ fn options(
                     palette,
                 );
             });
-            more(ui, icons, |ui| selection_quality(ui, s, icons, palette));
+            g(ui, "selection edges", |ui| {
+                selection_quality(ui, s, icons, palette)
+            });
         }
         MoveSelection | Zoom | Pan => {}
         PaintBucket => {
@@ -266,10 +270,8 @@ fn options(
             g(ui, "fill", |ui| fill_style(ui, s, palette));
             opacity(ui, s, palette);
             g(ui, "rendering", |ui| rendering(ui, s, icons, palette, true));
-            more(ui, icons, |ui| {
-                tolerance_space(ui, s, icons, palette);
-                sampling(ui, s, icons, palette);
-            });
+            g(ui, "compare", |ui| tolerance_space(ui, s, icons, palette));
+            g(ui, "sampling", |ui| sampling(ui, s, icons, palette));
         }
         Gradient => {
             g(ui, "gradient type", |ui| {
@@ -371,12 +373,10 @@ fn options(
                 rendering(ui, s, icons, palette, tool != Eraser)
             });
             if tool != CloneStamp {
-                more(ui, icons, |ui| {
-                    percent(ui, "Spacing", &mut s.spacing, palette);
-                    if tool == Paintbrush {
-                        ui.horizontal(|ui| fill_style(ui, s, palette));
-                    }
-                });
+                percent(ui, "Spacing", &mut s.spacing, palette);
+                if tool == Paintbrush {
+                    g(ui, "fill", |ui| fill_style(ui, s, palette));
+                }
             }
         }
         Pencil => {
@@ -499,9 +499,9 @@ fn options(
             });
             opacity(ui, s, palette);
             g(ui, "rendering", |ui| rendering(ui, s, icons, palette, true));
-            more(ui, icons, |ui| {
+            g(ui, "size units", |ui| {
                 ui.horizontal(|ui| {
-                    label(ui, "Size units", palette);
+                    label(ui, "Units", palette);
                     crate::controls::segmented(
                         ui,
                         icons,
@@ -605,9 +605,7 @@ fn options(
                 line_style(ui, s, tool == LineCurve, palette)
             });
             g(ui, "rendering", |ui| rendering(ui, s, icons, palette, true));
-            more(ui, icons, |ui| {
-                ui.horizontal(|ui| fill_style(ui, s, palette));
-            });
+            g(ui, "fill", |ui| fill_style(ui, s, palette));
         }
     }
 }
@@ -755,7 +753,7 @@ fn feather(ui: &mut egui::Ui, s: &mut ToolSettings, state: &mut Row2State, palet
 
 fn selection_quality(ui: &mut egui::Ui, s: &mut ToolSettings, icons: &Icons, palette: &Palette) {
     ui.horizontal(|ui| {
-        label(ui, "Selection edges", palette);
+        label(ui, "Edges", palette);
         crate::controls::segmented(
             ui,
             icons,
@@ -801,7 +799,7 @@ fn flood_mode(ui: &mut egui::Ui, s: &mut ToolSettings, icons: &Icons, palette: &
 /// Compare colours as they look (OKLab) or as paint.net does (RGB).
 fn tolerance_space(ui: &mut egui::Ui, s: &mut ToolSettings, icons: &Icons, palette: &Palette) {
     ui.horizontal(|ui| {
-        label(ui, "Compare colors", palette);
+        label(ui, "Compare", palette);
         crate::controls::segmented(
             ui,
             icons,
