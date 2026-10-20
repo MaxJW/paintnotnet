@@ -441,7 +441,8 @@ impl PaintNotNetApp {
                 .title_bar(false)
                 .collapsible(false)
                 .resizable(false)
-                .fixed_size(egui::vec2(460.0, 0.0))
+                .min_width(460.0)
+                .max_width(460.0)
                 .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 80.0)),
             |ui| {
                 let edit = ui.add(

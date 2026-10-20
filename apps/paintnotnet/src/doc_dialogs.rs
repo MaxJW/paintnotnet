@@ -11,6 +11,7 @@ use pnn_core::{BlendMode, ColorBgra, Document};
 use pnn_effects::rotate_zoom::RotateZoom;
 
 use crate::dialogs::MAX_DIMENSION;
+use crate::value_slider::{DIALOG_WIDTH, ValueSlider};
 
 pub enum Outcome {
     /// Still open; `changed` = a value changed this frame (rebuild the preview).
@@ -368,35 +369,66 @@ impl DocDialog {
             title,
             None,
             |ui| {
-                ui.set_min_width(300.0);
-                ui.set_max_width(420.0);
+                let palette = crate::theme::palette(ui.ctx());
+                match self.kind {
+                    // Forms with their own field grids.
+                    Kind::Resize(_) | Kind::CanvasSize(_) => {
+                        ui.set_min_width(300.0);
+                        ui.set_max_width(420.0);
+                    }
+                    _ => ui.set_width(DIALOG_WIDTH),
+                }
                 match &mut self.kind {
                     Kind::LayerProperties(p) => {
-                        ui.label(egui::RichText::new("General").strong());
-                        ui.horizontal(|ui| {
-                            ui.label("Name:");
-                            changed |= ui.text_edit_singleline(&mut p.name).changed();
-                        });
-                        changed |=
-                            crate::controls::checkbox(ui, &mut p.visible, "Visible").changed();
-                        ui.add_space(6.0);
-                        ui.label(egui::RichText::new("Blending").strong());
-                        ui.horizontal(|ui| {
-                            ui.label("Mode:");
-                            egui::ComboBox::from_id_salt("blend_mode")
-                                .selected_text(p.blend.name())
-                                .show_ui(ui, |ui| {
-                                    for m in BlendMode::ALL {
-                                        changed |= ui
-                                            .selectable_value(&mut p.blend, m, m.name())
-                                            .changed();
-                                    }
-                                });
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Opacity:");
-                            changed |= ui.add(egui::Slider::new(&mut p.opacity, 0..=255)).changed();
-                        });
+                        // A form: names on the left, the controls filling the rest.
+                        const LABEL: f32 = 84.0;
+                        let field = DIALOG_WIDTH - LABEL - 12.0;
+                        let name = |ui: &mut egui::Ui, text: &str| {
+                            ui.allocate_ui_with_layout(
+                                vec2(LABEL, 24.0),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    ui.set_min_width(LABEL);
+                                    ui.label(egui::RichText::new(text).color(palette.weak_text));
+                                },
+                            );
+                        };
+                        egui::Grid::new("layer_properties")
+                            .num_columns(2)
+                            .spacing(vec2(12.0, 10.0))
+                            .show(ui, |ui| {
+                                name(ui, "Name");
+                                changed |= ui
+                                    .add(
+                                        egui::TextEdit::singleline(&mut p.name)
+                                            .desired_width(field),
+                                    )
+                                    .changed();
+                                ui.end_row();
+                                ui.label("");
+                                changed |= crate::controls::checkbox(ui, &mut p.visible, "Visible")
+                                    .changed();
+                                ui.end_row();
+                                name(ui, "Blend mode");
+                                egui::ComboBox::from_id_salt("blend_mode")
+                                    .width(field)
+                                    .selected_text(p.blend.name())
+                                    .show_ui(ui, |ui| {
+                                        for m in BlendMode::ALL {
+                                            changed |= ui
+                                                .selectable_value(&mut p.blend, m, m.name())
+                                                .changed();
+                                        }
+                                    });
+                                ui.end_row();
+                                name(ui, "Opacity");
+                                changed |= ValueSlider::new("Opacity", 0.0, 255.0).show_inline(
+                                    ui,
+                                    &mut p.opacity,
+                                    field,
+                                );
+                                ui.end_row();
+                            });
                     }
                     Kind::Resize(r) => {
                         ui.horizontal(|ui| {
@@ -449,33 +481,33 @@ impl DocDialog {
                                 });
                         });
                     }
-                    Kind::FeatherSelection(f) => changed |= feather_controls(ui, f, true),
-                    Kind::BlurSelectionEdge(f) => changed |= feather_controls(ui, f, false),
+                    Kind::FeatherSelection(f) => {
+                        changed |= feather_controls(ui, f, true, icons, &palette)
+                    }
+                    Kind::BlurSelectionEdge(f) => {
+                        changed |= feather_controls(ui, f, false, icons, &palette)
+                    }
                     Kind::FeatherObject(fo) => {
-                        ui.horizontal(|ui| {
-                            ui.label("Radius:");
-                            changed |= ui
-                                .add(
-                                    egui::Slider::new(&mut fo.radius, 0.5..=250.0)
-                                        .logarithmic(true)
-                                        .suffix(" px"),
-                                )
-                                .changed();
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Profile:");
-                            for p in FeatherProfile::ALL {
-                                changed |=
-                                    ui.selectable_value(&mut fo.profile, p, p.name()).changed();
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Object threshold:");
-                            changed |= ui
-                                .add(egui::Slider::new(&mut fo.threshold, 1..=255))
-                                .on_hover_text("Alpha at or above this counts as the object")
-                                .changed();
-                        });
+                        let defaults = FeatherObject::default();
+                        changed |= ValueSlider::new("Radius", 0.5, 250.0)
+                            .default(f64::from(defaults.radius))
+                            .decimals(1)
+                            .suffix(" px")
+                            .low_end()
+                            .show(ui, &mut fo.radius);
+                        changed |= choice(
+                            ui,
+                            "Profile",
+                            &mut fo.profile,
+                            &FeatherProfile::ALL,
+                            |p| p.name(),
+                            icons,
+                            &palette,
+                        );
+                        changed |= ValueSlider::new("Object threshold", 1.0, 255.0)
+                            .default(f64::from(defaults.threshold))
+                            .hint("Alpha at or above this counts as the object")
+                            .show(ui, &mut fo.threshold);
                         changed |= crate::controls::checkbox(
                             ui,
                             &mut fo.canvas_edge,
@@ -484,34 +516,25 @@ impl DocDialog {
                         .changed();
                     }
                     Kind::RotateZoom(rz) => {
-                        ui.label(egui::RichText::new("Roll / Rotate").strong());
-                        ui.horizontal(|ui| {
-                            ui.label("Angle:");
-                            changed |= ui
-                                .add(egui::Slider::new(&mut rz.angle, -180.0..=180.0).suffix("°"))
-                                .changed();
-                        });
-                        ui.label(egui::RichText::new("Pan").strong());
-                        ui.horizontal(|ui| {
-                            ui.label("X Pan:");
-                            changed |= ui
-                                .add(egui::Slider::new(&mut rz.pan[0], -1.0..=1.0))
-                                .changed();
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Y Pan:");
-                            changed |= ui
-                                .add(egui::Slider::new(&mut rz.pan[1], -1.0..=1.0))
-                                .changed();
-                        });
-                        ui.label(egui::RichText::new("Zoom").strong());
-                        changed |= ui
-                            .add(
-                                egui::Slider::new(&mut rz.zoom, 1.0 / 16.0..=16.0)
-                                    .logarithmic(true)
-                                    .suffix("x"),
-                            )
-                            .changed();
+                        // Clockwise, unlike the effects' counter-clockwise angle dial: a
+                        // plain slider.
+                        changed |= ValueSlider::new("Angle", -180.0, 180.0)
+                            .default(0.0)
+                            .decimals(2)
+                            .suffix("°")
+                            .show(ui, &mut rz.angle);
+                        for (i, axis) in ["Pan X", "Pan Y"].into_iter().enumerate() {
+                            changed |= ValueSlider::new(axis, -1.0, 1.0)
+                                .default(0.0)
+                                .decimals(2)
+                                .show(ui, &mut rz.pan[i]);
+                        }
+                        changed |= ValueSlider::new("Zoom", 1.0 / 16.0, 16.0)
+                            .default(1.0)
+                            .decimals(2)
+                            .suffix("×")
+                            .low_end()
+                            .show(ui, &mut rz.zoom);
                         changed |=
                             crate::controls::checkbox(ui, &mut rz.tiling, "Tiling").changed();
                         changed |= crate::controls::checkbox(
@@ -672,29 +695,61 @@ impl DocDialog {
 }
 
 /// Radius, profile and (optionally) position controls. Returns true if anything changed.
-fn feather_controls(ui: &mut egui::Ui, f: &mut Feather, with_position: bool) -> bool {
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        ui.label("Radius:");
-        let slider = egui::Slider::new(&mut f.radius, 0.0..=250.0)
-            .logarithmic(true)
-            .suffix(" px");
-        changed |= ui.add(slider).changed();
-    });
-    ui.horizontal(|ui| {
-        ui.label("Profile:");
-        for p in FeatherProfile::ALL {
-            changed |= ui.selectable_value(&mut f.profile, p, p.name()).changed();
-        }
-    });
+fn feather_controls(
+    ui: &mut egui::Ui,
+    f: &mut Feather,
+    with_position: bool,
+    icons: &crate::icons::Icons,
+    palette: &crate::theme::Palette,
+) -> bool {
+    let mut changed = ValueSlider::new("Radius", 0.0, 250.0)
+        .default(8.0)
+        .decimals(1)
+        .suffix(" px")
+        .low_end()
+        .show(ui, &mut f.radius);
+    changed |= choice(
+        ui,
+        "Profile",
+        &mut f.profile,
+        &FeatherProfile::ALL,
+        |p| p.name(),
+        icons,
+        palette,
+    );
     if with_position {
-        ui.horizontal(|ui| {
-            ui.label("Position:");
-            for p in FeatherPosition::ALL {
-                changed |= ui.selectable_value(&mut f.position, p, p.name()).changed();
-            }
-        });
+        changed |= choice(
+            ui,
+            "Position",
+            &mut f.position,
+            &FeatherPosition::ALL,
+            |p| p.name(),
+            icons,
+            palette,
+        );
     }
+    changed
+}
+
+/// A named row of choices as one segmented control.
+fn choice<T: PartialEq + Copy>(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut T,
+    all: &[T],
+    name: impl Fn(T) -> &'static str,
+    icons: &crate::icons::Icons,
+    palette: &crate::theme::Palette,
+) -> bool {
+    ui.label(label);
+    let items: Vec<(T, crate::controls::Seg<'_>, &str)> = all
+        .iter()
+        .map(|&v| (v, crate::controls::Seg::Text(name(v)), name(v)))
+        .collect();
+    let changed = ui
+        .horizontal(|ui| crate::controls::segmented(ui, icons, value, &items, palette))
+        .inner;
+    ui.add_space(crate::theme::space::S);
     changed
 }
 

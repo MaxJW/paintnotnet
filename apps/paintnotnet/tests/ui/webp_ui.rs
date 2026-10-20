@@ -28,8 +28,11 @@ fn ctrl_s_on_a_webp_asks_for_settings_then_saves() {
     h.step();
     press(&mut h, ctrl(), Key::S);
     // pdn-webp's settings.
-    for label in ["Preset", "Quality", "Effort", "Lossless"] {
+    for label in ["Preset", "Lossless"] {
         h.get_by_label(label);
+    }
+    for slider in ["Quality", "Effort"] {
+        h.get_by_role_and_label(eframe::egui::accesskit::Role::Slider, slider);
     }
     h.get_by_label("Lossless").click();
     h.step();
@@ -76,7 +79,7 @@ fn save_options_file_type_switches_the_format() {
         .add(doc, Some(jpg.clone()), Some(FileFormat::Jpeg));
     h.step();
     press(&mut h, ctrl(), Key::S);
-    h.get_by_label("Quality");
+    h.get_by_role_and_label(eframe::egui::accesskit::Role::Slider, "Quality");
     // The dropdown's selected type is its accessible value.
     h.get_by(|n| n.value().as_deref() == Some("JPEG (.jpg)"))
         .click();

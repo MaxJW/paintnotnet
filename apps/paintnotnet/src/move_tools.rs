@@ -440,21 +440,23 @@ impl PaintNotNetApp {
         true
     }
 
-    /// Start floating `pixels` (pasted) over the document without lifting anything. `drawn`:
-    /// the active layer with them already drawn on it.
+    /// Start floating `pixels` (pasted) over the document without lifting anything: `rect`
+    /// and `selection` in the pixels' own coordinates, placed by `m`. `drawn`: the active
+    /// layer with them already drawn on it.
     pub(crate) fn begin_float(
         &mut self,
         key: u64,
         pixels: Surface,
         rect: Rect,
         selection: Selection,
+        m: Affine,
         drawn: Option<Surface>,
     ) {
         let Some(tab) = self.workspace.tab_mut(key) else {
             return;
         };
         let mut base = tab.doc.clone();
-        base.set_selection(selection.clone());
+        base.set_selection(selection.transform(m));
         let bounds =
             selection
                 .bounds()
@@ -468,7 +470,7 @@ impl PaintNotNetApp {
             rect,
             selection,
             bounds,
-            m: IDENTITY,
+            m,
             drag: None,
             pivot: None,
             changed: true,

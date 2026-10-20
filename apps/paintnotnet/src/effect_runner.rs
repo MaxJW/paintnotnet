@@ -670,7 +670,12 @@ impl PaintNotNetApp {
             def.name,
             None,
             |ui| {
-                ui.set_min_width(300.0);
+                // Generated controls fill one fixed width; Curves and Levels size their graphs.
+                if matches!(custom, None | Some(Custom::RemoveBackground(_))) {
+                    ui.set_width(crate::value_slider::DIALOG_WIDTH);
+                } else {
+                    ui.set_min_width(crate::value_slider::DIALOG_WIDTH);
+                }
                 match custom {
                     Some(Custom::Curves(c)) => changed |= curves_ui(ui, c, grab),
                     Some(Custom::Levels { levels, input }) => {
@@ -863,35 +868,22 @@ fn remove_background_ui(
 
 /// One generated control.
 fn property_ui(ui: &mut egui::Ui, p: &PropDef, v: &mut Value, layers: &[&str]) {
+    use crate::value_slider::ValueSlider;
     let (name, default) = (p.name, p.default);
     match &p.kind {
         PropKind::Int { min, max } => {
-            ui.label(name);
             let mut x = v.int();
-            ui.horizontal(|ui| {
-                ui.add(egui::Slider::new(&mut x, *min..=*max).show_value(false));
-                ui.add(egui::DragValue::new(&mut x).range(*min..=*max));
-                if ui.small_button("↺").on_hover_text("Reset").clicked() {
-                    x = default.int();
-                }
-            });
+            ValueSlider::new(name, f64::from(*min), f64::from(*max))
+                .default(f64::from(default.int()))
+                .show(ui, &mut x);
             *v = Value::Int(x);
         }
         PropKind::Float { min, max, decimals } => {
-            ui.label(name);
             let mut x = v.float();
-            ui.horizontal(|ui| {
-                ui.add(egui::Slider::new(&mut x, *min..=*max).show_value(false));
-                ui.add(
-                    egui::DragValue::new(&mut x)
-                        .range(*min..=*max)
-                        .max_decimals(*decimals)
-                        .speed(10f64.powi(-(*decimals as i32))),
-                );
-                if ui.small_button("↺").on_hover_text("Reset").clicked() {
-                    x = default.float();
-                }
-            });
+            ValueSlider::new(name, *min, *max)
+                .default(default.float())
+                .decimals(*decimals)
+                .show(ui, &mut x);
             *v = Value::Float(x);
         }
         PropKind::Bool => {
@@ -903,12 +895,14 @@ fn property_ui(ui: &mut egui::Ui, p: &PropDef, v: &mut Value, layers: &[&str]) {
             ui.label(name);
             let mut c = v.choice().min(options.len().saturating_sub(1));
             egui::ComboBox::from_id_salt(name)
+                .width(ui.available_width())
                 .selected_text(options.get(c).copied().unwrap_or(""))
                 .show_ui(ui, |ui| {
                     for (i, o) in options.iter().enumerate() {
                         ui.selectable_value(&mut c, i, *o);
                     }
                 });
+            ui.add_space(crate::theme::space::S);
             *v = Value::Choice(c);
         }
         PropKind::Color { alpha, .. } => {
@@ -921,37 +915,33 @@ fn property_ui(ui: &mut egui::Ui, p: &PropDef, v: &mut Value, layers: &[&str]) {
             );
             ui.horizontal(|ui| {
                 ui.label(name);
-                let mode = if *alpha {
-                    egui::color_picker::Alpha::OnlyBlend
-                } else {
-                    egui::color_picker::Alpha::Opaque
-                };
-                egui::color_picker::color_edit_button_srgba(ui, &mut rgba, mode);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let mode = if *alpha {
+                        egui::color_picker::Alpha::OnlyBlend
+                    } else {
+                        egui::color_picker::Alpha::Opaque
+                    };
+                    egui::color_picker::color_edit_button_srgba(ui, &mut rgba, mode);
+                });
             });
             let [r, g, b, a] = rgba.to_srgba_unmultiplied();
             *v = Value::Color(ColorBgra::from_rgba(r, g, b, a));
         }
         PropKind::Angle { min, max } => {
-            ui.label(name);
             let mut x = v.float();
-            ui.horizontal(|ui| {
-                angle_dial(ui, &mut x, *min, *max);
-                ui.add(
-                    egui::DragValue::new(&mut x)
-                        .range(*min..=*max)
-                        .max_decimals(1)
-                        .suffix("°"),
-                );
-                if ui.small_button("↺").on_hover_text("Reset").clicked() {
-                    x = default.float();
-                }
-            });
+            ValueSlider::new(name, *min, *max)
+                .default(default.float())
+                .decimals(2)
+                .suffix("°")
+                .dial()
+                .show(ui, &mut x);
             *v = Value::Float(x);
         }
         PropKind::Layer => {
             ui.label(name);
             let mut c = v.choice().min(layers.len().saturating_sub(1));
             egui::ComboBox::from_id_salt(name)
+                .width(ui.available_width())
                 .selected_text(layers.get(c).copied().unwrap_or(""))
                 .show_ui(ui, |ui| {
                     // Top layer first, as in the Layers window.
@@ -959,40 +949,10 @@ fn property_ui(ui: &mut egui::Ui, p: &PropDef, v: &mut Value, layers: &[&str]) {
                         ui.selectable_value(&mut c, i, *n);
                     }
                 });
+            ui.add_space(crate::theme::space::S);
             *v = Value::Choice(c);
         }
     }
-}
-
-/// A round dial: click or drag to point it (0° = right, counter-clockwise).
-fn angle_dial(ui: &mut egui::Ui, deg: &mut f64, min: f64, max: f64) {
-    let size = egui::vec2(36.0, 36.0);
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
-    let c = rect.center();
-    if let Some(p) = response.interact_pointer_pos()
-        && (response.dragged() || response.clicked())
-    {
-        let d = p - c;
-        if d.length() > 2.0 {
-            let mut a = (-d.y).atan2(d.x).to_degrees() as f64;
-            // Map into the property's range (e.g. 0..360 or -180..180).
-            while a < min {
-                a += 360.0;
-            }
-            while a > max {
-                a -= 360.0;
-            }
-            *deg = a.clamp(min, max);
-        }
-    }
-    let visuals = ui.style().interact(&response);
-    let r = size.x / 2.0 - 1.0;
-    ui.painter()
-        .circle(c, r, visuals.bg_fill, visuals.fg_stroke);
-    let a = (*deg as f32).to_radians();
-    let tip = c + egui::vec2(a.cos(), -a.sin()) * (r - 3.0);
-    ui.painter().line_segment([c, tip], visuals.fg_stroke);
-    ui.painter().circle_filled(c, 2.0, visuals.fg_stroke.color);
 }
 
 /// The Curves dialog body (3.36 `CurvesEffectConfigDialog` / `CurveControl`): Luminosity or

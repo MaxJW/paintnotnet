@@ -155,6 +155,54 @@ fn magic_wand_contiguous_and_shift_global() {
     assert_eq!(history_names(&h).last().unwrap(), "Magic Wand");
 }
 
+/// Changing the tolerance after a Magic Wand click re-runs that click (one history step),
+/// as long as it's still the latest change.
+#[test]
+fn magic_wand_follows_the_tolerance() {
+    // White, then a light grey block, then black.
+    let mut s = Surface::new_transparent(30, 10);
+    s.fill(ColorBgra::WHITE);
+    for y in 0..10 {
+        for x in 10..20 {
+            s.set(x, y, ColorBgra::from_rgba(215, 215, 215, 255));
+        }
+        for x in 20..30 {
+            s.set(x, y, ColorBgra::BLACK);
+        }
+    }
+    let mut h = harness_with(Document::from_layers(
+        30,
+        10,
+        vec![Layer::new("Background", s)],
+    ));
+    press(&mut h, Modifiers::SHIFT, Key::S);
+    h.state_mut().settings_mut().tolerance = 5;
+    drag(&mut h, PointerButton::Primary, Modifiers::NONE, &[px(2, 2)]);
+    assert_eq!(selected(&h).0, 100, "white only");
+    let steps = history_names(&h).len();
+    h.state_mut().settings_mut().tolerance = 60;
+    h.step();
+    h.step();
+    assert_eq!(selected(&h).0, 200, "white and grey");
+    assert_eq!(history_names(&h).len(), steps, "the same step");
+    assert_eq!(history_names(&h).last().unwrap(), "Magic Wand");
+    h.state_mut().settings_mut().tolerance = 5;
+    h.step();
+    h.step();
+    assert_eq!(selected(&h).0, 100, "and back");
+    // Undo goes to before the click.
+    press(&mut h, ctrl(), Key::Z);
+    assert_eq!(selected(&h).0, 0);
+    // After something else changes, the tolerance no longer re-runs it.
+    press(&mut h, ctrl(), Key::Y);
+    press(&mut h, ctrl(), Key::A);
+    let all = selected(&h).0;
+    h.state_mut().settings_mut().tolerance = 30;
+    h.step();
+    h.step();
+    assert_eq!(selected(&h).0, all);
+}
+
 #[test]
 fn erase_fill_invert_select_all_crop() {
     let mut h = harness();

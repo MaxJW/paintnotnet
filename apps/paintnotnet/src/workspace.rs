@@ -72,6 +72,11 @@ impl DocumentTab {
         self.history.push(name, icon, &self.doc);
     }
 
+    /// Record the document in place of the current step (it keeps its name).
+    pub fn recommit(&mut self) {
+        self.history.replace_current(&self.doc);
+    }
+
     pub fn undo(&mut self) -> bool {
         match self.history.undo() {
             Some(doc) => {

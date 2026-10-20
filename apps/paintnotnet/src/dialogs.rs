@@ -4,6 +4,7 @@ use eframe::egui::{self, Align, Layout};
 
 use crate::icons::{Icon, Icons};
 use crate::theme;
+use crate::value_slider::ValueSlider;
 
 /// paint.net's maximum image dimension.
 pub const MAX_DIMENSION: u32 = 65535;
@@ -13,9 +14,12 @@ pub enum Modal {
     About,
     /// File > Open Recent > Clear this list: asks first, as paint.net 3.36.
     ClearRecent,
-    /// The pasted image is larger than the canvas (paint.net asks the same).
+    /// The pasted image is larger than the canvas (paint.net asks too): make the canvas
+    /// bigger, keep it, or open the image on its own.
     PasteLarger {
         new_layer: bool,
+        image: (u32, u32),
+        canvas: (u32, u32),
     },
     /// Saving a layered image in a flat format (paint.net's WarnAboutFlattening).
     FlattenForSave {
@@ -89,6 +93,7 @@ pub enum ModalResult {
         new_layer: bool,
         expand: bool,
     },
+    PasteAsNewImage,
     FlattenAndSave {
         key: u64,
         then: SaveTarget,
@@ -288,39 +293,74 @@ impl Modal {
                             &palette,
                         )
                     }
-                    Modal::PasteLarger { new_layer } => {
+                    Modal::PasteLarger {
+                        new_layer,
+                        image,
+                        canvas,
+                    } => {
                         header(
                             ui,
                             icons,
                             Some(Icon::Paste),
-                            "The pasted image is larger than the canvas",
-                            Some("Expand the canvas to fit it, or keep the canvas size and crop what overhangs."),
+                            "The pasted image is bigger than the canvas",
+                            Some(&format!(
+                                "The image is {} × {} px; the canvas is {} × {} px.",
+                                image.0, image.1, canvas.0, canvas.1
+                            )),
                             &palette,
                         );
                         let n = *new_layer;
-                        footer(
+                        let choice = if choice_row(
                             ui,
-                            &[
-                                (
-                                    "Expand canvas",
-                                    ModalResult::PasteExpand {
-                                        new_layer: n,
-                                        expand: true,
-                                    },
-                                    Kind::Primary,
-                                ),
-                                (
-                                    "Keep canvas size",
-                                    ModalResult::PasteExpand {
-                                        new_layer: n,
-                                        expand: false,
-                                    },
-                                    Kind::Normal,
-                                ),
-                                ("Cancel", ModalResult::Cancelled, Kind::Normal),
-                            ],
+                            "Make the canvas bigger",
+                            "Grow the canvas to fit the whole image",
+                            true,
                             &palette,
-                        )
+                        ) {
+                            Some(ModalResult::PasteExpand {
+                                new_layer: n,
+                                expand: true,
+                            })
+                        } else if choice_row(
+                            ui,
+                            "Keep the canvas size",
+                            "Move the image into place; what's left outside the canvas \
+                             is trimmed when you finish",
+                            false,
+                            &palette,
+                        ) {
+                            Some(ModalResult::PasteExpand {
+                                new_layer: n,
+                                expand: false,
+                            })
+                        } else if choice_row(
+                            ui,
+                            "Open as a new image",
+                            "Leave this image alone and open the pasted one on its own",
+                            false,
+                            &palette,
+                        ) {
+                            Some(ModalResult::PasteAsNewImage)
+                        } else {
+                            None
+                        };
+                        crate::controls::checkbox(ui, new_layer, "Paste onto a new layer");
+                        choice.or_else(|| {
+                            footer(
+                                ui,
+                                &[("Cancel", ModalResult::Cancelled, Kind::Normal)],
+                                &palette,
+                            )
+                        })
+                        .or_else(|| {
+                            // Enter takes the highlighted first choice.
+                            ui.input(|i| i.key_pressed(egui::Key::Enter)).then_some(
+                                ModalResult::PasteExpand {
+                                    new_layer: n,
+                                    expand: true,
+                                },
+                            )
+                        })
                     }
                     Modal::Recover { items } => {
                         header(
@@ -535,14 +575,20 @@ fn format_options(
                 });
             ui.end_row();
             field_label(ui, "Quality", palette);
-            ui.add_enabled(
-                !options.webp_lossless,
-                egui::Slider::new(&mut options.webp_quality, 0..=100),
-            );
+            ui.add_enabled_ui(!options.webp_lossless, |ui| {
+                ValueSlider::new("Quality", 0.0, 100.0).show_inline(
+                    ui,
+                    &mut options.webp_quality,
+                    OPTION_WIDTH,
+                );
+            });
             ui.end_row();
-            field_label(ui, "Effort", palette);
-            ui.add(egui::Slider::new(&mut options.webp_effort, 0..=9))
-                .on_hover_text("Higher is slower and smaller");
+            field_label(ui, "Effort", palette).on_hover_text("Higher is slower and smaller");
+            ValueSlider::new("Effort", 0.0, 9.0).show_inline(
+                ui,
+                &mut options.webp_effort,
+                OPTION_WIDTH,
+            );
             ui.end_row();
             ui.label("");
             crate::controls::checkbox(ui, &mut options.webp_lossless, "Lossless");
@@ -550,7 +596,11 @@ fn format_options(
         }
         FileFormat::Jpeg => {
             field_label(ui, "Quality", palette);
-            ui.add(egui::Slider::new(&mut options.jpeg_quality, 0..=100));
+            ValueSlider::new("Quality", 0.0, 100.0).show_inline(
+                ui,
+                &mut options.jpeg_quality,
+                OPTION_WIDTH,
+            );
             ui.end_row();
         }
         f => {
@@ -569,9 +619,12 @@ fn format_options(
     }
 }
 
-fn field_label(ui: &mut egui::Ui, text: &str, palette: &theme::Palette) {
-    ui.label(egui::RichText::new(text).color(palette.weak_text));
+fn field_label(ui: &mut egui::Ui, text: &str, palette: &theme::Palette) -> egui::Response {
+    ui.label(egui::RichText::new(text).color(palette.weak_text))
 }
+
+/// The slider and box of a save option, beside its name in the form.
+const OPTION_WIDTH: f32 = 280.0;
 
 /// Buttons on the right, the first (primary) rightmost. Enter picks the primary one.
 /// The OK / Cancel row of the effect and document dialogs, styled as the message boxes'
@@ -601,6 +654,59 @@ pub fn ok_cancel(ui: &mut egui::Ui, ok_enabled: bool) -> Option<bool> {
         });
     });
     picked
+}
+
+/// One of a prompt's choices as a full-width row: its name and what it does underneath.
+/// `primary` rows are tinted with the accent. Returns true when picked.
+fn choice_row(
+    ui: &mut egui::Ui,
+    title: &str,
+    detail: &str,
+    primary: bool,
+    palette: &theme::Palette,
+) -> bool {
+    let width = ui.available_width();
+    let response = egui::Frame::new()
+        .fill(if primary {
+            palette.accent_alpha(0.16)
+        } else {
+            palette.list
+        })
+        .stroke(egui::Stroke::new(
+            1.0,
+            if primary {
+                palette.accent_alpha(0.55)
+            } else {
+                egui::Color32::TRANSPARENT
+            },
+        ))
+        .corner_radius(theme::radius::CONTROL)
+        .inner_margin(egui::Margin::symmetric(12, 8))
+        .show(ui, |ui| {
+            ui.set_width(width - 24.0);
+            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.label(
+                egui::RichText::new(title)
+                    .font(egui::FontId::new(theme::text::BODY, theme::medium())),
+            );
+            ui.label(
+                egui::RichText::new(detail)
+                    .size(theme::text::SMALL)
+                    .color(palette.weak_text),
+            );
+        })
+        .response
+        .interact(egui::Sense::click());
+    if response.hovered() {
+        ui.painter().rect_stroke(
+            response.rect,
+            theme::radius::CONTROL,
+            egui::Stroke::new(1.0, palette.accent_alpha(0.8)),
+            egui::StrokeKind::Inside,
+        );
+    }
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, title));
+    response.clicked()
 }
 
 fn footer(

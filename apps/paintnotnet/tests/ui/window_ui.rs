@@ -506,3 +506,107 @@ fn image_tab_menu_from_right_click_and_alt_minus() {
         "Alt+− opens the active image's menu below its tab"
     );
 }
+
+/// A paste wider than the canvas, kept at the canvas size, floats whole: dragging it left on
+/// the GPU brings in what started off the canvas, and gives what the CPU gives.
+#[test]
+fn gpu_drag_of_a_paste_wider_than_the_canvas_matches_the_cpu() {
+    let _gpu = crate::common::gpu_lock();
+    let run = |gpu: bool| {
+        use eframe::egui::{Event, Modifiers, PointerButton};
+        use pnn_core::{ColorBgra, Document, Layer, Surface};
+        let mut s = Surface::new_transparent(600, 400);
+        s.fill(ColorBgra::WHITE);
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(eframe::egui::vec2(1280.0, 800.0))
+            .wgpu()
+            .build_eframe(|cc| paintnotnet::app::PaintNotNetApp::new(cc, None, Vec::new()));
+        h.state_mut().workspace_mut().add(
+            Document::from_layers(600, 400, vec![Layer::new("Background", s)]),
+            None,
+            None,
+        );
+        // 900 × 300, a pattern that differs along x.
+        let mut rgba = Vec::with_capacity(900 * 300 * 4);
+        for y in 0..300u32 {
+            for x in 0..900u32 {
+                rgba.extend([(x % 256) as u8, (x / 4) as u8, (y % 200) as u8, 255]);
+            }
+        }
+        h.state_mut()
+            .set_clipboard(Box::new(paintnotnet::clipboard::MemoryClipboard {
+                image: Some(paintnotnet::clipboard::ClipImage {
+                    width: 900,
+                    height: 300,
+                    rgba,
+                }),
+                text: None,
+            }));
+        h.state_mut().set_cpu_floating(!gpu);
+        h.step();
+        h.step();
+        let ctx = h.ctx.clone();
+        h.state_mut().execute(
+            &ctx,
+            paintnotnet::commands::Triggered::once(paintnotnet::commands::Command::Paste),
+        );
+        h.step();
+        h.get_by_role_and_label(
+            eframe::egui::accesskit::Role::Button,
+            "Keep the canvas size",
+        )
+        .click();
+        for _ in 0..3 {
+            h.step();
+        }
+        let rect = h.state().canvas().rect.unwrap();
+        let view = h.state().workspace().active().unwrap().view.unwrap();
+        let ppp = h.ctx.pixels_per_point() as f64;
+        let vp = [rect.width() as f64 * ppp, rect.height() as f64 * ppp];
+        let at = |x: f64, y: f64| {
+            let s = view.image_to_screen([x, y], vp);
+            eframe::egui::pos2(
+                rect.min.x + (s[0] / ppp) as f32,
+                rect.min.y + (s[1] / ppp) as f32,
+            )
+        };
+        let button = |pressed, pos| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        h.event(Event::PointerMoved(at(300.0, 150.0)));
+        h.step();
+        h.event(button(true, at(300.0, 150.0)));
+        h.step();
+        for k in 1..=10 {
+            h.event(Event::PointerMoved(at(300.0 - 25.0 * k as f64, 150.0)));
+            h.step();
+        }
+        let on_gpu = h
+            .state()
+            .workspace()
+            .active()
+            .unwrap()
+            .gpu
+            .floating
+            .is_some();
+        h.event(button(false, at(50.0, 150.0)));
+        for _ in 0..4 {
+            h.step();
+        }
+        let surface = &h.state().workspace().active().unwrap().doc.layer(0).surface;
+        (surface.to_pixels(), surface.get(590, 10), on_gpu)
+    };
+    let (gpu, edge, on_gpu) = run(true);
+    assert!(on_gpu, "the GPU drew the drag");
+    // Moved 250 px left: canvas x 590 shows image x 840, which started off the canvas.
+    assert_eq!(
+        edge,
+        pnn_core::ColorBgra::from_rgba((840 % 256) as u8, 210, 10, 255)
+    );
+    let (cpu, _, cpu_on_gpu) = run(false);
+    assert!(!cpu_on_gpu);
+    assert!(gpu == cpu, "the GPU and CPU drags leave the same pixels");
+}

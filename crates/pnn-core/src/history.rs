@@ -119,6 +119,21 @@ impl<T: Copy> History<T> {
         self.trim();
     }
 
+    /// Change what the current step recorded (a Magic Wand click re-run with a new
+    /// tolerance), keeping its name. Steps after it are discarded; the first step is never
+    /// replaced.
+    pub fn replace_current(&mut self, document: &Document) {
+        if self.current == 0 {
+            return;
+        }
+        self.entries.truncate(self.current + 1);
+        let prev = tile_ptrs(&self.entries[self.current - 1].document);
+        let entry = &mut self.entries[self.current];
+        entry.unique_bytes = bytes_not_in(document, &prev);
+        entry.document = document.clone();
+        self.trim();
+    }
+
     pub fn undo(&mut self) -> Option<&Document> {
         self.jump(self.current.checked_sub(1)?)
     }
@@ -172,6 +187,30 @@ mod tests {
                 height: 1,
             }),
             |l| l.surface.set(x, y, ColorBgra::BLACK),
+        );
+    }
+
+    #[test]
+    fn replace_current_keeps_one_step() {
+        let mut doc = Document::new_blank(600, 600);
+        let mut h = History::new("New Image", (), &doc);
+        paint(&mut doc, 1, 1);
+        h.push("Pencil", (), &doc);
+        paint(&mut doc, 300, 300);
+        h.replace_current(&doc);
+        assert_eq!((h.entries().len(), h.current()), (2, 1));
+        assert_eq!(h.entries()[1].name, "Pencil");
+        assert_eq!(
+            h.entries()[1].document().layer(0).surface.get(300, 300),
+            ColorBgra::BLACK
+        );
+        let first = h.undo().unwrap();
+        assert_eq!(first.layer(0).surface.get(1, 1), ColorBgra::WHITE);
+        // The first step stays as opened.
+        h.replace_current(&doc);
+        assert_eq!(
+            h.entries()[0].document().layer(0).surface.get(1, 1),
+            ColorBgra::WHITE
         );
     }
 

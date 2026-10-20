@@ -502,7 +502,7 @@ pub fn def(name: &str) -> Option<EffectDef> {
             vec![
                 PropDef::float("Factor", 4.0, 1.0, 10.0, 2),
                 PropDef::float("Zoom", 1.0, 0.1, 50.0, 2),
-                PropDef::float("Angle", 0.0, -180.0, 180.0, 2),
+                PropDef::angle("Angle", 0.0, -180.0, 180.0),
                 PropDef::int("Quality", 2, 1, 5),
             ],
             |v: &[Value], src, _| {
@@ -554,7 +554,7 @@ pub fn def(name: &str) -> Option<EffectDef> {
             vec![
                 PropDef::int("Factor", 1, 1, 10),
                 PropDef::float("Zoom", 10.0, 0.0, 100.0, 2),
-                PropDef::float("Angle", 0.0, -180.0, 180.0, 2),
+                PropDef::angle("Angle", 0.0, -180.0, 180.0),
                 PropDef::int("Quality", 2, 1, 5),
                 PropDef::bool("Invert colors", false),
             ],
@@ -609,7 +609,7 @@ pub fn def(name: &str) -> Option<EffectDef> {
             vec![
                 PropDef::int("Shadow radius", 5, 0, 100),
                 PropDef::int("Distance", 10, 0, 200),
-                PropDef::float("Angle", 45.0, -180.0, 180.0, 2),
+                PropDef::angle("Angle", 45.0, -180.0, 180.0),
                 PropDef::int("Opacity", 50, 0, 100),
                 PropDef::bool("Only draw shadow", false),
                 // Any colour (BoltBait's Drop Shadow Plus offered primary or secondary).

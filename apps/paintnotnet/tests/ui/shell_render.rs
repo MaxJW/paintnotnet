@@ -1198,6 +1198,7 @@ fn dialog_gallery() {
         ("save-webp", None),
         ("flatten-prompt", None),
         ("unsaved-close", None),
+        ("paste-larger", None),
     ];
     use paintnotnet::commands::MenuId;
     let shots: Vec<(&str, Option<Command>)> = shots
@@ -1269,6 +1270,19 @@ fn dialog_gallery() {
                                 .execute(&ctx, Triggered::once(Command::Flatten));
                         }
                         press(&mut h, ctrl, Key::S);
+                    }
+                    (None, "paste-larger") => {
+                        h.state_mut().set_clipboard(Box::new(
+                            paintnotnet::clipboard::MemoryClipboard {
+                                image: Some(paintnotnet::clipboard::ClipImage {
+                                    width: 1920,
+                                    height: 1080,
+                                    rgba: vec![128; 1920 * 1080 * 4],
+                                }),
+                                text: None,
+                            },
+                        ));
+                        h.state_mut().execute(&ctx, Triggered::once(Command::Paste));
                     }
                     _ => {
                         h.state_mut()

@@ -37,6 +37,7 @@ pub mod status;
 pub mod text_tool;
 pub mod theme;
 pub mod toolbar;
+pub mod value_slider;
 pub mod vector_tools;
 pub mod wayland;
 pub mod windows;

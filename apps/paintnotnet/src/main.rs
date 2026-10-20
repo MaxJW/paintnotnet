@@ -83,6 +83,7 @@ fn main() -> ExitCode {
         Box::new(move |cc| {
             let smoke_run = smoke.is_some();
             let mut app = PaintNotNetApp::new(cc, smoke, files);
+            app.set_clipboard(Box::new(paintnotnet::clipboard::SystemClipboard::new()));
             if !smoke_run {
                 // Autosave for crash recovery, then the user's settings (which may change
                 // its interval). Smoke tests use neither.

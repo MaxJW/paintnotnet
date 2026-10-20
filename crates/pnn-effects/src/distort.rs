@@ -484,7 +484,7 @@ pub fn def(name: &str) -> Option<EffectDef> {
         "Tile Reflection" => d(
             "Tile Reflection",
             vec![
-                PropDef::float("Angle", 30.0, -180.0, 180.0, 2),
+                PropDef::angle("Angle", 30.0, -180.0, 180.0),
                 PropDef::float("Tile Size", 40.0, 1.0, 800.0, 2),
                 PropDef::float("Curvature", 8.0, -100.0, 100.0, 2),
                 PropDef::int("Quality", 2, 1, 5),

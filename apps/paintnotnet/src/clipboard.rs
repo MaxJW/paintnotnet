@@ -19,11 +19,14 @@ pub struct ClipImage {
     pub rgba: Vec<u8>,
 }
 
+/// Where a clipboard image read arrives (`None`: there's no image).
+pub type ImageAnswer = std::sync::mpsc::Receiver<Option<ClipImage>>;
+
 pub trait Clipboard {
     fn get_image(&mut self) -> Option<ClipImage>;
     /// The image, answered on the returned channel (read on another thread while the UI
     /// keeps drawing). By default it's read at once.
-    fn request_image(&mut self) -> std::sync::mpsc::Receiver<Option<ClipImage>> {
+    fn request_image(&mut self) -> ImageAnswer {
         let (reply, answer) = std::sync::mpsc::channel();
         let _ = reply.send(self.get_image());
         answer
@@ -126,7 +129,7 @@ impl Clipboard for SystemClipboard {
     }
     /// The desktop hands a copied image over as PNG, decoded on the clipboard thread (a
     /// 24 MP image takes a few hundred ms).
-    fn request_image(&mut self) -> std::sync::mpsc::Receiver<Option<ClipImage>> {
+    fn request_image(&mut self) -> ImageAnswer {
         let (reply, answer) = std::sync::mpsc::channel();
         // If the thread is gone the reply is dropped, and the answer is "nothing".
         let _ = self.send(ClipRequest::GetImage(reply));
@@ -341,15 +344,19 @@ impl PaintNotNetApp {
                         pnn_core::transform::draw_transformed(
                             &mut layer,
                             &plan.pixels,
-                            plan.rect,
-                            &pnn_core::transform::IDENTITY,
+                            plan.rect(),
+                            &plan.m(),
                             resampling,
                         );
                         Some(Pasted::Ready(plan, layer))
                     },
                     move |app, pasted| match pasted {
                         Some(Pasted::Larger(image)) => {
-                            app.modal = Some(crate::dialogs::Modal::PasteLarger { new_layer });
+                            app.modal = Some(crate::dialogs::Modal::PasteLarger {
+                                new_layer,
+                                image: (image.width, image.height),
+                                canvas: (w, h),
+                            });
                             app.pending_paste = Some(image);
                         }
                         Some(Pasted::Ready(plan, layer)) => {
@@ -396,7 +403,7 @@ impl PaintNotNetApp {
         true
     }
 
-    fn paste_new_image(&mut self, image: ClipImage) {
+    pub(crate) fn paste_new_image(&mut self, image: ClipImage) {
         let (w, h) = (image.width.max(1), image.height.max(1));
         let surface = to_surface(&image, (0, 0), (w, h));
         let doc = Document::from_layers(w, h, vec![Layer::new("Background", surface)]);
@@ -472,19 +479,14 @@ impl PaintNotNetApp {
                 Layer::new(format!("Layer {}", n + 1), Surface::new_transparent(w, h)),
             );
         }
-        let r = plan.rect;
-        let selection = Selection::rect(
-            r.x as f64,
-            r.y as f64,
-            (r.x + r.width) as f64,
-            (r.y + r.height) as f64,
-        );
+        let (rect, m) = (plan.rect(), plan.m());
+        let selection = Selection::rect(0.0, 0.0, rect.width as f64, rect.height as f64);
         let name = if new_layer {
             "Paste into New Layer"
         } else {
             "Paste"
         };
-        self.begin_float(key, plan.pixels, plan.rect, selection, drawn);
+        self.begin_float(key, plan.pixels, rect, selection, m, drawn);
         if let Some(tab) = self.workspace.tab_mut(key) {
             tab.commit(name, Icon::Paste);
         }
@@ -499,11 +501,14 @@ enum Pasted {
     Ready(PastePlan, Surface),
 }
 
-/// Where pasted pixels go: at the visible top-left corner, kept inside the canvas.
+/// A paste: the whole image, placed at the visible top-left corner and kept inside the
+/// canvas where it fits. Nothing is cut off while it floats (it can be dragged into view);
+/// what's still outside the canvas is trimmed when it's drawn in on Finish.
 struct PastePlan {
-    rect: Rect,
-    /// The image at `rect`, canvas-sized.
+    /// The image, at its own size.
     pixels: Surface,
+    /// Where its top-left corner goes on the canvas.
+    at: (u32, u32),
 }
 
 impl PastePlan {
@@ -513,16 +518,25 @@ impl PastePlan {
             let y = p[1].max(0.0).min((h.saturating_sub(image.height)) as f64) as u32;
             (x, y)
         });
-        let rect = Rect {
-            x: at.0,
-            y: at.1,
-            width: image.width.min(w - at.0),
-            height: image.height.min(h - at.1),
-        };
+        let size = (image.width.max(1), image.height.max(1));
         Self {
-            rect,
-            pixels: to_surface(image, at, (w, h)),
+            pixels: to_surface(image, (0, 0), size),
+            at,
         }
+    }
+
+    fn rect(&self) -> Rect {
+        Rect {
+            x: 0,
+            y: 0,
+            width: self.pixels.width(),
+            height: self.pixels.height(),
+        }
+    }
+
+    /// From the image's own coordinates onto the canvas.
+    fn m(&self) -> pnn_core::transform::Affine {
+        pnn_core::transform::translation(f64::from(self.at.0), f64::from(self.at.1))
     }
 }
 

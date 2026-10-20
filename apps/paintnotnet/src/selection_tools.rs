@@ -353,8 +353,7 @@ impl PaintNotNetApp {
                 let mode = combine_mode(self.settings.selection_mode, button, modifiers);
                 if self.tool == ToolKind::MagicWand {
                     let key = tab.key;
-                    let global = (self.settings.flood_mode == FloodMode::Global) != modifiers.shift;
-                    self.magic_wand(key, pos, mode, !global);
+                    self.magic_wand(key, pos, mode, modifiers.shift, false);
                     return;
                 }
                 self.select_drag = Some(SelectDrag {
@@ -405,13 +404,19 @@ impl PaintNotNetApp {
         }
     }
 
+    /// A Magic Wand click at `pos` (`shift` flips the flood mode). `rerun`: the last click
+    /// again with the current settings, from the document as it was before it, replacing
+    /// its history step.
     pub(crate) fn magic_wand(
         &mut self,
         key: u64,
         pos: [f64; 2],
         mode: CombineMode,
-        contiguous: bool,
+        shift: bool,
+        rerun: bool,
     ) {
+        let settings = WandSettings::of(&self.settings);
+        let contiguous = (settings.flood == FloodMode::Global) == shift;
         let feather = self.settings.feather;
         let tolerance = pnn_core::selection::Tolerance {
             pct: self.settings.tolerance,
@@ -429,7 +434,11 @@ impl PaintNotNetApp {
         }
         // The fill, outline and combine work on a snapshot (in the background on a large
         // image, see `run_click_job`); the result is set when it's done.
-        let doc = tab.doc.clone();
+        let doc = match (&self.wand_live, rerun) {
+            (Some(live), true) => live.before.clone(),
+            _ => tab.doc.clone(),
+        };
+        let before = doc.clone();
         let size = w as u64 * h as u64;
         let seed = (pos[0] as u32, pos[1] as u32);
         let work = move || {
@@ -457,16 +466,73 @@ impl PaintNotNetApp {
             });
             (combined, mask)
         };
+        let step = rerun
+            .then(|| self.wand_live.as_ref().map(|l| l.step))
+            .flatten();
         self.run_click_job(size, work, move |app, (combined, mask)| {
             let Some(tab) = app.workspace.tab_mut(key) else {
                 return;
             };
-            tab.doc.set_selection(combined);
-            tab.commit("Magic Wand", Icon::MagicWand);
+            if rerun {
+                // Only while the click is still the latest step.
+                if step != Some(tab.history.current()) {
+                    app.wand_live = None;
+                    return;
+                }
+                tab.doc.set_selection(combined);
+                tab.recommit();
+            } else {
+                tab.doc.set_selection(combined);
+                tab.commit("Magic Wand", Icon::MagicWand);
+            }
             if let Some(mask) = mask {
                 tab.prime_mask(antialias, mask);
             }
+            app.wand_live = Some(WandLive {
+                key,
+                pos,
+                mode,
+                shift,
+                before,
+                settings,
+                step: tab.history.current(),
+                selection_revision: tab.doc.selection_revision(),
+            });
         });
+    }
+
+    /// The last Magic Wand click follows its settings: changing the tolerance (or flood mode,
+    /// colour space, sampling) runs it again while it's still the latest change and the
+    /// Magic Wand is the tool. One run at a time; the newest settings win.
+    pub(crate) fn wand_follow_settings(&mut self) {
+        if self.tool != ToolKind::MagicWand {
+            self.wand_live = None;
+            return;
+        }
+        if self.click_job.is_some() {
+            return;
+        }
+        let Some(live) = &self.wand_live else {
+            return;
+        };
+        if WandSettings::of(&self.settings) == live.settings {
+            return;
+        }
+        let current = self
+            .workspace
+            .tabs()
+            .iter()
+            .find(|t| t.key == live.key)
+            .is_some_and(|t| {
+                t.history.current() == live.step
+                    && t.doc.selection_revision() == live.selection_revision
+            });
+        if !current {
+            self.wand_live = None;
+            return;
+        }
+        let (key, pos, mode, shift) = (live.key, live.pos, live.mode, live.shift);
+        self.magic_wand(key, pos, mode, shift, true);
     }
 
     /// Edit › Invert Selection. On a large image (a Magic Wand selection of a photo is
@@ -751,6 +817,42 @@ impl PaintNotNetApp {
             }
         }
     }
+}
+
+/// The settings a Magic Wand click used.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct WandSettings {
+    tolerance: u8,
+    alpha: ToleranceAlphaMode,
+    space: pnn_tools::ToleranceSpace,
+    sampling: SamplingMode,
+    flood: FloodMode,
+}
+
+impl WandSettings {
+    fn of(s: &pnn_tools::ToolSettings) -> Self {
+        Self {
+            tolerance: s.tolerance,
+            alpha: s.tolerance_alpha,
+            space: s.tolerance_space,
+            sampling: s.sampling,
+            flood: s.flood_mode,
+        }
+    }
+}
+
+/// The last Magic Wand click, which follows its settings (`wand_follow_settings`).
+pub(crate) struct WandLive {
+    key: u64,
+    pos: [f64; 2],
+    mode: CombineMode,
+    shift: bool,
+    /// The document before the click.
+    before: pnn_core::Document,
+    settings: WandSettings,
+    /// The history step and selection the click (or its last re-run) left.
+    step: usize,
+    selection_revision: u64,
 }
 
 #[cfg(test)]

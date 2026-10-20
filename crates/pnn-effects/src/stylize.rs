@@ -429,7 +429,7 @@ pub fn def(name: &str) -> Option<EffectDef> {
         ),
         "Edge Detect" => d(
             "Edge Detect",
-            vec![PropDef::float("Angle", 45.0, -180.0, 180.0, 2)],
+            vec![PropDef::angle("Angle", 45.0, -180.0, 180.0)],
             |v: &[Value], _, _| {
                 Box::new(Kernel3 {
                     w: angle_kernel(v[0].float(), 0.0),
@@ -439,7 +439,7 @@ pub fn def(name: &str) -> Option<EffectDef> {
         ),
         "Relief" => d(
             "Relief",
-            vec![PropDef::float("Angle", 45.0, -180.0, 180.0, 2)],
+            vec![PropDef::angle("Angle", 45.0, -180.0, 180.0)],
             |v: &[Value], _, _| {
                 Box::new(Kernel3 {
                     w: angle_kernel(v[0].float(), 1.0),
@@ -449,7 +449,7 @@ pub fn def(name: &str) -> Option<EffectDef> {
         ),
         "Emboss" => d(
             "Emboss",
-            vec![PropDef::float("Angle", 0.0, -180.0, 180.0, 2)],
+            vec![PropDef::angle("Angle", 0.0, -180.0, 180.0)],
             |v: &[Value], _, _| {
                 Box::new(Kernel3 {
                     w: angle_kernel(v[0].float(), 0.0),

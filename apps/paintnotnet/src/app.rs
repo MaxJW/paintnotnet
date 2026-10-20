@@ -50,9 +50,16 @@ pub struct PaintNotNetApp {
     /// Errors waiting to be shown after the current modal.
     pub(crate) errors: Vec<(String, String)>,
     pub(crate) taps: MultiTap,
+    /// The last Magic Wand click, re-run when its tolerance changes.
+    pub(crate) wand_live: Option<crate::selection_tools::WandLive>,
+    /// Puts back the key presses egui-winit turns into copy / cut / paste.
+    pub(crate) clipboard_keys: crate::commands::ClipboardKeys,
     pub(crate) diagnostics: Diagnostics,
     pub(crate) smoke: Option<SmokeTest>,
     pub(crate) new_image_size: (u32, u32),
+    /// The clipboard image being read for File > New's size, and the size the dialog opened
+    /// with (kept if it has been changed meanwhile).
+    pub(crate) new_image_clip: Option<(crate::clipboard::ImageAnswer, (u32, u32))>,
     pub(crate) last_dir: Option<PathBuf>,
     /// Tabs to close once their save succeeds.
     pub(crate) close_after_save: HashSet<u64>,
@@ -185,9 +192,12 @@ impl PaintNotNetApp {
             modal: None,
             errors: Vec::new(),
             taps: MultiTap::default(),
+            wand_live: None,
+            clipboard_keys: Default::default(),
             diagnostics,
             smoke,
             new_image_size: (800, 600),
+            new_image_clip: None,
             last_dir: None,
             close_after_save: HashSet::new(),
             save_as_queue: Vec::new(),
@@ -228,7 +238,8 @@ impl PaintNotNetApp {
             select_drag: None,
             modifiers: egui::Modifiers::NONE,
             move_session: None,
-            clipboard: Box::new(crate::clipboard::SystemClipboard::new()),
+            // `main` swaps in the desktop's; tests never touch it.
+            clipboard: Box::new(crate::clipboard::MemoryClipboard::default()),
             pending_paste: None,
             last_effect: None,
             autosave: None,
@@ -310,6 +321,29 @@ impl PaintNotNetApp {
     /// A tool click's work (Magic Wand, Paint Bucket) is running in the background.
     pub fn click_job_running(&self) -> bool {
         self.click_job.is_some()
+    }
+
+    /// File > New: once the clipboard's image has been read, its size, unless the dialog has
+    /// closed or been edited.
+    fn new_image_from_clipboard(&mut self, ctx: &egui::Context) {
+        use std::sync::mpsc::TryRecvError;
+        let Some((rx, opened)) = &self.new_image_clip else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(image) => {
+                if let Some(image) = image
+                    && let Some(Modal::NewImage(n)) = &mut self.modal
+                    && (n.width, n.height) == *opened
+                {
+                    n.width = image.width.max(1);
+                    n.height = image.height.max(1);
+                }
+                self.new_image_clip = None;
+            }
+            Err(TryRecvError::Empty) => ctx.request_repaint_after(Duration::from_millis(30)),
+            Err(TryRecvError::Disconnected) => self.new_image_clip = None,
+        }
     }
 
     /// Put `path` at the top of File > Open Recent and keep it in the settings file.
@@ -565,10 +599,11 @@ impl PaintNotNetApp {
                 }
             }
             Command::NewImage => {
-                self.modal = Some(Modal::NewImage(NewImage::new(
-                    self.new_image_size.0,
-                    self.new_image_size.1,
-                )))
+                let (w, h) = self.new_image_size;
+                self.modal = Some(Modal::NewImage(NewImage::new(w, h)));
+                // An image on the clipboard sets the size, as in paint.net 3.36
+                // (`NewImageAction`); read off the UI thread, it fills in when it arrives.
+                self.new_image_clip = Some((self.clipboard.request_image(), (w, h)));
             }
             Command::Open => self.files.pick_open(self.last_dir.clone()),
             Command::OpenRecent(i) => {
@@ -1082,6 +1117,11 @@ impl PaintNotNetApp {
                     self.paste(image, new_layer, expand);
                 }
             }
+            ModalResult::PasteAsNewImage => {
+                if let Some(image) = self.pending_paste.take() {
+                    self.paste_new_image(image);
+                }
+            }
             ModalResult::FlattenAndSave { key, mut then } => {
                 if let Some(tab) = self.workspace.tab_mut(key) {
                     let (w, h) = (tab.doc.width(), tab.doc.height());
@@ -1217,7 +1257,9 @@ impl PaintNotNetApp {
                 .collect();
             if let [x, y] = p[..] {
                 let t = Instant::now();
-                self.magic_wand(key, [x, y], pnn_core::CombineMode::Replace, true);
+                // Contiguous whatever the toolbar says (Shift flips Global back).
+                let shift = self.settings.flood_mode == pnn_tools::FloodMode::Global;
+                self.magic_wand(key, [x, y], pnn_core::CombineMode::Replace, shift, false);
                 log::info!("smoke: magic wand took {:?}", t.elapsed());
             }
         }
@@ -2015,6 +2057,8 @@ impl eframe::App for PaintNotNetApp {
         if let Some(release) = shell::take_release(ctx) {
             raw_input.events.insert(0, release);
         }
+        self.clipboard_keys
+            .restore(&mut raw_input.events, Instant::now());
     }
 
     fn on_exit(&mut self) {
@@ -2065,6 +2109,7 @@ impl PaintNotNetApp {
         self.modifiers = ctx.input(|i| i.modifiers);
         self.take_handoffs(&ctx);
         self.handle_file_events(&ctx);
+        self.new_image_from_clipboard(&ctx);
 
         let modal_open = self.modal.is_some()
             || self.effect.is_some()
@@ -2073,7 +2118,9 @@ impl PaintNotNetApp {
             || self.palette.is_some()
             || self.files.dialog_open()
             || self.menu.open;
-        if !modal_open && !ctx.egui_wants_keyboard_input() {
+        // Only typing in a text field holds the shortcuts back: a button or slider that took
+        // focus (Tab, a click) used to silence every shortcut until the canvas was clicked.
+        if !modal_open && !ctx.text_edit_focused() {
             self.text_keyboard(&ctx);
             for t in take_commands(&ctx, &mut self.taps, now) {
                 self.execute(&ctx, t);
@@ -2098,6 +2145,7 @@ impl PaintNotNetApp {
         self.sync_global_menu(&ctx, modal_open && !self.menu.open);
         self.title_bar(ui, &ctx);
         self.toolbar_feather();
+        self.wand_follow_settings();
         let active = self.workspace.active();
         let info = StatusInfo {
             tool: self.tool,

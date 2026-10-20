@@ -1067,7 +1067,7 @@ pub fn def(name: &str) -> Option<EffectDef> {
         "Motion Blur" => d(
             "Motion Blur",
             vec![
-                PropDef::float("Angle", 25.0, -180.0, 180.0, 2),
+                PropDef::angle("Angle", 25.0, -180.0, 180.0),
                 PropDef::bool("Centered", true),
                 PropDef::int("Distance", 10, 1, 200),
                 // paintnotnet: average in linear light.
@@ -1105,7 +1105,7 @@ pub fn def(name: &str) -> Option<EffectDef> {
         "Radial Blur" => d(
             "Radial Blur",
             vec![
-                PropDef::float("Angle", 2.0, 0.0, 360.0, 2),
+                PropDef::angle("Angle", 2.0, 0.0, 360.0),
                 PropDef::float("Offset X", 0.0, -2.0, 2.0, 2),
                 PropDef::float("Offset Y", 0.0, -2.0, 2.0, 2),
                 PropDef::int("Quality", 2, 1, 5),

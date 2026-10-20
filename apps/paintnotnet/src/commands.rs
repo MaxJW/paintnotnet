@@ -731,6 +731,83 @@ impl MultiTap {
     }
 }
 
+/// egui-winit turns Ctrl+C, Ctrl+X and Ctrl+V (with any other modifiers) into copy / cut /
+/// paste events instead of key presses, so Copy, Cut, Paste, Crop to Selection (Ctrl+Shift+X),
+/// Copy Merged, Paste into New Layer / Image never reached the keymap. With only an image on
+/// the clipboard Ctrl+V leaves nothing at all (it reads text), just the V key's release. This
+/// puts the presses back (the copy / paste events stay for text fields).
+#[derive(Default)]
+pub struct ClipboardKeys {
+    /// The modifiers held, from the modifier events.
+    held: egui::Modifiers,
+    /// A V press was seen (or put back) since the last V release.
+    v_down: bool,
+    /// The last modifiers held with Ctrl, and when: Ctrl may be let go before V.
+    with_command: Option<(egui::Modifiers, Instant)>,
+}
+
+impl ClipboardKeys {
+    pub fn restore(&mut self, events: &mut Vec<egui::Event>, now: Instant) {
+        let press = |key: Key, modifiers: egui::Modifiers| egui::Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        let mut out = Vec::with_capacity(events.len());
+        for e in events.drain(..) {
+            let held = self.held;
+            match &e {
+                egui::Event::ModifiersChanged(m) => {
+                    self.held = *m;
+                    if m.command {
+                        self.with_command = Some((*m, now));
+                    }
+                }
+                egui::Event::Copy => out.push(press(Key::C, held)),
+                egui::Event::Cut => out.push(press(Key::X, held)),
+                egui::Event::Paste(_) => {
+                    out.push(press(Key::V, held));
+                    self.v_down = true;
+                }
+                egui::Event::Key {
+                    key: Key::V,
+                    pressed,
+                    modifiers: m,
+                    ..
+                } => {
+                    if m.command {
+                        self.with_command = Some((*m, now));
+                    }
+                    if *pressed {
+                        self.v_down = true;
+                    } else {
+                        if !self.v_down {
+                            let held = if m.command {
+                                Some(*m)
+                            } else {
+                                self.with_command
+                                    .filter(|(_, t)| {
+                                        now.duration_since(*t) < Duration::from_secs(1)
+                                    })
+                                    .map(|(m, _)| m)
+                            };
+                            if let Some(held) = held {
+                                out.push(press(Key::V, held));
+                            }
+                        }
+                        self.v_down = false;
+                    }
+                }
+                _ => {}
+            }
+            out.push(e);
+        }
+        *events = out;
+    }
+}
+
 /// Take key presses that match a binding out of this frame's events (so widgets don't also
 /// act on them, e.g. Tab focus) and return the commands.
 pub fn take_commands(ctx: &egui::Context, taps: &mut MultiTap, now: Instant) -> Vec<Triggered> {
@@ -784,6 +861,100 @@ mod tests {
 
     fn find(key: Key, m: egui::Modifiers) -> Option<Command> {
         lookup(key, None, m).map(|b| b.command)
+    }
+
+    fn key(key: Key, pressed: bool, m: egui::Modifiers) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed,
+            repeat: false,
+            modifiers: m,
+        }
+    }
+
+    fn commands(events: &[egui::Event]) -> Vec<Command> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } => find(*key, *modifiers),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// What egui-winit sends for the clipboard chords becomes key presses the keymap knows.
+    #[test]
+    fn clipboard_chords_reach_the_keymap() {
+        let now = Instant::now();
+        let ctrl = mods(true, false, false);
+        let ctrl_shift = mods(true, false, true);
+        let cases = [
+            (vec![egui::Event::Copy], ctrl, C::Copy),
+            (vec![egui::Event::Cut], ctrl, C::Cut),
+            (vec![egui::Event::Cut], ctrl_shift, C::CropToSelection),
+            (vec![egui::Event::Copy], ctrl_shift, C::CopyMerged),
+            (vec![egui::Event::Paste("text".into())], ctrl, C::Paste),
+            (
+                vec![egui::Event::Paste("x".into())],
+                ctrl_shift,
+                C::PasteIntoNewLayer,
+            ),
+            (
+                vec![egui::Event::Paste("x".into())],
+                mods(true, true, false),
+                C::PasteIntoNewImage,
+            ),
+        ];
+        for (events, m, expected) in cases {
+            let mut events = [vec![egui::Event::ModifiersChanged(m)], events].concat();
+            ClipboardKeys::default().restore(&mut events, now);
+            assert_eq!(commands(&events), [expected], "{m:?}");
+            assert_eq!(events.len(), 3, "the clipboard event stays for text fields");
+        }
+    }
+
+    /// An image on the clipboard: egui-winit sends nothing for Ctrl+V, only V's release.
+    #[test]
+    fn image_paste_comes_back_from_the_release() {
+        let now = Instant::now();
+        let ctrl = mods(true, false, false);
+        let none = egui::Modifiers::NONE;
+        let mut keys = ClipboardKeys::default();
+        let mut events = vec![
+            egui::Event::ModifiersChanged(ctrl),
+            key(Key::V, false, ctrl),
+        ];
+        keys.restore(&mut events, now);
+        assert_eq!(commands(&events), [C::Paste]);
+        // Ctrl let go before V: the modifiers held a moment ago.
+        let mut events = vec![
+            egui::Event::ModifiersChanged(none),
+            key(Key::V, false, none),
+        ];
+        keys.restore(&mut events, now + Duration::from_millis(200));
+        assert_eq!(commands(&events), [C::Paste]);
+        // A paste event already gave the press: its release adds nothing.
+        let mut events = vec![
+            egui::Event::ModifiersChanged(ctrl),
+            egui::Event::Paste("t".into()),
+            key(Key::V, false, ctrl),
+        ];
+        keys.restore(&mut events, now);
+        assert_eq!(commands(&events), [C::Paste]);
+        // Plain V typed long after Ctrl: nothing added.
+        let mut events = vec![
+            egui::Event::ModifiersChanged(none),
+            key(Key::V, true, none),
+            key(Key::V, false, none),
+        ];
+        keys.restore(&mut events, now + Duration::from_secs(5));
+        assert_eq!(events.len(), 3);
     }
 
     #[test]
