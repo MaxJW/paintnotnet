@@ -30,6 +30,25 @@ pub enum Entry {
     },
     /// File > Open Recent, filled from `MenuContext::recent` when shown.
     Recent,
+    /// A file in File > Open Recent, beside its thumbnail when it has one.
+    File {
+        label: String,
+        command: Command,
+        thumb: Option<Thumbnail>,
+    },
+}
+
+/// A recent file's thumbnail: its texture, and the PNG for the global menu.
+#[derive(Clone)]
+pub struct Thumbnail {
+    pub texture: egui::TextureId,
+    pub png: std::sync::Arc<Vec<u8>>,
+}
+
+/// A file in File > Open Recent.
+pub struct RecentFile {
+    pub path: std::path::PathBuf,
+    pub thumb: Option<Thumbnail>,
 }
 
 fn item(label: &'static str, command: Command, icon: Icon) -> Entry {
@@ -399,25 +418,27 @@ pub struct MenuContext<'a> {
     /// Shown as "Repeat <name>" in the Effects menu.
     pub last_effect: Option<&'a str>,
     /// File > Open Recent, newest first.
-    pub recent: &'a [std::path::PathBuf],
+    pub recent: &'a [RecentFile],
 }
 
 /// File > Open Recent as paint.net 3.36 fills it (`FileMenu.cs`): "&1 name" … newest first,
-/// then "&Clear this list"; "(none)" (disabled) when empty. Labels from its `Strings.resx`.
-pub fn recent_menu(recent: &[std::path::PathBuf]) -> Entry {
+/// each beside its thumbnail, then "&Clear this list"; "(none)" (disabled) when empty. Labels
+/// from its `Strings.resx`.
+pub fn recent_menu(recent: &[RecentFile]) -> Entry {
     let mut entries: Vec<Entry> = recent
         .iter()
         .enumerate()
-        .map(|(i, p)| {
-            let name = p
+        .map(|(i, f)| {
+            let name = f
+                .path
                 .file_name()
                 .map(|n| n.to_string_lossy().replace('&', "&&"))
                 .unwrap_or_default();
             let mnemonic = if i < 9 { "&" } else { "" };
-            Entry::Item {
-                label: Cow::Owned(format!("{mnemonic}{} {name}", i + 1)),
+            Entry::File {
+                label: format!("{mnemonic}{} {name}", i + 1),
                 command: Command::OpenRecent(i as u8),
-                icon: None,
+                thumb: f.thumb.clone(),
             }
         })
         .collect();
@@ -619,6 +640,27 @@ fn entries_ui(
                 let recent = [recent_menu(cx.recent)];
                 if let Some(c) = entries_ui(ui, &recent, cx, icons, underline, focus_first) {
                     picked = Some(c);
+                }
+            }
+            Entry::File {
+                label,
+                command,
+                thumb,
+            } => {
+                let size = egui::vec2(crate::recent_thumbs::SIZE_PT, crate::recent_thumbs::SIZE_PT);
+                // Files without a thumbnail (opened before thumbnails were kept) line up too.
+                let image = match thumb {
+                    Some(t) => egui::Image::new((t.texture, size)),
+                    None => icons.blank().fit_to_exact_size(size),
+                };
+                let job = label_job(label, underline, text_color);
+                let response = ui.add_enabled(
+                    (cx.enabled)(*command),
+                    egui::Button::image_and_text(image, job),
+                );
+                let mnemonic = mnemonic_char(label);
+                if response.clicked() || mnemonic.is_some_and(|m| typed.contains(&m)) {
+                    picked = Some(*command);
                 }
             }
             Entry::Sub { label, entries } => {
@@ -849,9 +891,14 @@ mod tests {
                         check(label, entries);
                         label.clone()
                     }
+                    Entry::File { label, .. } => label.clone(),
                     Entry::Recent => {
-                        let recent: Vec<std::path::PathBuf> =
-                            (0..8).map(|i| format!("/tmp/{i}.png").into()).collect();
+                        let recent: Vec<RecentFile> = (0..8)
+                            .map(|i| RecentFile {
+                                path: format!("/tmp/{i}.png").into(),
+                                thumb: None,
+                            })
+                            .collect();
                         let Entry::Sub { label, entries } = recent_menu(&recent) else {
                             unreachable!()
                         };

@@ -146,15 +146,19 @@ fn open_recent_lists_saved_files_opens_and_clears() {
     h.state_mut().note_recent(&dir.path().join("second.png"));
     let canonical = std::fs::canonicalize(&saved).unwrap();
     assert_eq!(h.state().recent_files()[1], canonical, "older second");
-    let menu = paintnotnet::menus::recent_menu(h.state().recent_files());
+    let files = h.state_mut().recent_menu_files(&ctx);
+    let menu = paintnotnet::menus::recent_menu(&files);
     let paintnotnet::menus::Entry::Sub { label, entries } = menu else {
         panic!("a submenu")
     };
     assert_eq!(label, "Open &Recent");
-    let paintnotnet::menus::Entry::Item { label, .. } = &entries[1] else {
-        panic!("an item")
+    let paintnotnet::menus::Entry::File { label, thumb, .. } = &entries[1] else {
+        panic!("a file")
     };
     assert_eq!(label, "&2 first.png");
+    assert!(thumb.is_none(), "never open here, so no thumbnail yet");
+    let thumbs = dir.path().join("thumbs");
+    h.state_mut().set_recent_thumbs_dir(Some(thumbs.clone()));
 
     let tabs = h.state().workspace().tabs().len();
     h.state_mut()
@@ -173,6 +177,26 @@ fn open_recent_lists_saved_files_opens_and_clears() {
         canonical,
         "opening moves it to the top"
     );
+    // Its thumbnail (3.36 makes one on every open and save): kept on disk, shown in the menu.
+    for _ in 0..10 {
+        h.step();
+    }
+    let files = h.state_mut().recent_menu_files(&ctx);
+    let png = files[0].thumb.as_ref().expect("a thumbnail").png.clone();
+    let img = image::load_from_memory(&png).unwrap().to_rgba8();
+    assert_eq!(img.dimensions(), (96, 96));
+    assert_eq!(
+        img.get_pixel(48, 48).0,
+        [200, 30, 30, 255],
+        "the image's red"
+    );
+    assert_eq!(img.get_pixel(48, 4).0[3], 0, "centred in a clear square");
+    assert!(files[1].thumb.is_none());
+    assert_eq!(std::fs::read_dir(&thumbs).unwrap().count(), 1);
+    // A new session finds it in the folder.
+    h.state_mut().set_recent_thumbs_dir(Some(thumbs.clone()));
+    let files = h.state_mut().recent_menu_files(&ctx);
+    assert_eq!(files[0].thumb.as_ref().unwrap().png, png);
 
     h.state_mut()
         .execute(&ctx, Triggered::once(Command::ClearRecentFiles));
@@ -184,4 +208,9 @@ fn open_recent_lists_saved_files_opens_and_clears() {
     h.step();
     h.step();
     assert!(h.state().recent_files().is_empty());
+    assert_eq!(
+        std::fs::read_dir(&thumbs).unwrap().count(),
+        0,
+        "thumbnails go with the list"
+    );
 }

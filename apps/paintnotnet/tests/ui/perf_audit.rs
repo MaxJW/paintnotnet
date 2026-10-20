@@ -242,6 +242,8 @@ fn perf_audit() {
     // Not the user's desktop clipboard: the audit copies the whole image.
     a.h.state_mut()
         .set_clipboard(Box::new(paintnotnet::clipboard::MemoryClipboard::default()));
+    // As `main` does: the system fonts load in the background from the start.
+    a.h.state_mut().preload_fonts();
     let ctx = a.h.ctx.clone();
     if a.h.state().diagnostics().visible() {
         a.h.state_mut()

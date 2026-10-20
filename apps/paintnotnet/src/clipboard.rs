@@ -21,6 +21,13 @@ pub struct ClipImage {
 
 pub trait Clipboard {
     fn get_image(&mut self) -> Option<ClipImage>;
+    /// The image, answered on the returned channel (read on another thread while the UI
+    /// keeps drawing). By default it's read at once.
+    fn request_image(&mut self) -> std::sync::mpsc::Receiver<Option<ClipImage>> {
+        let (reply, answer) = std::sync::mpsc::channel();
+        let _ = reply.send(self.get_image());
+        answer
+    }
     fn set_image(&mut self, image: ClipImage) -> Result<(), String>;
     fn get_text(&mut self) -> Option<String>;
     fn set_text(&mut self, text: String) -> Result<(), String>;
@@ -115,9 +122,15 @@ impl Default for SystemClipboard {
 
 impl Clipboard for SystemClipboard {
     fn get_image(&mut self) -> Option<ClipImage> {
+        self.request_image().recv().ok().flatten()
+    }
+    /// The desktop hands a copied image over as PNG, decoded on the clipboard thread (a
+    /// 24 MP image takes a few hundred ms).
+    fn request_image(&mut self) -> std::sync::mpsc::Receiver<Option<ClipImage>> {
         let (reply, answer) = std::sync::mpsc::channel();
-        self.send(ClipRequest::GetImage(reply)).ok()?;
-        answer.recv().ok().flatten()
+        // If the thread is gone the reply is dropped, and the answer is "nothing".
+        let _ = self.send(ClipRequest::GetImage(reply));
+        answer
     }
 
     fn set_image(&mut self, image: ClipImage) -> Result<(), String> {
@@ -297,23 +310,55 @@ impl PaintNotNetApp {
                 );
             }
             Command::Paste | Command::PasteIntoNewLayer => {
-                let Some(image) = self.clipboard.get_image() else {
-                    return true;
-                };
+                let new_layer = command == Command::PasteIntoNewLayer;
+                let answer = self.clipboard.request_image();
                 let Some(tab) = self.workspace.active() else {
                     // Nothing open: paste into a new image, as paint.net does.
-                    self.paste_new_image(image);
+                    if let Ok(Some(image)) = answer.recv() {
+                        self.paste_new_image(image);
+                    }
                     return true;
                 };
                 let (w, h) = (tab.doc.width(), tab.doc.height());
-                if image.width > w || image.height > h {
-                    self.modal = Some(crate::dialogs::Modal::PasteLarger {
-                        new_layer: command == Command::PasteIntoNewLayer,
-                    });
-                    self.pending_paste = Some(image);
-                } else {
-                    self.paste(image, command == Command::PasteIntoNewLayer, false);
-                }
+                let doc = &tab.doc;
+                let drawn_on = (tab.key, doc.revision(), doc.layer(doc.active_index()).id());
+                let corner = self.visible_corner();
+                // The layer the pixels land on as it is now: the float's first frame is drawn
+                // with the rest of the work (a paste over a 24 MP photo took ~40 ms here).
+                let under = (!new_layer).then(|| doc.layer(doc.active_index()).surface.clone());
+                let resampling = crate::move_tools::sampling(self.settings.resampling);
+                // Reading the clipboard (a PNG to decode, from another app) and building the
+                // pixels happen on the effect threads for a large image.
+                self.run_click_job(
+                    w as u64 * h as u64,
+                    move || {
+                        let image = answer.recv().ok().flatten()?;
+                        if image.width > w || image.height > h {
+                            return Some(Pasted::Larger(image));
+                        }
+                        let plan = PastePlan::new(&image, corner, (w, h));
+                        let mut layer = under.unwrap_or_else(|| Surface::new_transparent(w, h));
+                        pnn_core::transform::draw_transformed(
+                            &mut layer,
+                            &plan.pixels,
+                            plan.rect,
+                            &pnn_core::transform::IDENTITY,
+                            resampling,
+                        );
+                        Some(Pasted::Ready(plan, layer))
+                    },
+                    move |app, pasted| match pasted {
+                        Some(Pasted::Larger(image)) => {
+                            app.modal = Some(crate::dialogs::Modal::PasteLarger { new_layer });
+                            app.pending_paste = Some(image);
+                        }
+                        Some(Pasted::Ready(plan, layer)) => {
+                            let (key, revision, active) = drawn_on;
+                            app.place_paste(key, plan, new_layer, Some((revision, active, layer)))
+                        }
+                        None => {}
+                    },
+                );
             }
             Command::PasteIntoNewImage => {
                 if let Some(image) = self.clipboard.get_image() {
@@ -358,10 +403,19 @@ impl PaintNotNetApp {
         self.workspace.add(doc, None, None);
     }
 
+    /// Top-left of the visible part of the canvas, in image coordinates (paint.net pastes
+    /// where you can see it).
+    fn visible_corner(&self) -> Option<[f64; 2]> {
+        let vp = self.canvas.viewport;
+        self.workspace
+            .active()
+            .and_then(|t| t.view)
+            .map(|v| v.screen_to_image([0.0, 0.0], vp))
+    }
+
     /// Paste as floating pixels in Move Selected Pixels mode. `expand` grows the canvas to
     /// fit (anchored top-left) first.
     pub(crate) fn paste(&mut self, image: ClipImage, new_layer: bool, expand: bool) {
-        let vp = self.canvas.viewport;
         let Some(tab) = self.workspace.active_mut() else {
             return;
         };
@@ -382,7 +436,34 @@ impl PaintNotNetApp {
             tab.doc.replace(w, h, layers);
             tab.commit("Canvas Size", Icon::CanvasSize);
         }
+        let (w, h, key) = (tab.doc.width(), tab.doc.height(), tab.key);
+        let plan = PastePlan::new(&image, self.visible_corner(), (w, h));
+        self.place_paste(key, plan, new_layer, None);
+    }
+
+    /// Float `plan`'s pixels on tab `key` (on a new layer above the active one with
+    /// `new_layer`) and record the paste. `drawn`: the layer with the pixels already drawn
+    /// on it, used if the document is at that revision with that layer active.
+    fn place_paste(
+        &mut self,
+        key: u64,
+        plan: PastePlan,
+        new_layer: bool,
+        drawn: Option<(u64, pnn_core::LayerId, Surface)>,
+    ) {
+        self.finish_move();
+        self.set_tool(pnn_tools::ToolKind::MoveSelectedPixels);
+        let Some(tab) = self.workspace.tab_mut(key) else {
+            return;
+        };
         let (w, h) = (tab.doc.width(), tab.doc.height());
+        let active = tab.doc.layer(tab.doc.active_index()).id();
+        let drawn = drawn
+            .filter(|(revision, id, s)| {
+                (*revision, *id) == (tab.doc.revision(), active)
+                    && (s.width(), s.height()) == (w, h)
+            })
+            .map(|(_, _, s)| s);
         if new_layer {
             let a = tab.doc.active_index();
             let n = tab.doc.layers().len();
@@ -391,9 +472,43 @@ impl PaintNotNetApp {
                 Layer::new(format!("Layer {}", n + 1), Surface::new_transparent(w, h)),
             );
         }
-        // Top-left of the visible part of the canvas (paint.net pastes where you can see it).
-        let at = tab.view.map_or((0, 0), |v| {
-            let p = v.screen_to_image([0.0, 0.0], vp);
+        let r = plan.rect;
+        let selection = Selection::rect(
+            r.x as f64,
+            r.y as f64,
+            (r.x + r.width) as f64,
+            (r.y + r.height) as f64,
+        );
+        let name = if new_layer {
+            "Paste into New Layer"
+        } else {
+            "Paste"
+        };
+        self.begin_float(key, plan.pixels, plan.rect, selection, drawn);
+        if let Some(tab) = self.workspace.tab_mut(key) {
+            tab.commit(name, Icon::Paste);
+        }
+    }
+}
+
+/// What a paste read from the clipboard.
+enum Pasted {
+    /// Larger than the canvas: ask whether to expand it.
+    Larger(ClipImage),
+    /// Ready to float, with the active layer (or a new one) drawn with it.
+    Ready(PastePlan, Surface),
+}
+
+/// Where pasted pixels go: at the visible top-left corner, kept inside the canvas.
+struct PastePlan {
+    rect: Rect,
+    /// The image at `rect`, canvas-sized.
+    pixels: Surface,
+}
+
+impl PastePlan {
+    fn new(image: &ClipImage, corner: Option<[f64; 2]>, (w, h): (u32, u32)) -> Self {
+        let at = corner.map_or((0, 0), |p| {
             let x = p[0].max(0.0).min((w.saturating_sub(image.width)) as f64) as u32;
             let y = p[1].max(0.0).min((h.saturating_sub(image.height)) as f64) as u32;
             (x, y)
@@ -404,24 +519,9 @@ impl PaintNotNetApp {
             width: image.width.min(w - at.0),
             height: image.height.min(h - at.1),
         };
-        let pixels = to_surface(&image, at, (w, h));
-        let selection = Selection::rect(
-            rect.x as f64,
-            rect.y as f64,
-            (rect.x + rect.width) as f64,
-            (rect.y + rect.height) as f64,
-        );
-        let name = if new_layer {
-            "Paste into New Layer"
-        } else {
-            "Paste"
-        };
-        let key = tab.key;
-        self.finish_move();
-        self.set_tool(pnn_tools::ToolKind::MoveSelectedPixels);
-        self.begin_float(key, pixels, rect, selection);
-        if let Some(tab) = self.workspace.tab_mut(key) {
-            tab.commit(name, Icon::Paste);
+        Self {
+            rect,
+            pixels: to_surface(image, at, (w, h)),
         }
     }
 }

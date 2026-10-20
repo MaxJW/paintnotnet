@@ -252,6 +252,76 @@ fn alt_f_then_n_opens_new_image_dialog() {
     assert!(!h.state().menu_open());
 }
 
+/// File > Open Recent with thumbnails of the files opened (paint.net 3.36 shows each beside
+/// its name).
+#[test]
+fn open_recent_render() {
+    let _gpu = crate::common::gpu_lock();
+    use eframe::egui::{Key, Modifiers};
+    use pnn_core::{ColorBgra, Layer, Surface};
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = harness();
+    let ctx = h.ctx.clone();
+    let files = [
+        (
+            "sunset.png",
+            400,
+            240,
+            ColorBgra::from_rgba(230, 120, 40, 255),
+        ),
+        (
+            "portrait.png",
+            200,
+            320,
+            ColorBgra::from_rgba(40, 110, 200, 255),
+        ),
+        ("logo.png", 120, 120, ColorBgra::from_rgba(40, 170, 90, 128)),
+    ];
+    for (name, w, hgt, c) in files {
+        let mut s = Surface::new_transparent(w, hgt);
+        s.fill(c);
+        let path = dir.path().join(name);
+        pnn_io::save(
+            &Document::from_layers(w, hgt, vec![Layer::new("Background", s)]),
+            &path,
+            pnn_io::FileFormat::Png,
+            Default::default(),
+        )
+        .unwrap();
+        h.state_mut().note_recent(&path);
+        let tabs = h.state().workspace().tabs().len();
+        h.state_mut()
+            .execute(&ctx, Triggered::once(Command::OpenRecent(0)));
+        for _ in 0..200 {
+            h.step();
+            if h.state().workspace().tabs().len() > tabs {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+    for _ in 0..10 {
+        h.step();
+    }
+    let recent = h.state_mut().recent_menu_files(&ctx);
+    assert!(
+        recent.iter().all(|f| f.thumb.is_some()),
+        "every file has one"
+    );
+    press(&mut h, Modifiers::ALT, Key::F);
+    h.get_by_label_contains("Recent").hover();
+    for _ in 0..6 {
+        h.step();
+    }
+    h.get_by_label("1 logo.png");
+    h.get_by_label("3 sunset.png");
+    if let Ok(dir) = std::env::var("PNN_RENDER_DUMP")
+        && let Ok(image) = h.render()
+    {
+        image.save(format!("{dir}/shell-open-recent.png")).unwrap();
+    }
+}
+
 #[test]
 fn tool_letters_cycle_like_paint_net() {
     let _gpu = crate::common::gpu_lock();

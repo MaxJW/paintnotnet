@@ -43,6 +43,8 @@ pub struct Item {
     /// Shortcut as dbusmenu key names, e.g. `["Control", "Shift", "S"]`.
     pub shortcut: Option<Vec<String>>,
     pub icon: Option<Icon>,
+    /// A picture of its own instead of `icon` (Open Recent's thumbnails), as PNG.
+    pub icon_png: Option<std::sync::Arc<Vec<u8>>>,
     pub command: Option<Command>,
     pub children: Vec<i32>,
     /// Shown as a submenu even when it has no children yet.
@@ -58,6 +60,7 @@ impl Item {
             toggle: None,
             shortcut: None,
             icon: None,
+            icon_png: None,
             command: None,
             children: Vec::new(),
             submenu: true,
@@ -119,6 +122,20 @@ pub fn build(menus: &[Menu], cx: &MenuContext, bindings: &[Binding]) -> Vec<Item
                         enabled: (cx.enabled)(*command),
                         toggle: Some((cx.checked)(*command)),
                         shortcut: shortcut(bindings, *command),
+                        command: Some(*command),
+                        submenu: false,
+                        ..Item::node(dbus_label(label))
+                    },
+                ),
+                Entry::File {
+                    label,
+                    command,
+                    thumb,
+                } => add(
+                    items,
+                    Item {
+                        enabled: (cx.enabled)(*command),
+                        icon_png: thumb.as_ref().map(|t| t.png.clone()),
                         command: Some(*command),
                         submenu: false,
                         ..Item::node(dbus_label(label))
@@ -248,7 +265,9 @@ fn properties(item: &Item, names: &[String]) -> HashMap<String, OwnedValue> {
     if let Some(keys) = &item.shortcut {
         put("shortcut", owned(vec![keys.clone()]));
     }
-    if let Some(png) = item.icon.and_then(|i| i.png()) {
+    if let Some(png) = item.icon_png.as_deref().cloned() {
+        put("icon-data", owned(png));
+    } else if let Some(png) = item.icon.and_then(|i| i.png()) {
         put("icon-data", owned(png));
     }
     p

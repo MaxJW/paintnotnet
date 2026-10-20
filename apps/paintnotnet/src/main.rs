@@ -93,6 +93,8 @@ fn main() -> ExitCode {
                 if let Some((config, path)) = config {
                     app.set_config(&cc.egui_ctx, config, Some(path));
                 }
+                app.set_recent_thumbs_dir(paintnotnet::recent_thumbs::default_dir());
+                app.preload_fonts();
                 let link = paintnotnet::wayland::WindowLink::new(cc);
                 let menu = paintnotnet::global_menu::GlobalMenu::new(cc, link.as_ref());
                 app.set_window_link(link);

@@ -325,7 +325,7 @@ impl MoveSession {
     }
 }
 
-fn sampling(r: Resampling) -> Sampling {
+pub(crate) fn sampling(r: Resampling) -> Sampling {
     match r {
         Resampling::Bicubic => Sampling::Bicubic,
         Resampling::Bilinear => Sampling::Bilinear,
@@ -440,13 +440,15 @@ impl PaintNotNetApp {
         true
     }
 
-    /// Start floating `pixels` (pasted) over the document without lifting anything.
+    /// Start floating `pixels` (pasted) over the document without lifting anything. `drawn`:
+    /// the active layer with them already drawn on it.
     pub(crate) fn begin_float(
         &mut self,
         key: u64,
         pixels: Surface,
         rect: Rect,
         selection: Selection,
+        drawn: Option<Surface>,
     ) {
         let Some(tab) = self.workspace.tab_mut(key) else {
             return;
@@ -474,7 +476,21 @@ impl PaintNotNetApp {
             serial: next_serial(),
             gpu_drag: false,
         });
-        self.render_move();
+        match drawn {
+            // What `render_move` would draw, made on another thread.
+            Some(surface) => {
+                let Some(s) = self.move_session.as_ref() else {
+                    return;
+                };
+                let mut doc = s.base.clone();
+                doc.modify_layer(s.layer, None, |l| l.surface = surface);
+                doc.set_selection(s.current_selection());
+                if let Some(tab) = self.workspace.tab_mut(key) {
+                    tab.doc = doc;
+                }
+            }
+            None => self.render_move(),
+        }
     }
 
     /// Redraw the session's result into its document.

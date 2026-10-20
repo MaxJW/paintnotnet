@@ -278,10 +278,31 @@ impl Selection {
         let Some(r) = self.pixel_bounds(width, height) else {
             return mask;
         };
+        if self.is_pixel_rect() {
+            // Select All and rectangle selections: every pixel inside is fully selected, so
+            // tiles wholly inside share one full tile (Select All on a 24 MP photo took 28 ms
+            // through the path filler).
+            fill_rect(&mut mask, r);
+            return mask;
+        }
         let data = self.raster_region(r, antialias);
         write_region(&mut mask, r, &data);
         mask.compact();
         mask
+    }
+
+    /// One axis-aligned rectangle on whole pixels (coverage is exactly 0 or 255, with or
+    /// without antialiasing).
+    fn is_pixel_rect(&self) -> bool {
+        let [c] = self.contours.as_slice() else {
+            return false;
+        };
+        c.len() == 4
+            && c.iter().all(|p| p[0].fract() == 0.0 && p[1].fract() == 0.0)
+            && (0..4).all(|i| {
+                let (p, q) = (c[i], c[(i + 1) % 4]);
+                (p[0] == q[0]) != (p[1] == q[1])
+            })
     }
 
     /// Hard coverage inside `r` (row-major, r.width × r.height).
@@ -563,6 +584,30 @@ fn tile_ranges(field: &SignedField, r: Rect) -> Vec<(TileCoord, f32, f32, bool)>
 }
 
 /// Copy a row-major `r`-sized buffer into the tiled mask.
+/// Set `r` to 255: tiles wholly inside share one full tile, edge tiles get their part.
+fn fill_rect(mask: &mut Mask, r: Rect) {
+    let full = std::sync::Arc::new(crate::Tile::filled(255u8));
+    for ty in r.y / TILE_SIZE..=(r.y + r.height - 1) / TILE_SIZE {
+        for tx in r.x / TILE_SIZE..=(r.x + r.width - 1) / TILE_SIZE {
+            let c = TileCoord { tx, ty };
+            let (x0, y0) = (tx * TILE_SIZE, ty * TILE_SIZE);
+            let (ix0, iy0) = (r.x.max(x0), r.y.max(y0));
+            let (ix1, iy1) = (
+                (r.x + r.width).min(x0 + TILE_SIZE),
+                (r.y + r.height).min(y0 + TILE_SIZE),
+            );
+            if (ix0, iy0, ix1, iy1) == (x0, y0, x0 + TILE_SIZE, y0 + TILE_SIZE) {
+                mask.set_tile(c, Some(full.clone()));
+                continue;
+            }
+            let tile = mask.tile_mut(c);
+            for y in iy0..iy1 {
+                tile.row_mut(y - y0)[(ix0 - x0) as usize..(ix1 - x0) as usize].fill(255);
+            }
+        }
+    }
+}
+
 fn write_region(mask: &mut Mask, r: Rect, data: &[u8]) {
     for ty in r.y / TILE_SIZE..=(r.y + r.height - 1) / TILE_SIZE {
         for tx in r.x / TILE_SIZE..=(r.x + r.width - 1) / TILE_SIZE {
@@ -1271,6 +1316,52 @@ mod tests {
         let m = coverage(&s, w as u32, h as u32, false);
         for i in 0..w * h {
             assert_eq!(m[i] > 127, checker[i] > 127, "pixel {i}");
+        }
+    }
+
+    /// Rectangles on whole pixels take the shared-tile fast path; it gives the path filler's
+    /// pixels exactly, and shares tiles wholly inside.
+    #[test]
+    fn pixel_rectangles_rasterise_as_the_path_filler_does() {
+        let (w, h) = (700u32, 530u32);
+        let slow = |sel: &Selection, aa: bool| {
+            let mut m = Mask::new(w, h, 0);
+            if let Some(r) = sel.pixel_bounds(w, h) {
+                write_region(&mut m, r, &sel.raster_region(r, aa));
+            }
+            m.to_pixels()
+        };
+        let rects = [
+            Selection::all(w, h),
+            Selection::rect(0.0, 0.0, 256.0, 512.0),
+            Selection::rect(3.0, 250.0, 600.0, 251.0),
+            Selection::rect(-40.0, -10.0, 300.0, 900.0),
+            Selection::rect(511.0, 257.0, 513.0, 530.0),
+            Selection::polygon(vec![
+                [10.0, 10.0],
+                [10.0, 300.0],
+                [400.0, 300.0],
+                [400.0, 10.0],
+            ]),
+        ];
+        for sel in &rects {
+            assert!(sel.is_pixel_rect());
+            for aa in [false, true] {
+                assert_eq!(sel.rasterize_hard(w, h, aa).to_pixels(), slow(sel, aa));
+            }
+        }
+        let all = Selection::all(w, h).rasterize_hard(w, h, true);
+        let inner = |c| all.tile(TileCoord { tx: c, ty: 0 }).unwrap().clone();
+        assert!(
+            std::sync::Arc::ptr_eq(&inner(0), &inner(1)),
+            "one shared full tile"
+        );
+        for sel in [
+            Selection::rect(0.5, 0.0, 10.0, 10.0),
+            Selection::polygon(vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 20.0]]),
+            Selection::ellipse(0.0, 0.0, 10.0, 10.0),
+        ] {
+            assert!(!sel.is_pixel_rect());
         }
     }
 

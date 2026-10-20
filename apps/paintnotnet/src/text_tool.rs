@@ -50,6 +50,52 @@ impl Fonts {
     }
 }
 
+impl PaintNotNetApp {
+    /// Start loading the system fonts in the background (~0.8 s; `main` calls this so the
+    /// Text tool's first use doesn't wait; tests load them when first needed).
+    pub fn preload_fonts(&mut self) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ctx = self.ctx.clone();
+        let started = std::thread::Builder::new()
+            .name("fonts".into())
+            .spawn(move || {
+                let _ = tx.send(Fonts::load());
+                if let Some(ctx) = ctx {
+                    ctx.request_repaint();
+                }
+            });
+        if started.is_ok() {
+            self.fonts_loading = Some(rx);
+        }
+    }
+
+    /// The fonts if they're loaded (without waiting for the background load).
+    pub(crate) fn fonts_if_loaded(&mut self) -> Option<&mut Fonts> {
+        if self.fonts.is_none()
+            && let Some(rx) = &self.fonts_loading
+        {
+            match rx.try_recv() {
+                Ok(f) => self.fonts = Some(f),
+                Err(std::sync::mpsc::TryRecvError::Empty) => return None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+            }
+            self.fonts_loading = None;
+        }
+        if self.fonts.is_none() && self.fonts_loading.is_none() {
+            self.fonts = Some(Fonts::load());
+        }
+        self.fonts.as_mut()
+    }
+
+    /// Make sure `self.fonts` is loaded, waiting for the background load if it's running.
+    pub(crate) fn ensure_fonts(&mut self) {
+        if self.fonts.is_none() {
+            let loaded = self.fonts_loading.take().and_then(|rx| rx.recv().ok());
+            self.fonts = Some(loaded.unwrap_or_else(Fonts::load));
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 struct Look {
     text: String,
@@ -112,7 +158,10 @@ impl PaintNotNetApp {
         if s.rendered.as_ref() == Some(&look) {
             return;
         }
-        let fonts = self.fonts.get_or_insert_with(Fonts::load);
+        self.ensure_fonts();
+        let Some(fonts) = self.fonts.as_mut() else {
+            return;
+        };
         let Some(s) = self.text.as_mut() else {
             return;
         };
@@ -178,7 +227,7 @@ impl PaintNotNetApp {
                 }
                 self.commit_text();
                 let antialias = self.antialiased_selection();
-                self.fonts.get_or_insert_with(Fonts::load);
+                self.ensure_fonts();
                 let Some(tab) = self.workspace.active_mut() else {
                     return;
                 };

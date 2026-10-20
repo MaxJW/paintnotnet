@@ -229,9 +229,23 @@ pub fn update_thumbnail(ctx: &egui::Context, tab: &mut DocumentTab, now: Instant
         return;
     }
     tab.compositor.update(&tab.doc);
+    let image = thumbnail_pixels(tab, THUMB * ctx.pixels_per_point());
+    match &mut tab.thumbnail {
+        Some(handle) => handle.set(image, TextureOptions::LINEAR),
+        None => {
+            tab.thumbnail =
+                Some(ctx.load_texture(format!("thumb-{}", tab.key), image, TextureOptions::LINEAR))
+        }
+    }
+    tab.thumbnail_revision = tab.doc.revision();
+    tab.thumbnail_updated = Some(now);
+}
+
+/// The image at most `longest` pixels on its long side, over a small version of paint.net's
+/// checkerboard, sampled from the tab's compositor (which the caller has brought up to date).
+pub fn thumbnail_pixels(tab: &DocumentTab, longest: f32) -> ColorImage {
     let (w, h) = (tab.doc.width() as f32, tab.doc.height() as f32);
-    let ppp = ctx.pixels_per_point();
-    let scale = (THUMB * ppp / w.max(h)).min(1.0);
+    let scale = (longest / w.max(h)).min(1.0);
     let (tw, th) = (
         ((w * scale).round() as usize).max(1),
         ((h * scale).round() as usize).max(1),
@@ -248,23 +262,13 @@ pub fn update_thumbnail(ctx: &egui::Context, tab: &mut DocumentTab, now: Instant
             let p = tab.compositor.tile(c).map_or(ColorBgra::TRANSPARENT, |t| {
                 t.get(sx % TILE_SIZE, sy % TILE_SIZE)
             });
-            // Over a small version of paint.net's checkerboard.
             let v = if ((x ^ y) & 4) != 0 { 255 } else { 191 };
             let a = p.a as u32;
             let mix = |c: u8| ((c as u32 * a + v * (255 - a)) / 255) as u8;
             pixels.push(Color32::from_rgb(mix(p.r), mix(p.g), mix(p.b)));
         }
     }
-    let image = ColorImage::new([tw, th], pixels);
-    match &mut tab.thumbnail {
-        Some(handle) => handle.set(image, TextureOptions::LINEAR),
-        None => {
-            tab.thumbnail =
-                Some(ctx.load_texture(format!("thumb-{}", tab.key), image, TextureOptions::LINEAR))
-        }
-    }
-    tab.thumbnail_revision = tab.doc.revision();
-    tab.thumbnail_updated = Some(now);
+    ColorImage::new([tw, th], pixels)
 }
 
 /// The window buttons of paintnotnet's own title bar (when the desktop's is off), right to

@@ -100,6 +100,8 @@ pub struct PaintNotNetApp {
     pub(crate) text: Option<crate::text_tool::TextSession>,
     /// System fonts, loaded when the Text tool is first used.
     pub(crate) fonts: Option<crate::text_tool::Fonts>,
+    /// The fonts loading in the background (`preload_fonts`).
+    pub(crate) fonts_loading: Option<std::sync::mpsc::Receiver<crate::text_tool::Fonts>>,
     pub(crate) clone_source: Option<crate::paint_tools::CloneSource>,
     /// Recolor Ctrl/Shift picking in progress: (button, adjust).
     pub(crate) recolor_picking: Option<(crate::canvas::ToolButton, bool)>,
@@ -121,6 +123,8 @@ pub struct PaintNotNetApp {
     pub(crate) config: crate::config::Config,
     /// Where settings are saved (set by `main`; tests keep settings in memory).
     pub(crate) config_path: Option<std::path::PathBuf>,
+    /// File > Open Recent's thumbnails.
+    pub(crate) recent_thumbs: crate::recent_thumbs::RecentThumbs,
     /// KDE Plasma global menu export (`None` off Plasma Wayland and in tests).
     pub(crate) global_menu: Option<crate::global_menu::GlobalMenu>,
     /// The window's Wayland objects (global menu link, activation). Never dropped: it
@@ -217,6 +221,7 @@ impl PaintNotNetApp {
             vector: None,
             text: None,
             fonts: None,
+            fonts_loading: None,
             clone_source: None,
             recolor_picking: None,
             picker: None,
@@ -229,6 +234,7 @@ impl PaintNotNetApp {
             autosave: None,
             config: crate::config::Config::default(),
             config_path: None,
+            recent_thumbs: Default::default(),
             global_menu: None,
             window_link: None,
             instance: None,
@@ -308,14 +314,46 @@ impl PaintNotNetApp {
 
     /// Put `path` at the top of File > Open Recent and keep it in the settings file.
     pub fn note_recent(&mut self, path: &std::path::Path) {
+        self.note_recent_from(None, path);
+    }
+
+    /// `note_recent`, with a thumbnail made from tab `key` when it has one.
+    fn note_recent_from(&mut self, key: Option<u64>, path: &std::path::Path) {
         let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
         self.config.note_recent(&path);
+        self.recent_thumbs.retain(&self.config.recent_files);
+        if let Some(key) = key {
+            self.recent_thumbs.request(key, path);
+        }
         self.save_config();
     }
 
     /// The files in File > Open Recent, newest first.
     pub fn recent_files(&self) -> &[std::path::PathBuf] {
         &self.config.recent_files
+    }
+
+    /// File > Open Recent's files with their thumbnails, as the menus show them.
+    pub fn recent_menu_files(&mut self, ctx: &egui::Context) -> Vec<crate::menus::RecentFile> {
+        let paths = self.config.recent_files.clone();
+        paths
+            .into_iter()
+            .map(|path| {
+                let thumb = self
+                    .recent_thumbs
+                    .get(ctx, &path)
+                    .map(|t| crate::menus::Thumbnail {
+                        texture: t.texture.id(),
+                        png: t.png.clone(),
+                    });
+                crate::menus::RecentFile { path, thumb }
+            })
+            .collect()
+    }
+
+    /// Keep File > Open Recent's thumbnails in `dir` (set by `main`; tests keep them in memory).
+    pub fn set_recent_thumbs_dir(&mut self, dir: Option<std::path::PathBuf>) {
+        self.recent_thumbs.set_dir(dir);
     }
 
     /// Draw moved pixels on the CPU even with a GPU (tests).
@@ -711,6 +749,7 @@ impl PaintNotNetApp {
         let Some(mut global) = self.global_menu.take() else {
             return;
         };
+        let recent = self.recent_menu_files(ctx);
         let state = self.command_state();
         let enabled = |c: Command| !modal_open && state.enabled(c);
         let checked = |c: Command| state.checked(c);
@@ -718,7 +757,7 @@ impl PaintNotNetApp {
             enabled: &enabled,
             checked: &checked,
             last_effect: self.last_effect_name(),
-            recent: &self.config.recent_files,
+            recent: &recent,
         };
         let Some(link) = self.window_link.as_deref_mut() else {
             self.global_menu = Some(global);
@@ -913,7 +952,7 @@ impl PaintNotNetApp {
         }
     }
 
-    fn handle_file_events(&mut self) {
+    fn handle_file_events(&mut self, ctx: &egui::Context) {
         for event in self.files.poll() {
             match event {
                 FileEvent::Imported { key, path, result } => match result {
@@ -931,8 +970,8 @@ impl PaintNotNetApp {
                     Ok(doc) => {
                         let format = pnn_io::FileFormat::from_path(&path);
                         self.last_dir = path.parent().map(|p| p.to_owned());
-                        self.note_recent(&path);
-                        self.workspace.add(doc, Some(path), format);
+                        let key = self.workspace.add(doc, Some(path.clone()), format);
+                        self.note_recent_from(Some(key), &path);
                     }
                     Err(e) => self.errors.push(("Error Opening File".into(), e)),
                 },
@@ -981,8 +1020,10 @@ impl PaintNotNetApp {
                             a.forget(key);
                         }
                         self.last_dir = path.parent().map(|p| p.to_owned());
-                        self.note_recent(&path);
+                        self.note_recent_from(Some(key), &path);
                         if self.close_after_save.remove(&key) {
+                            // Its thumbnail is current (it was on screen): keep it first.
+                            self.recent_thumbs.update(ctx, &self.workspace);
                             self.discard_tab(key);
                         }
                     }
@@ -1017,6 +1058,7 @@ impl PaintNotNetApp {
             ModalResult::Recover => self.recover(),
             ModalResult::ClearRecent => {
                 self.config.recent_files.clear();
+                self.recent_thumbs.retain(&[]);
                 self.save_config();
             }
             ModalResult::DiscardRecovered => {
@@ -1346,6 +1388,7 @@ impl PaintNotNetApp {
         let own_buttons = !self.config.system_title_bar;
         let palette = theme::palette(ctx);
         let mut list_actions = Vec::new();
+        let recent = self.recent_menu_files(ctx);
         egui::Panel::top("title_bar")
             .exact_size(TITLE_BAR_HEIGHT)
             .frame(
@@ -1361,7 +1404,7 @@ impl PaintNotNetApp {
                     enabled: &availability,
                     checked: &checked,
                     last_effect: self.last_effect_name(),
-                    recent: &self.config.recent_files,
+                    recent: &recent,
                 };
                 let full = ui.max_rect();
                 // Under everything else in the bar: its empty space moves the window.
@@ -1991,6 +2034,12 @@ impl eframe::App for PaintNotNetApp {
             while std::sync::Arc::strong_count(&gpu) > 1 && Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(5));
             }
+            // Still held after that: never destroy the device rather than let the worker do it
+            // mid-exit. The process is ending, so nothing is lost.
+            if std::sync::Arc::strong_count(&gpu) > 1 {
+                log::warn!("exit: a worker still holds the GPU; leaving the device to the OS");
+                std::mem::forget(gpu);
+            }
         }
     }
 
@@ -2015,7 +2064,7 @@ impl PaintNotNetApp {
         self.run_autosave(now);
         self.modifiers = ctx.input(|i| i.modifiers);
         self.take_handoffs(&ctx);
-        self.handle_file_events();
+        self.handle_file_events(&ctx);
 
         let modal_open = self.modal.is_some()
             || self.effect.is_some()
@@ -2125,8 +2174,10 @@ impl PaintNotNetApp {
         self.refresh_vector();
         self.refresh_text();
         self.canvas.text_handles = self.text_handles();
-        if self.tool == ToolKind::Text && self.row2.font_families.is_empty() {
-            let fonts = self.fonts.get_or_insert_with(crate::text_tool::Fonts::load);
+        if self.tool == ToolKind::Text
+            && self.row2.font_families.is_empty()
+            && let Some(fonts) = self.fonts_if_loaded()
+        {
             self.row2.font_families = fonts.families.clone();
         }
         self.canvas.vector_handles = self.vector_handles();
@@ -2258,6 +2309,7 @@ impl PaintNotNetApp {
         for tab in self.workspace.tabs_mut() {
             shell::update_thumbnail(&ctx, tab, now);
         }
+        self.recent_thumbs.update(&ctx, &self.workspace);
 
         // Queued Save As dialogs (Save All with untitled images), one at a time.
         if self.modal.is_none() && !self.files.dialog_open() && !self.save_as_queue.is_empty() {

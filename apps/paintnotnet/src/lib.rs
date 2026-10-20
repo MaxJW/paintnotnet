@@ -27,6 +27,7 @@ pub mod move_tools;
 pub mod paint_tools;
 pub mod palette;
 pub mod panels;
+pub mod recent_thumbs;
 pub mod selection_tools;
 pub mod session_log;
 pub mod settings_ui;

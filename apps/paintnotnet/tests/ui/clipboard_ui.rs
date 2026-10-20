@@ -186,3 +186,69 @@ fn large_cut_lands_from_the_background() {
     assert_eq!(doc(&h).layer(0).surface.get(25, 15), ColorBgra::WHITE);
     assert_eq!(history_names(&h).last().unwrap(), "Cut");
 }
+
+/// On a large image Paste reads the clipboard and draws the pixels on the effect threads;
+/// the float and its history step land together, as on a small image.
+#[test]
+fn large_paste_lands_from_the_background() {
+    use paintnotnet::commands::{Command, Triggered};
+    let (w, hh) = (1500u32, 1000u32);
+    let mut s = Surface::new_transparent(w, hh);
+    s.fill(ColorBgra::WHITE);
+    let mut h = harness_with(Document::from_layers(
+        w,
+        hh,
+        vec![Layer::new("Background", s)],
+    ));
+    let clip = Rc::new(RefCell::new(MemoryClipboard {
+        image: Some(ClipImage {
+            width: 4,
+            height: 3,
+            rgba: [0, 0, 255, 128].repeat(12),
+        }),
+        text: None,
+    }));
+    h.state_mut().set_clipboard(Box::new(clip.clone()));
+    let ctx = h.ctx.clone();
+    let wait = |h: &mut egui_kittest::Harness<'static, paintnotnet::app::PaintNotNetApp>| {
+        let start = std::time::Instant::now();
+        while h.state().click_job_running() {
+            assert!(start.elapsed().as_secs() < 10, "the paste never landed");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            h.step();
+        }
+    };
+    h.state_mut().execute(&ctx, Triggered::once(Command::Paste));
+    assert!(h.state().click_job_running(), "in the background");
+    wait(&mut h);
+    assert_eq!(h.state().tool(), pnn_tools::ToolKind::MoveSelectedPixels);
+    // At the visible top-left, as on a small image.
+    let b = doc(&h).selection().pixel_bounds(w, hh).unwrap();
+    assert_eq!((b.width, b.height), (4, 3));
+    let (x, y) = (b.x, b.y);
+    // Half-transparent blue over white, as the float draws it.
+    let over = doc(&h).layer(0).surface.get(x + 3, y + 2);
+    assert!(
+        over.b > 200 && over.r < 140 && over.r > 110 && over.a == 255,
+        "{over:?}"
+    );
+    assert_eq!(doc(&h).layer(0).surface.get(x + 4, y + 2), ColorBgra::WHITE);
+    assert_eq!(history_names(&h).last().unwrap(), "Paste");
+
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    h.state_mut()
+        .execute(&ctx, Triggered::once(Command::PasteIntoNewLayer));
+    wait(&mut h);
+    assert_eq!(doc(&h).layers().len(), 2);
+    assert_eq!(doc(&h).active_index(), 1);
+    assert_eq!(
+        doc(&h).layer(1).surface.get(x, y),
+        ColorBgra::from_rgba(0, 0, 255, 128)
+    );
+    assert_eq!(doc(&h).layer(1).surface.get(x + 5, y).a, 0);
+    let names = history_names(&h);
+    assert_eq!(
+        &names[names.len() - 2..],
+        ["Finish Pixels", "Paste into New Layer"].map(String::from)
+    );
+}
