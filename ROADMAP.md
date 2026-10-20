@@ -986,6 +986,15 @@ this just a great modern paint.net replacement for linux."
       (13 adjustments, 52 effects, 14 blend modes), install for Arch and from source (build needs Rust, a C
       compiler and git: the binary links only libc / libm / libgcc), run-time libraries, shortcuts, file locations,
       crate layout, licences and a non-affiliation note
+- [x] **Calmer options bar** (user: "feeling a bit busy"; chose "keep the quick buttons on their own row" and
+      "compact fields"): two fixed rows, the commands (with Finish at the right end) then the tool and its options,
+      which no longer mix into the commands or wrap at random points. Number settings (Size, Hardness, Opacity,
+      Tolerance, Spacing…) are compact fields ("Hardness 75%"): drag sideways (Shift 10× finer, measured from the
+      press), scroll to step (Size steps through paint.net's presets), click for a pop-over with the full slider
+      and box; the brush size presets moved into Size's pop-over. A line along each field's foot shows the value.
+      Groups 12 pt apart (were 18). At 1440 pt every tool fits in two rows; at 1100 pt the busiest wrap a third.
+      Kept floating rather than docked under the menus: a full-width strip would be mostly empty. Test (drag,
+      Shift, wheel, pop-over); README screenshots regenerated
 
 ---
 

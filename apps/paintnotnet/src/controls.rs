@@ -5,6 +5,7 @@ use eframe::egui::{self, Color32, Rect, Sense, Stroke, pos2, vec2};
 use pnn_tools::{MAX_BRUSH_WIDTH, MIN_BRUSH_WIDTH, ToolSettings};
 
 use crate::theme::{self, Palette};
+use crate::value_slider::ValueSlider;
 
 /// paint.net's brush width presets: the mouse wheel over the size control steps through them.
 const WIDTH_PRESETS: &[f32] = &[
@@ -99,96 +100,16 @@ pub fn checkbox(
     .inner
 }
 
-/// A rail slider over 0–1 (`t`), `width` points wide. Returns the response; `t` is updated
-/// while it's dragged or clicked.
-pub fn slider(
-    ui: &mut egui::Ui,
-    t: &mut f32,
-    width: f32,
-    label: &str,
-    palette: &Palette,
-) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 22.0), Sense::click_and_drag());
-    let rail = Rect::from_center_size(rect.center(), vec2(width - 14.0, 4.0));
-    if (response.dragged() || response.clicked())
-        && let Some(p) = response.interact_pointer_pos()
-    {
-        *t = ((p.x - rail.min.x) / rail.width()).clamp(0.0, 1.0);
-    }
-    let value = *t;
-    response.widget_info(|| egui::WidgetInfo::slider(true, f64::from(value), label));
-    let painter = ui.painter();
-    painter.rect_filled(rail, 2.0, palette.control);
-    let x = rail.min.x + rail.width() * value;
-    painter.rect_filled(
-        Rect::from_min_max(rail.min, pos2(x, rail.max.y)),
-        2.0,
-        palette.accent,
-    );
-    let active = response.hovered() || response.dragged();
-    let halo =
-        ui.ctx()
-            .animate_bool_with_time(response.id.with("halo"), active, theme::motion::FAST);
-    let c = pos2(x, rail.center().y);
-    if halo > 0.0 {
-        painter.circle_filled(c, 7.0 + 3.0 * halo, palette.accent_alpha(0.35 * halo));
-    }
-    painter.circle(
-        c,
-        7.0,
-        Color32::from_rgb(0xf2, 0xf4, 0xf7),
-        Stroke::new(1.0, Color32::from_black_alpha(60)),
-    );
-    response
-}
-
-/// Mouse wheel steps over a hovered control (+ = up).
-fn wheel(ui: &egui::Ui, response: &egui::Response) -> f32 {
-    if !response.hovered() {
-        return 0.0;
-    }
-    ui.input(|i| {
-        i.events
-            .iter()
-            .filter_map(|e| match e {
-                egui::Event::MouseWheel { delta, .. } => Some(delta.y.signum()),
-                _ => None,
-            })
-            .sum()
-    })
-}
-
-/// A typed value in the mono face.
-fn value_field<'a>(
-    value: &'a mut f32,
-    range: std::ops::RangeInclusive<f32>,
-) -> egui::DragValue<'a> {
-    egui::DragValue::new(value)
-        .range(range)
-        .speed(0.25)
-        .max_decimals(1)
-}
-
-/// "Label [====o----] 75%": a 0–100 setting.
-pub fn percent(ui: &mut egui::Ui, label: &str, value: &mut u8, palette: &Palette) {
+/// "Hardness 75%": a 0–100 setting as a compact field (drag, scroll, or click for the slider).
+pub fn percent(ui: &mut egui::Ui, label: &str, value: &mut u8, _palette: &Palette) {
     group(ui, label, |ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
-        ui.label(egui::RichText::new(label).color(palette.weak_text));
-        let mut t = f32::from(*value) / 100.0;
-        let response = slider(ui, &mut t, 86.0, label, palette);
-        let mut v = (t * 100.0).round();
-        v += wheel(ui, &response);
-        let mut typed = v;
-        let field = ui.add(
-            value_field(&mut typed, 0.0..=100.0)
-                .suffix("%")
-                .max_decimals(0)
-                .speed(0.5),
-        );
-        if field.changed() {
-            v = typed;
+        let mut v = f64::from(*value);
+        if ValueSlider::new(label, 0.0, 100.0)
+            .suffix("%")
+            .show_compact(ui, &mut v, |_, _| {})
+        {
+            *value = v.round().clamp(0.0, 100.0) as u8;
         }
-        *value = v.clamp(0.0, 100.0) as u8;
     });
 }
 
@@ -204,41 +125,43 @@ pub fn opacity(ui: &mut egui::Ui, settings: &mut ToolSettings, palette: &Palette
     }
 }
 
-/// The brush size control: preview dot, "Size", logarithmic slider, typed px, presets.
+/// The brush size: a preview dot and a compact "Size" field (logarithmic, so small sizes get
+/// room; the wheel steps through paint.net's presets); its pop-over has the quick sizes.
 pub fn brush_size(ui: &mut egui::Ui, settings: &mut ToolSettings, palette: &Palette) {
     group(ui, "brush size", |ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
         brush_preview(ui, settings, palette);
-        ui.label(egui::RichText::new("Size").color(palette.weak_text));
-        let mut t = size_to_t(settings.brush_width);
-        let response = slider(ui, &mut t, 140.0, "Brush size", palette);
-        if response.dragged() || response.clicked() {
-            settings.brush_width = t_to_size(t);
-        }
-        let steps = wheel(ui, &response);
-        if steps != 0.0 {
-            settings.brush_width = step_preset(settings.brush_width, steps > 0.0);
-        }
-        ui.add(
-            value_field(&mut settings.brush_width, MIN_BRUSH_WIDTH..=MAX_BRUSH_WIDTH)
-                .custom_formatter(|v, _| {
-                    if v >= 10.0 || v.fract() == 0.0 {
-                        format!("{v:.0}")
-                    } else {
-                        format!("{v:.1}")
-                    }
-                })
-                .suffix(" px"),
+        let mut w = f64::from(settings.brush_width);
+        let changed = ValueSlider::new(
+            "Size",
+            f64::from(MIN_BRUSH_WIDTH),
+            f64::from(MAX_BRUSH_WIDTH),
         )
-        .on_hover_text("Brush size ([ and ] step it; Alt + right-drag on the canvas)");
+        .decimals(1)
+        .suffix(" px")
+        .low_end()
+        .formatter(|v| {
+            if v >= 10.0 || v.fract() == 0.0 {
+                format!("{v:.0} px")
+            } else {
+                format!("{v:.1} px")
+            }
+        })
+        .wheel_steps(|v, up| f64::from(step_preset(v as f32, up)))
+        .hint("Brush size ([ and ] step it; Alt + right-drag on the canvas)")
+        .show_compact(ui, &mut w, |ui, w| size_presets(ui, w, palette));
+        if changed {
+            settings.brush_width = round_width(w as f32);
+        }
     });
-    // The presets wrap on their own: with the slider they were wider than a narrow window's
-    // options bar.
-    group(ui, "brush size presets", |ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
-        ui.spacing_mut().button_padding = vec2(6.0, 2.0);
+}
+
+/// The quick brush sizes, under the size slider.
+fn size_presets(ui: &mut egui::Ui, width: &mut f64, palette: &Palette) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
         for w in SIZE_PRESETS {
-            let selected = (settings.brush_width - w).abs() < 0.05;
+            let selected = (*width as f32 - w).abs() < 0.05;
             let text = egui::RichText::new(format!("{w}"))
                 .font(egui::FontId::monospace(theme::text::SMALL))
                 .color(if selected {
@@ -250,12 +173,12 @@ pub fn brush_size(ui: &mut egui::Ui, settings: &mut ToolSettings, palette: &Pale
                 .add(
                     egui::Button::new(text)
                         .selected(selected)
-                        .min_size(vec2(28.0, 22.0)),
+                        .min_size(vec2(38.0, 24.0)),
                 )
                 .on_hover_text(format!("{w} px"))
                 .clicked()
             {
-                settings.brush_width = w;
+                *width = f64::from(w);
             }
         }
     });

@@ -149,3 +149,55 @@ fn wheel_keys_double_click_and_reset() {
     h.step();
     assert_eq!(*h.state(), 2.0);
 }
+
+/// The toolbar's compact field: drag sideways, Shift for finer, wheel steps, click for the
+/// slider pop-over.
+#[test]
+fn compact_field_drags_scrolls_and_opens() {
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(500.0, 300.0))
+        .with_step_dt(1.0 / 60.0)
+        .build_ui_state(
+            |ui, v: &mut f64| {
+                ValueSlider::new("Hardness", 0.0, 100.0)
+                    .suffix("%")
+                    .show_compact(ui, v, |_, _| {});
+            },
+            50.0,
+        );
+    h.step();
+    let r = h.get_by_role_and_label(Role::Slider, "Hardness").rect();
+    let (x, y) = (r.center().x, r.center().y);
+    // The whole range is 240 points of drag: 24 points is 10 %.
+    press_drag_release(
+        &mut h,
+        &[pos2(x, y), pos2(x + 12.0, y), pos2(x + 24.0, y)],
+        Modifiers::NONE,
+    );
+    assert_eq!(*h.state(), 60.0);
+    press_drag_release(
+        &mut h,
+        &[pos2(x, y), pos2(x + 12.0, y), pos2(x + 24.0, y)],
+        Modifiers::SHIFT,
+    );
+    assert_eq!(*h.state(), 61.0, "Shift: a tenth as far");
+    h.event(Event::PointerMoved(pos2(x, y)));
+    h.event(Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: egui::vec2(0.0, -1.0),
+        modifiers: Modifiers::NONE,
+        phase: egui::TouchPhase::Move,
+    });
+    h.step();
+    assert_eq!(*h.state(), 60.0);
+    // A click opens the full slider.
+    h.get_by_role_and_label(Role::Slider, "Hardness").click();
+    h.step();
+    h.step();
+    assert_eq!(
+        h.get_all_by_role_and_label(Role::Slider, "Hardness")
+            .count(),
+        2,
+        "the pop-over's slider too"
+    );
+}

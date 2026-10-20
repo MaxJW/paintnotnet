@@ -124,11 +124,10 @@ pub fn row2(
     state: &mut Row2State,
     icons: &Icons,
     palette: &Palette,
-    finish_enabled: bool,
 ) -> Option<Row2Action> {
     let mut action = None;
     // Groups go straight into the caller's wrapping layout; each wraps as a unit.
-    ui.spacing_mut().item_spacing.x = 18.0;
+    ui.spacing_mut().item_spacing.x = 12.0;
     let picked = g(ui, "tool", |ui| {
         let mut picked = None;
         let face = egui::RichText::new(tool.name()).font(egui::FontId::new(
@@ -161,7 +160,13 @@ pub fn row2(
         action = Some(Row2Action::SelectTool(t));
     }
     options(ui, state, tool, s, icons, palette);
-    if matches!(
+    action
+}
+
+/// The tools with work to finish (Enter) have a Finish button, at the end of the commands
+/// row. Returns true when pressed.
+pub fn finish_button(ui: &mut egui::Ui, tool: ToolKind, icons: &Icons, enabled: bool) -> bool {
+    if !matches!(
         tool,
         ToolKind::Text
             | ToolKind::LineCurve
@@ -171,19 +176,14 @@ pub fn row2(
             | ToolKind::MoveSelectedPixels
             | ToolKind::MoveSelection
     ) {
-        let finish = g(ui, "finish", |ui| {
-            ui.add_enabled(
-                finish_enabled,
-                egui::Button::image_and_text(icons.image(Icon::Finish), "Finish"),
-            )
-            .on_hover_text("Finish (Enter)")
-            .clicked()
-        });
-        if finish {
-            action = Some(Row2Action::Finish);
-        }
+        return false;
     }
-    action
+    ui.add_enabled(
+        enabled,
+        egui::Button::image_and_text(icons.image(Icon::Finish), "Finish"),
+    )
+    .on_hover_text("Finish (Enter)")
+    .clicked()
 }
 
 /// A group of controls that wraps as a unit, with tight spacing inside.

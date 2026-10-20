@@ -1613,7 +1613,8 @@ impl PaintNotNetApp {
         }
     }
 
-    /// The tool options bar: the quick buttons (New … Rulers), then the tool's options.
+    /// The tool options bar: the quick buttons (New … Rulers) on one row, the tool and its
+    /// options on the next.
     fn options_bar(&mut self, ctx: &egui::Context, panels: &mut Panels) {
         let palette = theme::palette(ctx);
         // The toolbar's Finish commits pending tool work, as Enter does.
@@ -1627,18 +1628,27 @@ impl PaintNotNetApp {
         let mut quick = None;
         let mut action = None;
         panels.show_options(ctx, &palette, |ui| {
+            // Two fixed rows: the commands, then the tool and its options (which wrap among
+            // themselves in a narrow window, never into the commands).
             ui.horizontal_wrapped(|ui| {
                 quick = toolbar::row1(ui, &self.icons, &availability, &checked);
-                ui.separator();
-                action = toolbar::row2(
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if toolbar::finish_button(ui, self.tool, &self.icons, finish_enabled) {
+                        action = Some(Row2Action::Finish);
+                    }
+                });
+            });
+            ui.horizontal_wrapped(|ui| {
+                if let Some(a) = toolbar::row2(
                     ui,
                     self.tool,
                     &mut self.settings,
                     &mut self.row2,
                     &self.icons,
                     &palette,
-                    finish_enabled,
-                );
+                ) {
+                    action = Some(a);
+                }
             });
         });
         match action {

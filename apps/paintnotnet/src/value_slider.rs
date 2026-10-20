@@ -20,6 +20,8 @@ const KNOB: f32 = 7.0;
 const DIAL: f32 = 44.0;
 /// Shift-drag moves the value this much slower.
 const FINE: f64 = 0.1;
+/// Dragging a compact field this far sweeps its whole range.
+const SCRUB_TRAVEL: f32 = 240.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Scale {
@@ -41,6 +43,10 @@ pub struct ValueSlider<'a> {
     scale: Scale,
     dial: bool,
     hint: Option<&'a str>,
+    /// How the compact field shows the value (else the decimals and suffix).
+    formatter: Option<fn(f64) -> String>,
+    /// The mouse wheel's next value up or down (else one unit).
+    wheel: Option<fn(f64, bool) -> f64>,
 }
 
 impl<'a> ValueSlider<'a> {
@@ -55,6 +61,8 @@ impl<'a> ValueSlider<'a> {
             scale: Scale::Linear,
             dial: false,
             hint: None,
+            formatter: None,
+            wheel: None,
         }
     }
 
@@ -91,6 +99,154 @@ impl<'a> ValueSlider<'a> {
     pub fn hint(mut self, hint: &'a str) -> Self {
         self.hint = Some(hint);
         self
+    }
+
+    /// Show the value this way in the compact field.
+    pub fn formatter(mut self, f: fn(f64) -> String) -> Self {
+        self.formatter = Some(f);
+        self
+    }
+
+    /// The wheel steps through these values instead of one unit at a time.
+    pub fn wheel_steps(mut self, next: fn(f64, bool) -> f64) -> Self {
+        self.wheel = Some(next);
+        self
+    }
+
+    /// The toolbar's compact form, "Size 12 px" in one small field: drag sideways on it to
+    /// change it (Shift: ten times finer), scroll over it to step it, click it for a pop-over
+    /// with the full slider and number box, then `extra` (e.g. size presets). A line along
+    /// its foot shows where the value sits in the range.
+    pub fn show_compact(
+        &self,
+        ui: &mut egui::Ui,
+        value: &mut f64,
+        extra: impl FnOnce(&mut egui::Ui, &mut f64),
+    ) -> bool {
+        let before = *value;
+        let palette = theme::palette(ui.ctx());
+        let font = egui::FontId::proportional(theme::text::BODY);
+        let fonts = ui.ctx().clone();
+        let layout = |text: String, color: Color32| {
+            fonts.fonts_mut(|f| f.layout_no_wrap(text, font.clone(), color))
+        };
+        let name = layout(self.label.to_owned(), palette.weak_text);
+        // Room for the widest value, so the field doesn't change width while dragged.
+        let widest = [self.min, self.max, *value]
+            .map(|v| layout(self.format(v), palette.text).size().x)
+            .into_iter()
+            .fold(0.0, f32::max);
+        let size = vec2(10.0 + name.size().x + 8.0 + widest + 6.0 + 8.0 + 10.0, 28.0);
+        let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
+        let response = response
+            .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
+            .on_hover_text(match self.hint {
+                Some(h) => format!("{h}\nDrag sideways (Shift: finer), scroll, or click"),
+                None => "Drag sideways (Shift: finer), scroll, or click".to_owned(),
+            });
+
+        // Dragging: relative from where it started, in track terms (so whole units aren't
+        // lost to rounding between frames); Shift slows it, from where it was pressed.
+        let grab_id = response.id.with("scrub");
+        if response.dragged()
+            && let Some(p) = ui.ctx().pointer_interact_pos()
+        {
+            let fine = ui.input(|i| i.modifiers.shift);
+            let held = ui.data(|d| d.get_temp::<Grab>(grab_id));
+            // A drag is reported once the pointer has moved a little: measure the first one
+            // from where the button went down, so that bit isn't lost.
+            let from = match held {
+                None => ui.input(|i| i.pointer.press_origin()).map_or(p.x, |o| o.x),
+                Some(_) => p.x,
+            };
+            let g = held.filter(|g| g.fine == fine).unwrap_or(Grab {
+                x: from,
+                t: self.track_at(*value),
+                fine,
+            });
+            let gain = if fine { FINE } else { 1.0 };
+            let t = g.t + f64::from(p.x - g.x) / f64::from(SCRUB_TRAVEL) * gain;
+            *value = self.tidy(self.value_at(t));
+            ui.data_mut(|d| d.insert_temp(grab_id, g));
+        } else {
+            ui.data_mut(|d| d.remove::<Grab>(grab_id));
+        }
+        if response.hovered() {
+            let notches = wheel_notches(ui);
+            if notches != 0.0 {
+                let up = notches > 0.0;
+                *value = match self.wheel {
+                    Some(next) => self.tidy(next(*value, up)),
+                    None => self.tidy(*value + notches * self.step()),
+                };
+            }
+        }
+        egui::Popup::from_toggle_button_response(&response)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .gap(6.0)
+            .show(|ui| {
+                ui.set_width(280.0);
+                self.show(ui, value);
+                extra(ui, value);
+            });
+        let shown = *value;
+        response.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), shown, self.label));
+
+        // Paint.
+        let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&response));
+        // Filled as the toolbar's buttons are.
+        let widgets = &ui.visuals().widgets;
+        let fill = if response.hovered() || response.dragged() || open {
+            widgets.hovered.weak_bg_fill
+        } else {
+            widgets.inactive.weak_bg_fill
+        };
+        let painter = ui.painter();
+        painter.rect_filled(rect, theme::radius::CONTROL, fill);
+        let y = rect.center().y;
+        let mut x = rect.min.x + 10.0;
+        let name_w = name.size().x;
+        painter.galley(pos2(x, y - name.size().y / 2.0), name, palette.weak_text);
+        x += name_w + 8.0;
+        let text = layout(self.format(*value), palette.text);
+        painter.galley(pos2(x, y - text.size().y / 2.0), text, palette.text);
+        // ▾
+        let cx = rect.max.x - 14.0;
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                pos2(cx - 3.5, y - 1.5),
+                pos2(cx + 3.5, y - 1.5),
+                pos2(cx, y + 2.5),
+            ],
+            palette.weak_text,
+            Stroke::NONE,
+        ));
+        // Where the value sits: a line along the foot, from the range's origin.
+        let foot = Rect::from_min_max(
+            pos2(rect.min.x + 6.0, rect.max.y - 2.5),
+            pos2(rect.max.x - 6.0, rect.max.y - 1.0),
+        );
+        let x_of = |t: f64| foot.min.x + foot.width() * t as f32;
+        let (t, o) = (self.track_at(*value), self.track_at(self.origin()));
+        painter.rect_filled(
+            Rect::from_min_max(
+                pos2(x_of(t.min(o)), foot.min.y),
+                pos2(x_of(t.max(o)), foot.max.y),
+            ),
+            1.0,
+            palette
+                .accent
+                .gamma_multiply(if ui.is_enabled() { 0.6 } else { 0.25 }),
+        );
+        *value != before
+    }
+
+    /// The value as the compact field shows it.
+    fn format(&self, v: f64) -> String {
+        match self.formatter {
+            Some(f) => f(v),
+            None => format!("{v:.*}{}", self.decimals, self.suffix),
+        }
     }
 
     /// Name, box and reset, then the slider (and dial) across the available width. Returns
