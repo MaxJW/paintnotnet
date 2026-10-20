@@ -1010,6 +1010,17 @@ this just a great modern paint.net replacement for linux."
       brushes, Fill for Shapes and Line / Curve, colour comparison and sampling for Magic Wand and Paint Bucket,
       selection edges, text size units) are in the options row now. At 1440 pt the busiest tools take two lines,
       at 1100 pt three. Test: the Paintbrush's Fill picks a pattern
+- [x] **Icon colours by convention** (user: "undo and redo should be blue … follow normal standards"): the ten
+      family hues gave red to painting tools and amber (a warning colour) to undo. Now colour marks meaning only,
+      as common interface guidance does (Apple HIG, Fluent, Material: red destructive, green create / confirm,
+      amber warning, blue the safe primary actions, a yellow folder for Open): blue Undo, Redo, history buttons and
+      Save; yellow Open and Import; green New, Add / Duplicate Layer, Paste into New Layer / Image; red Delete Layer
+      and Erase Selection; tools a quiet hue per kind (selection teal, painting orange, text and shapes violet);
+      everything else neutral. Unit test pins the conventions
+- [x] **Coloured icons can be turned off** (user): Settings › General › Appearance › "Coloured icons", on by
+      default (`colored_icons` in settings.toml); off draws every icon in the theme's icon colour, including the
+      KDE global menu's, which now also re-sends its icons when the theme or this setting changes (it kept the old
+      ones before). Test
 
 ---
 

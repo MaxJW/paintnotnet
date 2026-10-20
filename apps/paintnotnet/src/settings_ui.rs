@@ -61,6 +61,7 @@ impl PaintNotNetApp {
             Appearance::Light => egui::ThemePreference::Light,
         });
         crate::commands::set_overrides(self.config.overrides());
+        self.icons.set_colored(self.config.colored_icons);
         self.canvas.wheel = self.config.mouse_wheel;
         ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(
             self.config.system_title_bar,
@@ -165,6 +166,12 @@ impl PaintNotNetApp {
                                 .changed();
                         }
                     });
+                    changed |= crate::controls::checkbox(
+                        ui,
+                        &mut self.config.colored_icons,
+                        "Coloured icons (save, open, new, delete and the tools)",
+                    )
+                    .changed();
                     ui.add_space(8.0);
                     ui.label(egui::RichText::new("Mouse wheel over the image").strong());
                     ui.horizontal(|ui| {

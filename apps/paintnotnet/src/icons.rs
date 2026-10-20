@@ -289,38 +289,50 @@ impl Icon {
 /// Whether the app is showing its dark theme (icons exported to the KDE global menu, which
 /// Plasma draws in the system's colours, follow it).
 static DARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+/// Whether icons are drawn in their colours (Settings › General › Coloured icons).
+static COLORED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
-/// What a command icon belongs to: each family has its own colour, so icons are told apart at
-/// a glance (paint.net's icons are coloured too). Option toggles, window buttons and the
-/// like have none and keep the theme's icon colour.
+/// How exported icons look now (dark theme, coloured): when it changes, their PNGs must be
+/// sent again.
+pub fn look() -> (bool, bool) {
+    (
+        DARK.load(std::sync::atomic::Ordering::Relaxed),
+        COLORED.load(std::sync::atomic::Ordering::Relaxed),
+    )
+}
+
+/// The colour an icon carries, following common interface conventions (Apple's HIG, Fluent,
+/// Material): colour is kept for meaning, so red only marks destructive commands, green
+/// creating something, blue the safe primary ones (undo, redo, save), yellow the folder of
+/// Open (the desktop convention); amber, which reads as a warning, isn't used. Tools get a
+/// quiet hue per kind so the rail is quick to scan. Everything else keeps the theme's icon
+/// colour, and no icon relies on colour alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Family {
-    File,
-    Clipboard,
-    History,
-    Select,
-    Transform,
-    Paint,
-    Draw,
-    View,
-    Layer,
-    Adjust,
+    /// Undo, redo, history and saving.
+    Primary,
+    /// Opening files: a yellow folder.
+    Folder,
+    /// Making something new.
+    Create,
+    /// Deleting or erasing.
+    Destructive,
+    SelectTool,
+    PaintTool,
+    DrawTool,
 }
 
 impl Family {
     /// A lighter shade on the dark theme, a deeper one on the light.
     pub fn color(self, dark: bool) -> Color32 {
         let (d, l) = match self {
-            Family::File => (0x6ea8fe, 0x2563eb),
-            Family::Clipboard => (0xb197fc, 0x7c3aed),
-            Family::History => (0xf5c053, 0xb45309),
-            Family::Select => (0x4fd1c5, 0x0f8a80),
-            Family::Transform => (0xfb9a52, 0xd9480f),
-            Family::Paint => (0xfb7d95, 0xdb2a52),
-            Family::Draw => (0x63d989, 0x15803d),
-            Family::View => (0xa3b1c6, 0x5b6b82),
-            Family::Layer => (0x56c2f5, 0x0277b5),
-            Family::Adjust => (0xe58cf2, 0xb02cc2),
+            Family::Primary => (0x6ea8fe, 0x2563eb),
+            Family::Folder => (0xf2c94c, 0xb88a00),
+            Family::Create => (0x5ccf85, 0x15803d),
+            Family::Destructive => (0xf87171, 0xdc2626),
+            Family::SelectTool => (0x4fc8bd, 0x0f8a80),
+            Family::PaintTool => (0xf59e5b, 0xc2580f),
+            Family::DrawTool => (0xb197fc, 0x7c3aed),
         };
         let c: u32 = if dark { d } else { l };
         Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8)
@@ -328,53 +340,22 @@ impl Family {
 }
 
 impl Icon {
-    /// The icon's family, if it has one.
+    /// The icon's colour family, if it has one.
     pub fn family(self) -> Option<Family> {
         use Icon::*;
         Some(match self {
-            New | Open | Save | SaveAs | SaveAll | Close | Exit | ImportFromFile => Family::File,
-            Cut | Copy | Paste | CopyMerged | CopySelection | PasteSelection | PasteNewLayer
-            | PasteNewImage => Family::Clipboard,
-            Undo | Redo | HistoryRewind | HistoryFastForward | HistoryWindow => Family::History,
+            Undo | Redo | HistoryRewind | HistoryFastForward | Save | SaveAs | SaveAll => {
+                Family::Primary
+            }
+            Open | ImportFromFile => Family::Folder,
+            New | AddLayer | DuplicateLayer | PasteNewLayer | PasteNewImage => Family::Create,
+            DeleteLayer | EraseSelection => Family::Destructive,
             RectangleSelect | LassoSelect | EllipseSelect | MagicWand | MoveSelection
-            | InvertSelection | SelectAll | Deselect | SelectSubject | FeatherSelection => {
-                Family::Select
+            | MoveSelectedPixels => Family::SelectTool,
+            Paintbrush | Pencil | Eraser | CloneStamp | Recolor | PaintBucket | Gradient => {
+                Family::PaintTool
             }
-            MoveSelectedPixels | Crop | Resize | CanvasSize | FlipImageHorizontal
-            | FlipImageVertical | Rotate90Cw | Rotate90Ccw | Rotate180 | RotateZoom => {
-                Family::Transform
-            }
-            Paintbrush | Pencil | Eraser | CloneStamp | Recolor | PaintBucket | Gradient
-            | ColorPicker | EraseSelection | FillSelection | ColorsWindow => Family::Paint,
-            Text | LineCurve | Shapes => Family::Draw,
-            Zoom | Pan | ZoomIn | ZoomOut | ZoomToWindow | ZoomToSelection | ActualSize | Grid
-            | Rulers => Family::View,
-            AddLayer
-            | DeleteLayer
-            | DuplicateLayer
-            | MergeLayerDown
-            | FlipLayerHorizontal
-            | FlipLayerVertical
-            | LayerProperties
-            | MoveLayerUp
-            | MoveLayerDown
-            | MoveLayerToTop
-            | MoveLayerToBottom
-            | GoToTopLayer
-            | GoToLayerAbove
-            | GoToLayerBelow
-            | GoToBottomLayer
-            | ToggleLayerVisibility
-            | Flatten
-            | LayersWindow => Family::Layer,
-            AutoLevel | BlackAndWhite | BrightnessContrast | Curves | HueSaturation
-            | InvertColors | Levels | Posterize | Exposure | HighlightsShadows
-            | TemperatureTint | Sepia | FxBlur | FxAddNoise | FxBulge | FxClouds | FxDents
-            | FxEdgeDetect | FxEmboss | FxFragment | FxFrostedGlass | FxGlow | FxInkSketch
-            | FxJulia | FxMandelbrot | FxMedian | FxMotionBlur | FxOilPainting | FxOutline
-            | FxPencilSketch | FxPixelate | FxPolarInversion | FxRadialBlur | FxRedEye
-            | FxReduceNoise | FxRelief | FxSharpen | FxSoftenPortrait | FxSurfaceBlur | FxTile
-            | FxTwist | FxVignette | FxZoomBlur | FxRemoveBackground => Family::Adjust,
+            Text | LineCurve | Shapes => Family::DrawTool,
             _ => return None,
         })
     }
@@ -389,7 +370,11 @@ impl Icon {
             crate::theme::Palette::light()
         };
         let mask = rasterize(svg, filled, 16);
-        let color = self.family().map_or(palette.icon, |f| f.color(dark));
+        let colored = COLORED.load(std::sync::atomic::Ordering::Relaxed);
+        let color = match self.family() {
+            Some(f) if colored => f.color(dark),
+            _ => palette.icon,
+        };
         let [r, g, b, _] = color.to_array();
         let mut rgba = Vec::with_capacity(16 * 16 * 4);
         for p in &mask.pixels {
@@ -416,6 +401,7 @@ pub struct Icons {
     ppp: f32,
     tint: Color32,
     dark: bool,
+    colored: bool,
 }
 
 /// Icon edge in points.
@@ -465,6 +451,7 @@ impl Icons {
             ppp,
             tint: crate::theme::palette(ctx).icon,
             dark: crate::theme::palette(ctx).dark,
+            colored: true,
         }
     }
 
@@ -510,9 +497,18 @@ impl Icons {
         icon.has_art().then(|| self.texture(icon).id())
     }
 
+    /// Draw icons in their colours, or all in the theme's icon colour.
+    pub fn set_colored(&mut self, on: bool) {
+        self.colored = on;
+        COLORED.store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// The colour to draw `icon` in: its family's, or the theme's icon colour.
     pub fn tint_of(&self, icon: Icon) -> Color32 {
-        icon.family().map_or(self.tint, |f| f.color(self.dark))
+        match icon.family() {
+            Some(f) if self.colored => f.color(self.dark),
+            _ => self.tint,
+        }
     }
 
     /// The icon at 16×16 points in its colour.
@@ -525,6 +521,36 @@ impl Icons {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Colour carries meaning (common interface conventions): blue for the safe primary
+    /// actions, green for creating, red for destroying, a yellow folder for Open; nothing in
+    /// amber, which reads as a warning.
+    #[test]
+    fn icon_colours_follow_the_conventions() {
+        assert_eq!(Icon::Undo.family(), Some(Family::Primary));
+        assert_eq!(Icon::Redo.family(), Some(Family::Primary));
+        assert_eq!(Icon::Save.family(), Some(Family::Primary));
+        assert_eq!(Icon::Open.family(), Some(Family::Folder));
+        assert_eq!(Icon::New.family(), Some(Family::Create));
+        assert_eq!(Icon::AddLayer.family(), Some(Family::Create));
+        assert_eq!(Icon::DeleteLayer.family(), Some(Family::Destructive));
+        // Neutral: commands with nothing to signal.
+        for icon in [
+            Icon::Cut,
+            Icon::Copy,
+            Icon::Crop,
+            Icon::Grid,
+            Icon::FxClouds,
+        ] {
+            assert_eq!(icon.family(), None, "{icon:?}");
+        }
+        // Only destructive commands are red.
+        for &icon in Icon::ALL {
+            if icon.family() == Some(Family::Destructive) {
+                assert!(matches!(icon, Icon::DeleteLayer | Icon::EraseSelection));
+            }
+        }
+    }
 
     #[test]
     fn every_icon_renders_something_at_16px() {

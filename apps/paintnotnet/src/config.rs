@@ -57,6 +57,8 @@ impl Default for Dock {
 #[serde(default)]
 pub struct Config {
     pub appearance: Appearance,
+    /// Command and tool icons in their colours (off: all in the theme's icon colour).
+    pub colored_icons: bool,
     pub mouse_wheel: MouseWheel,
     /// Show the menus in KDE Plasma's global menu when one is running.
     pub global_menu: bool,
@@ -88,6 +90,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             appearance: Appearance::System,
+            colored_icons: true,
             mouse_wheel: MouseWheel::Zoom,
             global_menu: true,
             system_title_bar: false,

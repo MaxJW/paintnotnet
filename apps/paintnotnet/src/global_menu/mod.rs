@@ -428,6 +428,8 @@ pub struct GlobalMenu {
     registrar: Arc<AtomicBool>,
     linked: bool,
     last_build: Option<Instant>,
+    /// The icon look the exported menu was built with (`icons::look`).
+    look: Option<(bool, bool)>,
 }
 
 impl GlobalMenu {
@@ -463,6 +465,7 @@ impl GlobalMenu {
             registrar,
             linked: false,
             last_build: None,
+            look: None,
         })
     }
 
@@ -488,7 +491,11 @@ impl GlobalMenu {
             let source: &[Menu] = if want { menus } else { &[] };
             let items = build(source, cx, &crate::commands::bindings());
             let mut model = self.model.lock().expect("menu model");
-            if model.items != items {
+            // The icons' PNGs follow the theme and the coloured-icons setting, which the
+            // items themselves don't show.
+            let look = crate::icons::look();
+            if model.items != items || self.look != Some(look) {
+                self.look = Some(look);
                 model.items = items;
                 model.revision += 1;
                 let revision = model.revision;

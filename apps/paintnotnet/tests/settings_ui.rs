@@ -90,6 +90,28 @@ fn appearance_setting_switches_theme() {
     assert!(!h.ctx.global_style().visuals.dark_mode, "light visuals");
 }
 
+/// Settings › Coloured icons: off draws every icon in the theme's icon colour.
+#[test]
+fn coloured_icons_can_be_turned_off() {
+    use paintnotnet::icons::{Family, Icon};
+    let mut h = harness();
+    let dark = h.ctx.global_style().visuals.dark_mode;
+    assert_eq!(
+        h.state().icons().tint_of(Icon::Undo),
+        Family::Primary.color(dark),
+        "on by default"
+    );
+    press(&mut h, Modifiers::ALT, Key::X);
+    h.get_by_label_contains("Coloured icons").click();
+    h.step();
+    h.step();
+    assert!(!h.state().config().colored_icons);
+    let neutral = h.state().icons().tint();
+    for icon in [Icon::Undo, Icon::Save, Icon::DeleteLayer, Icon::Paintbrush] {
+        assert_eq!(h.state().icons().tint_of(icon), neutral, "{icon:?}");
+    }
+}
+
 #[test]
 fn command_palette_finds_and_runs_a_command() {
     let mut h = harness();

@@ -826,6 +826,11 @@ impl PaintNotNetApp {
         &self.config
     }
 
+    /// The icon set (tests: the colours icons are drawn in).
+    pub fn icons(&self) -> &Icons {
+        &self.icons
+    }
+
     /// Turn on autosave into `state_dir`, offering to recover images a crashed session left.
     pub fn enable_autosave(
         &mut self,
