@@ -995,6 +995,16 @@ this just a great modern paint.net replacement for linux."
       Groups 12 pt apart (were 18). At 1440 pt every tool fits in two rows; at 1100 pt the busiest wrap a third.
       Kept floating rather than docked under the menus: a full-width strip would be mostly empty. Test (drag,
       Shift, wheel, pop-over); README screenshots regenerated
+- [x] **Command bar under the menus** (user: the quick commands "shouldn't be in the canvas"): New … Rulers in a
+      docked 38 pt bar below the title bar (hairline between them); the floating options bar holds the tool, its
+      options and Finish in one row (its minimum height is one row now). The rail's buttons are 32 pt (were 34) so
+      it stays one column at 1202 × 867 with the bar's height gone; the dock-height check allows for the 38 pt
+- [x] **Coloured icons** (user: "more distinguishable from each other"): `icons::Family` gives command icons a
+      colour per family (file blue, clipboard violet, undo / redo amber, selection teal, image / transform orange,
+      painting rose, text and shapes green, view slate, layers sky, adjustments and effects fuchsia), a lighter
+      shade on the dark theme and a deeper one on the light; option toggles, window buttons and the like keep the
+      theme's icon colour. Used by the command bar, tool rail, menus, Layers and History buttons, history entries
+      and the KDE global menu's PNGs. Reviewed in both themes (README scenes, gallery menus)
 
 ---
 

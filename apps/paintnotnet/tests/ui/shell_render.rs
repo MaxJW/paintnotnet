@@ -68,10 +68,12 @@ fn docked_shell_matches_design_a() {
         "stacked in order"
     );
     assert_eq!(colors.x_range(), history.x_range(), "one column");
-    // 305 px before the roomier spacing (2026-10-15), which costs ~26 px of height here.
+    // 305 px before the roomier spacing (2026-10-15), which costs ~26 px of height here, and
+    // 38 px less since the command bar under the menus (2026-10-20).
     assert!(
-        (history.max.y - layers.min.y) > 270.0,
-        "Layers and History fill the dock"
+        (history.max.y - layers.min.y) > 235.0,
+        "Layers and History fill the dock: {}",
+        history.max.y - layers.min.y
     );
     // Zoomed in, the (white) image runs on under the panels, which show it as glass that
     // stays dark enough for their secondary text.

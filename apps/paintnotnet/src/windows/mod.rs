@@ -38,7 +38,7 @@ pub const RAIL_GROUPS: &[&[ToolKind]] = &[
 ];
 
 /// Tool button edge and the gap between buttons.
-const TOOL_BUTTON: f32 = 34.0;
+const TOOL_BUTTON: f32 = 32.0;
 const TOOL_GAP: f32 = 2.0;
 /// Space taken by a separator between groups.
 const GROUP_GAP: f32 = 11.0;
@@ -117,11 +117,7 @@ fn tool_button(
                 .rect_filled(rect, radius, palette.hover.gamma_multiply(hover));
         }
     }
-    let tint = if selected || response.hovered() {
-        palette.text
-    } else {
-        palette.icon
-    };
+    let tint = icons.tint_of(Icon::for_tool(tool));
     ui.painter().image(
         icons.texture(Icon::for_tool(tool)).id(),
         Rect::from_center_size(rect.center(), vec2(18.0, 18.0)),
@@ -469,7 +465,7 @@ pub fn history(
                 let tint = if undone {
                     palette.faint_text
                 } else {
-                    palette.icon
+                    icons.tint_of(entry.tag)
                 };
                 let icon_rect = Rect::from_center_size(
                     pos2(rect.min.x + 16.0, rect.center().y),

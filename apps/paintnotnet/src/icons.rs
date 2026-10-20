@@ -290,8 +290,96 @@ impl Icon {
 /// Plasma draws in the system's colours, follow it).
 static DARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
+/// What a command icon belongs to: each family has its own colour, so icons are told apart at
+/// a glance (paint.net's icons are coloured too). Option toggles, window buttons and the
+/// like have none and keep the theme's icon colour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Family {
+    File,
+    Clipboard,
+    History,
+    Select,
+    Transform,
+    Paint,
+    Draw,
+    View,
+    Layer,
+    Adjust,
+}
+
+impl Family {
+    /// A lighter shade on the dark theme, a deeper one on the light.
+    pub fn color(self, dark: bool) -> Color32 {
+        let (d, l) = match self {
+            Family::File => (0x6ea8fe, 0x2563eb),
+            Family::Clipboard => (0xb197fc, 0x7c3aed),
+            Family::History => (0xf5c053, 0xb45309),
+            Family::Select => (0x4fd1c5, 0x0f8a80),
+            Family::Transform => (0xfb9a52, 0xd9480f),
+            Family::Paint => (0xfb7d95, 0xdb2a52),
+            Family::Draw => (0x63d989, 0x15803d),
+            Family::View => (0xa3b1c6, 0x5b6b82),
+            Family::Layer => (0x56c2f5, 0x0277b5),
+            Family::Adjust => (0xe58cf2, 0xb02cc2),
+        };
+        let c: u32 = if dark { d } else { l };
+        Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8)
+    }
+}
+
 impl Icon {
-    /// The icon as a 16×16 PNG in the theme's icon colour, for the KDE global menu.
+    /// The icon's family, if it has one.
+    pub fn family(self) -> Option<Family> {
+        use Icon::*;
+        Some(match self {
+            New | Open | Save | SaveAs | SaveAll | Close | Exit | ImportFromFile => Family::File,
+            Cut | Copy | Paste | CopyMerged | CopySelection | PasteSelection | PasteNewLayer
+            | PasteNewImage => Family::Clipboard,
+            Undo | Redo | HistoryRewind | HistoryFastForward | HistoryWindow => Family::History,
+            RectangleSelect | LassoSelect | EllipseSelect | MagicWand | MoveSelection
+            | InvertSelection | SelectAll | Deselect | SelectSubject | FeatherSelection => {
+                Family::Select
+            }
+            MoveSelectedPixels | Crop | Resize | CanvasSize | FlipImageHorizontal
+            | FlipImageVertical | Rotate90Cw | Rotate90Ccw | Rotate180 | RotateZoom => {
+                Family::Transform
+            }
+            Paintbrush | Pencil | Eraser | CloneStamp | Recolor | PaintBucket | Gradient
+            | ColorPicker | EraseSelection | FillSelection | ColorsWindow => Family::Paint,
+            Text | LineCurve | Shapes => Family::Draw,
+            Zoom | Pan | ZoomIn | ZoomOut | ZoomToWindow | ZoomToSelection | ActualSize | Grid
+            | Rulers => Family::View,
+            AddLayer
+            | DeleteLayer
+            | DuplicateLayer
+            | MergeLayerDown
+            | FlipLayerHorizontal
+            | FlipLayerVertical
+            | LayerProperties
+            | MoveLayerUp
+            | MoveLayerDown
+            | MoveLayerToTop
+            | MoveLayerToBottom
+            | GoToTopLayer
+            | GoToLayerAbove
+            | GoToLayerBelow
+            | GoToBottomLayer
+            | ToggleLayerVisibility
+            | Flatten
+            | LayersWindow => Family::Layer,
+            AutoLevel | BlackAndWhite | BrightnessContrast | Curves | HueSaturation
+            | InvertColors | Levels | Posterize | Exposure | HighlightsShadows
+            | TemperatureTint | Sepia | FxBlur | FxAddNoise | FxBulge | FxClouds | FxDents
+            | FxEdgeDetect | FxEmboss | FxFragment | FxFrostedGlass | FxGlow | FxInkSketch
+            | FxJulia | FxMandelbrot | FxMedian | FxMotionBlur | FxOilPainting | FxOutline
+            | FxPencilSketch | FxPixelate | FxPolarInversion | FxRadialBlur | FxRedEye
+            | FxReduceNoise | FxRelief | FxSharpen | FxSoftenPortrait | FxSurfaceBlur | FxTile
+            | FxTwist | FxVignette | FxZoomBlur | FxRemoveBackground => Family::Adjust,
+            _ => return None,
+        })
+    }
+
+    /// The icon as a 16×16 PNG in its colour, for the KDE global menu.
     pub fn png(self) -> Option<Vec<u8>> {
         let (svg, filled) = self.svg()?;
         let dark = DARK.load(std::sync::atomic::Ordering::Relaxed);
@@ -301,7 +389,8 @@ impl Icon {
             crate::theme::Palette::light()
         };
         let mask = rasterize(svg, filled, 16);
-        let [r, g, b, _] = palette.icon.to_array();
+        let color = self.family().map_or(palette.icon, |f| f.color(dark));
+        let [r, g, b, _] = color.to_array();
         let mut rgba = Vec::with_capacity(16 * 16 * 4);
         for p in &mask.pixels {
             rgba.extend_from_slice(&[r, g, b, p.a()]);
@@ -326,6 +415,7 @@ pub struct Icons {
     /// Pixels per point the textures were rasterised for.
     ppp: f32,
     tint: Color32,
+    dark: bool,
 }
 
 /// Icon edge in points.
@@ -374,6 +464,7 @@ impl Icons {
             blank,
             ppp,
             tint: crate::theme::palette(ctx).icon,
+            dark: crate::theme::palette(ctx).dark,
         }
     }
 
@@ -385,6 +476,7 @@ impl Icons {
     pub fn update(&mut self, ctx: &egui::Context) {
         let palette = crate::theme::palette(ctx);
         self.tint = palette.icon;
+        self.dark = palette.dark;
         DARK.store(palette.dark, std::sync::atomic::Ordering::Relaxed);
         let ppp = ctx.pixels_per_point();
         if (ppp - self.ppp).abs() > 0.01 {
@@ -418,10 +510,15 @@ impl Icons {
         icon.has_art().then(|| self.texture(icon).id())
     }
 
-    /// The icon at 16×16 points in the theme's icon colour.
+    /// The colour to draw `icon` in: its family's, or the theme's icon colour.
+    pub fn tint_of(&self, icon: Icon) -> Color32 {
+        icon.family().map_or(self.tint, |f| f.color(self.dark))
+    }
+
+    /// The icon at 16×16 points in its colour.
     pub fn image(&self, icon: Icon) -> egui::Image<'static> {
         egui::Image::new((self.texture(icon).id(), egui::vec2(ICON_SIZE, ICON_SIZE)))
-            .tint(self.tint)
+            .tint(self.tint_of(icon))
     }
 }
 

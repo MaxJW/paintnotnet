@@ -432,12 +432,9 @@ impl Panels {
                     let w = rect.width() - margin.sum().x;
                     ui.set_width(w);
                     ui.set_max_width(w);
-                    // Two rows at least, as most tools need: a tool with one row of options
-                    // (the move tools) would otherwise make the canvas taller and refit the
-                    // image every time it's chosen.
-                    ui.set_min_height(
-                        2.0 * theme::size::CONTROL + ui.spacing().item_spacing.y + 6.0,
-                    );
+                    // One row of controls at least, so a tool without options doesn't
+                    // shrink the bar (and refit the image) when it's chosen.
+                    ui.set_min_height(theme::size::CONTROL + 6.0);
                     contents(ui);
                 })
             });

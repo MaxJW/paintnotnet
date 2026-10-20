@@ -1418,6 +1418,8 @@ impl PaintNotNetApp {
 /// Height of the title bar and of the status bar.
 const TITLE_BAR_HEIGHT: f32 = 44.0;
 const STATUS_BAR_HEIGHT: f32 = 30.0;
+/// The command bar under the title bar.
+const COMMAND_BAR_HEIGHT: f32 = 38.0;
 
 impl PaintNotNetApp {
     /// The title bar: menus on the left, the document tabs in the middle, then command
@@ -1613,8 +1615,40 @@ impl PaintNotNetApp {
         }
     }
 
-    /// The tool options bar: the quick buttons (New … Rulers) on one row, the tool and its
-    /// options on the next.
+    /// The command bar under the menus: paint.net's quick buttons (New … Rulers), docked
+    /// rather than over the canvas.
+    fn command_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let palette = theme::palette(ctx);
+        let state = self.command_state();
+        let availability = |c: Command| state.enabled(c);
+        let checked = |c: Command| state.checked(c);
+        let mut quick = None;
+        egui::Panel::top("command_bar")
+            .exact_size(COMMAND_BAR_HEIGHT)
+            .frame(
+                egui::Frame::new()
+                    .fill(palette.band)
+                    .inner_margin(egui::Margin::symmetric(12, 0)),
+            )
+            .show_separator_line(false)
+            .show(ui, |ui| {
+                // A hairline between it and the title bar.
+                let r = ui.max_rect();
+                ui.painter().hline(
+                    r.x_range().expand(12.0),
+                    r.min.y,
+                    egui::Stroke::new(1.0, palette.window_border.gamma_multiply(0.6)),
+                );
+                ui.horizontal_centered(|ui| {
+                    quick = toolbar::row1(ui, &self.icons, &availability, &checked);
+                });
+            });
+        if let Some(c) = quick {
+            self.execute(ctx, Triggered::once(c));
+        }
+    }
+
+    /// The tool options bar over the canvas: the tool, its options and Finish.
     fn options_bar(&mut self, ctx: &egui::Context, panels: &mut Panels) {
         let palette = theme::palette(ctx);
         // The toolbar's Finish commits pending tool work, as Enter does.
@@ -1622,22 +1656,8 @@ impl PaintNotNetApp {
             || self.vector.is_some()
             || self.text.is_some()
             || self.move_session.is_some();
-        let state = self.command_state();
-        let availability = |c: Command| state.enabled(c);
-        let checked = |c: Command| state.checked(c);
-        let mut quick = None;
         let mut action = None;
         panels.show_options(ctx, &palette, |ui| {
-            // Two fixed rows: the commands, then the tool and its options (which wrap among
-            // themselves in a narrow window, never into the commands).
-            ui.horizontal_wrapped(|ui| {
-                quick = toolbar::row1(ui, &self.icons, &availability, &checked);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if toolbar::finish_button(ui, self.tool, &self.icons, finish_enabled) {
-                        action = Some(Row2Action::Finish);
-                    }
-                });
-            });
             ui.horizontal_wrapped(|ui| {
                 if let Some(a) = toolbar::row2(
                     ui,
@@ -1648,6 +1668,9 @@ impl PaintNotNetApp {
                     &palette,
                 ) {
                     action = Some(a);
+                }
+                if toolbar::finish_button(ui, self.tool, &self.icons, finish_enabled) {
+                    action = Some(Row2Action::Finish);
                 }
             });
         });
@@ -1660,9 +1683,6 @@ impl PaintNotNetApp {
                 self.finish_move();
             }
             None => {}
-        }
-        if let Some(c) = quick {
-            self.execute(ctx, Triggered::once(c));
         }
     }
 
@@ -2154,6 +2174,7 @@ impl PaintNotNetApp {
         crate::glass::set_backdrop(&ctx, None);
         self.sync_global_menu(&ctx, modal_open && !self.menu.open);
         self.title_bar(ui, &ctx);
+        self.command_bar(ui, &ctx);
         self.toolbar_feather();
         self.wand_follow_settings();
         let active = self.workspace.active();
