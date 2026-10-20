@@ -947,6 +947,46 @@ this just a great modern paint.net replacement for linux."
         per-user launcher (`~/.local/share/applications/paintnotnet.desktop`, its icon and MIME file) removed in
         favour of the package
 
+### 19c. Requested 2026-10-20 ✅
+- [x] **Shortcuts:** "no shortcuts seem to be working". egui-winit turns Ctrl+C / X / V (with any other modifiers)
+      into copy / cut / paste events, never key presses, so Copy, Cut, Paste, Crop to Selection (Ctrl+Shift+X),
+      Copy Merged, Paste into New Layer / Image never reached the keymap; with only an image on the clipboard
+      Ctrl+V left nothing at all but V's release (the session log's "smithay paste error"). Kittest feeds keys
+      directly, so no test saw it. `commands::ClipboardKeys` (in `raw_input_hook`) puts the presses back (the
+      clipboard events stay for text fields); an image-only Ctrl+V comes back from V's release, with the
+      modifiers held up to 1 s before. Shortcuts are also held back only while a text field has focus (a focused
+      button or slider used to silence them all). Tests: unit (each chord; image paste from the release, Ctrl let
+      go first, no double press), UI through `raw_input_hook` as eframe runs it. Not checked with real key
+      presses: headless KWin has no virtual keyboard protocol and `ydotool` would type into the user's desktop
+- [x] **Paste with nothing open** makes a new image of the clipboard's size (it did; Ctrl+V never arrived). Test
+- [x] **File > New takes the clipboard image's size**, as paint.net 3.36 (`NewImageAction.cs`); read off the UI
+      thread, it fills in when it arrives unless the size has been edited. Test. Tests now start with an in-memory
+      clipboard (`main` sets the desktop's), so none can read or change the user's
+- [x] **The whole pasted image floats:** a paste is kept at its own size and placed by a translation (the move
+      session's pixels need not be canvas-sized), so dragging brings in what started off the canvas; only Finish
+      trims it. Tests: CPU (keep canvas size, drag, finish) and GPU drag = CPU on a 900 × 300 paste over 600 × 400
+- [x] **Paste larger than the canvas** asks with three described choices (Make the canvas bigger / Keep the canvas
+      size / Open as a new image), a "Paste onto a new layer" box and Cancel; shows both sizes. Tests; gallery
+- [x] **Magic Wand follows its tolerance:** changing tolerance, flood mode, colour space or sampling re-runs the
+      last click from the document before it, replacing its history step (`History::replace_current`), while it
+      is the latest change and the wand is the tool; one run at a time, newest settings win. Tests (unit, UI)
+- [x] **Dialog sliders** (user: "a little crap and inaccurate … only use half the dialog"): `value_slider` — name,
+      number box and ↺ on one row, the slider across the dialog's whole width (340 pt; was 100), fill from zero
+      inside the range and a tick at the default; grabbing the knob doesn't move the value, the track jumps,
+      Shift drags 10× finer, wheel / arrows step one unit (Shift 10), Page Up / Down a tenth, Home / End, double-
+      click resets; radii and zoom keep more travel for small values. Used by every effect, adjustment and
+      document dialog; Layer Properties and Save options as forms with the same slider. Angle dial (larger, quarter
+      marks, Shift 15°) beside the slider for 3.36's AngleChooser effects (Edge Detect, Relief, Emboss, Motion and
+      Radial Blur, Tile Reflection, Julia, Mandelbrot) and Drop Shadow (5.x, not checked against its dialog);
+      Rotate / Zoom keeps a slider (its angle is clockwise). Feather choices as segmented controls. Tests: pointer,
+      Shift, wheel, keys, double-click, ↺ (UI); mappings (unit); gallery reviewed dark/light, both sizes
+- [x] **Command palette** showed two rows whatever matched (`fixed_size` with height 0 capped it): fixed width only
+- [x] **README** for the public repository: logo, screenshots rendered from the app (`tests/ui/readme_shots.rs`,
+      opt-in; artwork made in the app, no outside images), features with counts checked against the code
+      (13 adjustments, 52 effects, 14 blend modes), install for Arch and from source (build needs Rust, a C
+      compiler and git: the binary links only libc / libm / libgcc), run-time libraries, shortcuts, file locations,
+      crate layout, licences and a non-affiliation note
+
 ---
 
 # Recreation backlog (parked; on the `recreation` branch if wanted)
